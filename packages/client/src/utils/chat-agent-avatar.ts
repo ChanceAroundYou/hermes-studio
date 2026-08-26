@@ -1,3 +1,4 @@
+import { getBaseUrlValue } from '@/api/client'
 export interface ChatAgentAvatar {
   label: 'Hermes' | 'Ekko' | 'Claude' | 'Codex' | 'Pi'
   src: string
@@ -9,12 +10,13 @@ interface ChatAgentSessionIdentity {
   codingAgentId?: string
 }
 
+const BASE = getBaseUrlValue()
 const AGENT_AVATARS = {
-  hermes: { label: 'Hermes', src: '/coding-agents/hermes.png' },
-  'ekko-agent': { label: 'Ekko', src: '/coding-agents/ekko-agent.png' },
-  'claude-code': { label: 'Claude', src: '/coding-agents/claude-code.svg' },
-  codex: { label: 'Codex', src: '/coding-agents/codex-openai.png' },
-  pi: { label: 'Pi', src: '/coding-agents/pi.svg' },
+  hermes: { label: 'Hermes', src: `${BASE}/coding-agents/hermes.png` },
+  'ekko-agent': { label: 'Ekko', src: `${BASE}/coding-agents/ekko-agent.png` },
+  'claude-code': { label: 'Claude', src: `${BASE}/coding-agents/claude-code.svg` },
+  codex: { label: 'Codex', src: `${BASE}/coding-agents/codex-openai.png` },
+  pi: { label: 'Pi', src: `${BASE}/coding-agents/pi.svg` },
 } as const satisfies Record<string, ChatAgentAvatar>
 
 export function chatSessionAgentAvatar(session?: ChatAgentSessionIdentity | null): ChatAgentAvatar {

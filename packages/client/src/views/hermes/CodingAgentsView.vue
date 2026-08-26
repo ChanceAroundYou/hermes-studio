@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NTag, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { getBaseUrlValue } from '@/api/client'
 import {
   checkCodingAgentUpdate,
   deleteCodingAgent,
@@ -98,10 +99,11 @@ const terminalVisible = ref(false)
 const terminalCommand = ref('')
 const terminalKey = ref(0)
 
+const BASE = getBaseUrlValue()
 const agentLogos: Record<CodingAgentBlock['tool'], string> = {
-  'Claude': '/coding-agents/claude-code.svg',
-  Codex: '/coding-agents/codex-openai.png',
-  Pi: '/coding-agents/pi.svg',
+  'Claude': `${BASE}/coding-agents/claude-code.svg`,
+  Codex: `${BASE}/coding-agents/codex-openai.png`,
+  Pi: `${BASE}/coding-agents/pi.svg`,
 }
 
 const agentBlocks: CodingAgentBlock[] = [

@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { getBaseUrlValue } from '@/api/client'
 import { usePetsStore } from '@/stores/hermes/pets'
 import { usePetStateStore } from '@/stores/hermes/pet-state'
 import { useProfilesStore } from '@/stores/hermes/profiles'
@@ -180,7 +181,8 @@ async function ensureDesktopAuthReady(): Promise<void> {
   if (token) {
     try {
       localStorage.setItem('AUTH_TOKEN', token)
-      const res = await fetch('/api/auth/login', {
+      const base = getBaseUrlValue()
+      const res = await fetch(`${base}/api/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -580,7 +582,7 @@ onUnmounted(() => {
       @pointerup.stop="handleResizePointerUp"
       @pointercancel.stop="handleResizePointerUp"
     >
-      <img src="/icons/pet-resize.svg" alt="" draggable="false" />
+      <img :src="`${getBaseUrlValue()}/icons/pet-resize.svg`" alt="" draggable="false" />
     </button>
   </div>
 </template>
