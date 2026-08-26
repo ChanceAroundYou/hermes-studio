@@ -1,6 +1,6 @@
-import { startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport } from '@/api/hermes/chat'
+import { connectChatRun, startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport } from '@/api/hermes/chat'
 import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchSessions, fetchWorkspaceRunChangeFile, fetchWorkspaceRunChangesForSession, setSessionModel, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/hermes/sessions'
-import { getActiveProfileName } from '@/api/client'
+import { request } from '@/api/client'
 import { inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId } from '@/api/coding-agents'
 import { getDownloadUrl } from '@/api/hermes/download'
 import type { ProviderApiMode } from '@/api/hermes/system'
@@ -13,7 +13,6 @@ import { primeCompletionSound, playCompletionSound } from '@/utils/completion-so
 import { showCompletionNotification } from '@/utils/completion-notification'
 import { detectThinkingBoundary } from '@/utils/thinking-parser'
 import { isKnownBridgeSessionCommand } from '@/utils/hermes/bridge-session-commands'
-import { responseErrorMessage } from '@/utils/http-error'
 
 // Re-export ContentBlock for convenience
 export type ContentBlock = ContentBlockImport
@@ -574,19 +573,12 @@ async function uploadFiles(attachments: Attachment[]): Promise<{ name: string; p
   for (const att of attachments) {
     if (att.file) formData.append('file', att.file, att.name)
   }
-  const token = localStorage.getItem('hermes_api_key') || ''
-  const profileName = getActiveProfileName()
-  const headers: Record<string, string> = {}
-  if (token) headers.Authorization = `Bearer ${token}`
-  if (profileName) headers['X-Hermes-Profile'] = profileName
-  const res = await fetch('/upload', {
+  const res = await request<{ files: { name: string; path: string }[] }>('/upload', {
     method: 'POST',
     body: formData,
-    headers,
   })
-  if (!res.ok) throw new Error(await responseErrorMessage(res, 'Upload failed'))
-  const data = await res.json() as { files: { name: string; path: string }[] }
-  return data.files
+  if (!res.files) throw new Error('Upload failed')
+  return res.files
 }
 
 export async function buildContentBlocks(
@@ -849,11 +841,40 @@ function mapHermesMessages(msgs: HermesMessage[]): Message[] {
     return true
   })
 
+  // Hermes Agent kernel (state.db) sometimes writes the same assistant
+  // message twice (identical content, timestamps seconds-to-minutes apart,
+  // often with a tool message interleaved: assistant → tool → assistant(dup)).
+  // The previous logic required strict consecutiveness and used a broken
+  // 5000-second window (timestamp is seconds, not ms). Fix: per-role dedup,
+  // window 300s (5min), ignores interleaving tool/system rows.
+  const dedupedMsgs: HermesMessage[] = []
+  const lastByRole = new Map<string, { norm: string; ts: number }>()
+  const DEDUP_WINDOW_SEC = 300
+  for (const m of filteredMsgs) {
+    const role = m.role ?? ''
+    const content = runtimePayloadText((m as any).content) ?? ''
+    const norm = content.replace(/\s+/g, ' ').trim()
+    const ts = m.timestamp ?? 0
+    if (norm) {
+      const prev = lastByRole.get(role)
+      const isDup = !!prev
+        && ts >= prev.ts
+        && ts - prev.ts < DEDUP_WINDOW_SEC
+        && (norm === prev.norm
+          || (norm.length > 20 && prev.norm.length > 20 && (norm.startsWith(prev.norm) || prev.norm.startsWith(norm))))
+      if (isDup) continue
+      lastByRole.set(role, { norm, ts })
+    } else {
+      lastByRole.set(role, { norm: '', ts })
+    }
+    dedupedMsgs.push(m)
+  }
+
   // Build lookups from assistant messages with tool_calls
   const toolNameMap = new Map<string, string>()
   const toolArgsMap = new Map<string, unknown>()
   const toolReasoningMap = new Map<string, string>()
-  for (const msg of filteredMsgs) {
+  for (const msg of dedupedMsgs) {
     if (msg.role === 'assistant' && msg.tool_calls) {
       for (const tc of msg.tool_calls) {
         if (tc.id) {
@@ -866,7 +887,7 @@ function mapHermesMessages(msgs: HermesMessage[]): Message[] {
   }
 
   const result: Message[] = []
-  for (const msg of filteredMsgs) {
+  for (const msg of dedupedMsgs) {
     // Skip assistant messages that only contain tool_calls (no meaningful content)
     if (msg.role === 'assistant' && msg.tool_calls?.length && !runtimePayloadText((msg as any).content).trim()) {
       // Emit a tool.started message for each tool call
@@ -1048,6 +1069,50 @@ function mapHermesMessages(msgs: HermesMessage[]): Message[] {
     })
   }
   return result
+}
+
+function normalizeForDedup(s: string): string {
+  return (s ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function isDuplicateAssistantContent(
+  msgs: Message[],
+  role: Message['role'],
+  content: string,
+  ts: number,
+  windowSec = 300,
+): boolean {
+  const norm = normalizeForDedup(content)
+  if (!norm) return false
+  // Only assistant replies are deduped; user messages are never dropped
+  // (re-sending after a network failure is legitimate) and tool messages may
+  // legitimately repeat the same preview.
+  if (role !== 'assistant') return false
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    if (m.role !== role) {
+      const dt = (ts - (m.timestamp || 0)) / 1000
+      if (dt > windowSec) break
+      continue
+    }
+    const prevNorm = normalizeForDedup(m.content)
+    if (!prevNorm) continue
+    const dt = (ts - (m.timestamp || 0)) / 1000
+    if (dt < 0 || dt >= windowSec) {
+      if (dt >= windowSec) break
+      continue
+    }
+    if (
+      prevNorm === norm ||
+      (prevNorm.length > 20 &&
+        norm.length > 20 &&
+        (norm.startsWith(prevNorm) || prevNorm.startsWith(norm)))
+    ) {
+      return true
+    }
+    break
+  }
+  return false
 }
 
 function sessionActivitySeconds(s: SessionSummary): number {
@@ -1249,10 +1314,13 @@ export const useChatStore = defineStore('chat', () => {
   /** UI-only live streams for Hermes background subagents. Never sent into parent context. */
   const subagentStreams = ref<Map<string, SubagentStream>>(new Map())
   const storedSessionProfileFilter = getItemBestEffort(SESSION_PROFILE_FILTER_STORAGE_KEY)?.trim()
+  // Filter out invalid values like 'null', 'undefined', '__all__'
+  const isValidProfile = storedSessionProfileFilter
+    && storedSessionProfileFilter !== 'null'
+    && storedSessionProfileFilter !== 'undefined'
+    && storedSessionProfileFilter !== '__all__'
   const sessionProfileFilter = ref<string | null>(
-    storedSessionProfileFilter && storedSessionProfileFilter !== '__all__'
-      ? storedSessionProfileFilter
-      : null,
+    isValidProfile ? storedSessionProfileFilter : null,
   )
   /** sessionId → queued message count */
   const queueLengths = ref<Map<string, number>>(new Map())
@@ -1296,6 +1364,31 @@ export const useChatStore = defineStore('chat', () => {
     setSessionProfileFilter(null)
   }
 
+  // History page's own profile filter — independent from the main chat list.
+  // Mirrors `setSessionProfileFilter` but with its own storage key so the two
+  // filters don't interfere with each other.
+  const HISTORY_PROFILE_FILTER_STORAGE_KEY = 'hermes_history_profile_filter'
+  const storedHistoryProfileFilter = getItemBestEffort(HISTORY_PROFILE_FILTER_STORAGE_KEY)?.trim()
+  const isValidHistoryProfile = storedHistoryProfileFilter
+    && storedHistoryProfileFilter !== 'null'
+    && storedHistoryProfileFilter !== 'undefined'
+    && storedHistoryProfileFilter !== '__all__'
+    && storedHistoryProfileFilter !== 'all'
+  const historySessionProfileFilter = ref<string | null>(
+    isValidHistoryProfile ? storedHistoryProfileFilter : null,
+  )
+  function setHermesSessionProfileFilter(profile: string | null) {
+    const normalized = profile?.trim()
+    historySessionProfileFilter.value = normalized && normalized !== '__all__' && normalized !== 'all'
+      ? normalized
+      : null
+    if (historySessionProfileFilter.value) {
+      setItemBestEffort(HISTORY_PROFILE_FILTER_STORAGE_KEY, historySessionProfileFilter.value)
+    } else {
+      removeItem(HISTORY_PROFILE_FILTER_STORAGE_KEY)
+    }
+  }
+
   // 自动播放语音开关
   const autoPlaySpeechEnabled = ref(false)
 
@@ -1305,13 +1398,24 @@ export const useChatStore = defineStore('chat', () => {
   const isStreaming = computed(() => {
     const sid = activeSessionId.value
     if (sid == null) return false
-    return streamStates.value.has(sid) || serverWorking.value.has(sid)
+    if (streamStates.value.has(sid) || serverWorking.value.has(sid)) return true
+    // Background delegations (e.g.绘画 via delegate_task background) run
+    // outside isWorking — check live subagent streams for this session.
+    for (const s of subagentStreams.value.values()) {
+      if (s.sessionId === sid && s.status === 'running') return true
+    }
+    return false
   })
   const isForkPending = computed(() => {
     const sid = activeSessionId.value
     return sid != null && pendingForkCommands.value.has(sid)
   })
   const isLoadingSessions = ref(false)
+  // In-flight mutexes for the background live-sync paths (12s tick,
+  // visibilitychange). Skip-style: a colliding refresh is dropped and the next
+  // tick re-runs it — both operations are idempotent reads.
+  let sessionListRefreshInFlight = false
+  let liveMessageSyncInFlight = false
   const sessionsLoaded = ref(false)
   const messageLoadRequests = ref<Map<string, number>>(new Map())
   const isLoadingMessages = computed(() => {
@@ -1343,8 +1447,13 @@ export const useChatStore = defineStore('chat', () => {
       fetchSessions(undefined, undefined, scopedProfile),
       fetchSessions('global_agent', undefined, scopedProfile),
     ])
+    // Local (webui DB) is authoritative for the same session: it stores the
+    // canonical provider id (custom:llmux), while the CLI-side global store
+    // keeps the legacy bare "custom" + base_url form. Merging global-over-local
+    // corrupted provider to "custom", which then fails to match any provider
+    // group in the model picker (=> no highlight / looks like a reset).
     const byId = new Map<string, SessionSummary>()
-    for (const session of [...localSessions, ...globalSessions]) byId.set(session.id, session)
+    for (const session of [...globalSessions, ...localSessions]) byId.set(session.id, session)
     return [...byId.values()].sort((a, b) =>
       sessionActivitySeconds(b) - sessionActivitySeconds(a),
     )
@@ -1571,6 +1680,29 @@ export const useChatStore = defineStore('chat', () => {
     return mapped
   }
 
+  // Load a session that may belong to a different profile than the one
+  // currently selected, by fetching its detail directly by id. The server
+  // returns the real profile on the session; we inject it into the list and
+  // switch to it so a deep link like /hermes/session/<id> renders without
+  // requiring the user to manually switch profiles first.
+  async function ensureSessionByDirectFetch(sessionId: string): Promise<boolean> {
+    try {
+      const detail = await fetchSessionMessagesPage(sessionId, 0, LIVE_CHAT_MESSAGE_PAGE_SIZE)
+      if (!detail?.session) return false
+      const target = ensureSessionLoaded(detail.session as SessionSummary)
+      target.messages = mapHermesMessages(detail.messages || [])
+      target.loadedMessageCount = detail.messages.length
+      target.messageTotal = detail.total
+      target.messageCount = detail.total
+      target.hasMoreBefore = detail.hasMore
+      await switchSession(sessionId)
+      return true
+    } catch (err) {
+      console.error('Failed to load session directly:', err)
+      return false
+    }
+  }
+
   async function loadSessions(profile?: string | null, preferredSessionId?: string | null) {
     const requestSequence = ++loadSessionsRequestSequence
     isLoadingSessions.value = true
@@ -1591,20 +1723,29 @@ export const useChatStore = defineStore('chat', () => {
         if (prev?.contextTokens != null) s.contextTokens = prev.contextTokens
         if (!s.apiMode && prev?.apiMode) s.apiMode = prev.apiMode
       }
+      // Replace the list wholesale with the server's response for the current
+      // profile filter. The server (localListSessions) already scopes to the
+      // requested profile, so we must NOT preserve sessions from other
+      // profiles — otherwise the profile filter accumulates instead of swapping.
       sessions.value = fresh
       pruneCompletedUnreadSessions(new Set(sessions.value.map(s => s.id)))
 
       // Restore route-selected session first (tab-local source of truth),
       // then current in-memory session, then persisted legacy/default choice,
       // then fallback to the most recent session.
+      //
+      // With cross-profile opening, auto-select the user's intended session even
+      // if it belongs to a different profile (switchSession switches the active
+      // profile to follow it and primes the chat-run socket on that profile).
       const currentId = activeSessionId.value
       const legacyActiveKey = legacyStorageKey()
       const storedId = getItemBestEffort(storageKey()) || (legacyActiveKey ? getItemBestEffort(LEGACY_STORAGE_KEY) : null)
-      const targetId = preferredSessionId && sessions.value.some(s => s.id === preferredSessionId)
+      const sessionExists = (sid: string | null | undefined) => !!sid && !!sessions.value.find(item => item.id === sid)
+      const targetId = preferredSessionId && sessionExists(preferredSessionId)
         ? preferredSessionId
-        : currentId && sessions.value.some(s => s.id === currentId)
+        : currentId && sessionExists(currentId)
           ? currentId
-          : storedId && sessions.value.some(s => s.id === storedId)
+          : storedId && sessionExists(storedId)
             ? storedId
             : sessions.value[0]?.id
       if (targetId) {
@@ -1640,15 +1781,28 @@ export const useChatStore = defineStore('chat', () => {
   async function refreshSessionListOnly(profile?: string | null): Promise<void> {
     if (isStreaming.value) return
     if (isLoadingSessions.value) return
+    if (sessionListRefreshInFlight) return
+    sessionListRefreshInFlight = true
     try {
       const list = await fetchRuntimeSessions(profile ?? sessionProfileFilter.value)
       const incoming = list.map(mapHermesSession)
       const existingById = new Map(sessions.value.map(s => [s.id, s]))
-      const incomingIds = new Set(incoming.map(s => s.id))
 
+      // Skip the full array rebuild when nothing changed — otherwise every
+      // 12s tick replaces the array reference, triggering a Vue re-render
+      // that collapses any expanded list items on mobile.
+      const currentIds = sessions.value.map(s => s.id)
+      const incomingIdsArr = incoming.map(s => s.id)
+      const hasChanged = currentIds.length !== incomingIdsArr.length
+        || currentIds.some((id, i) => id !== incomingIdsArr[i])
       // Build the next array reusing existing objects (identity-preserving) and
       // inserting genuinely-new sessions as fresh objects.
       const next: Session[] = []
+      // Always include all sessions that are already in the list, even if they
+      // are not in the server response for this profile. This prevents the 12s
+      // poll from silently dropping cross-profile sessions that were opened via
+      // deep link or direct fetch.
+      const keptIds = new Set<string>()
       for (const fresh of incoming) {
         const existing = existingById.get(fresh.id)
         if (existing) {
@@ -1674,30 +1828,38 @@ export const useChatStore = defineStore('chat', () => {
             existing.messageTotal = Math.max(fresh.messageTotal, existing.loadedMessageCount || 0)
           }
           next.push(existing)
+          keptIds.add(fresh.id)
         } else {
           next.push(fresh)
+          keptIds.add(fresh.id)
+        }
+      }
+      // Preserve sessions that are already in the list but not in the server
+      // response (e.g. cross-profile sessions opened via deep link).
+      for (const existing of sessions.value) {
+        if (!keptIds.has(existing.id)) {
+          next.push(existing)
+          keptIds.add(existing.id)
         }
       }
 
-      // Keep the active session even if the server no longer lists it (don't
-      // pull the rug out from under what the user is viewing).
-      const activeId = activeSessionId.value
-      if (activeId && !incomingIds.has(activeId)) {
-        const keep = existingById.get(activeId)
-        if (keep) next.push(keep)
+      // Only replace the array when the list actually changed.
+      if (hasChanged || next.length !== currentIds.length) {
+        sessions.value = next
+        pruneCompletedUnreadSessions(new Set(next.map(s => s.id)))
       }
-
-      sessions.value = next
-      pruneCompletedUnreadSessions(new Set(next.map(s => s.id)))
 
       // Defensive: re-bind activeSession to the (same) object now in the array,
       // by id, in case anything above changed array membership.
+      const activeId = activeSessionId.value
       if (activeId) {
         const again = sessions.value.find(s => s.id === activeId)
         if (again && activeSession.value !== again) activeSession.value = again
       }
     } catch (err) {
       console.error('Failed to refresh session list:', err)
+    } finally {
+      sessionListRefreshInFlight = false
     }
   }
 
@@ -1816,13 +1978,101 @@ export const useChatStore = defineStore('chat', () => {
     activeSession.value = sessions.value.find(s => s.id === sessionId) || null
     clearSessionCompletedUnread(sessionId)
 
-    if (!activeSession.value) return
+    if (!activeSession.value) {
+      // Cross-profile deep link: the session isn't in the list yet, but the
+      // REST-first path below can still load messages. Create a stub entry
+      // so the UI doesn't flash blank and return.
+      const stub = {
+        id: sessionId,
+        title: '',
+        source: 'cli',
+        agent: 'hermes',
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as Session
+      activeSession.value = stub
+      sessions.value.unshift(stub)
+    }
+
+    // ── Follow the active session's profile ──
+    // Parallel-profile: each profile runs its own bridge worker and session
+    // table; no run is destroyed when focus changes. We update the UI focus
+    // profile (active_profile marker) to match the session being opened so
+    // request-scoped APIs and the chat-run socket bind to the right profile.
+    // connectChatRun() reconnects the chat-run socket to the new profile the
+    // next time it's called, so incoming run events land on the correct
+    // connection. In-flight runs in other profiles keep running untouched.
+    const targetProfile = activeSession.value?.profile || 'default'
+    try {
+      const profilesStore = useProfilesStore()
+      if (targetProfile !== getProfileName()) {
+        await profilesStore.switchHermesProfile(targetProfile)
+      }
+      // Prime the chat-run socket for this profile so streaming events /
+      // resume / send all attach to the connection bound to targetProfile.
+      connectChatRun(targetProfile)
+    } catch (err) {
+      console.warn('[switchSession] failed to switch active profile to', targetProfile, ':', err)
+    }
 
     beginMessageLoad(sessionId, requestSequence)
     let backgroundPendingOnResume = 0
+    // P0: track whether the REST-first path already populated messages. On
+    // mobile/slow networks the socket `resume` may arrive late (or its bridge
+    // status lookup may exceed our forward-timeout), and unconditionally
+    // overwriting target.messages with a stale/late `resumed` payload is what
+    // makes the first render wait ~12s for the background poll. If REST already
+    // delivered the latest page, keep it and let `resumed` only refresh the
+    // live isWorking/queue state, not clobber the message list.
+    let restLoadedMessages = false
 
+    // ── REST-first: load messages via HTTP (cross-profile, no socket profile check) ──
     try {
-      // Load messages via Socket.IO resume (server loads from DB if not in memory)
+      const target = sessions.value.find(s => s.id === sessionId) || activeSession.value
+      if (target) {
+        const limit = Math.min(
+          Math.max(target.loadedMessageCount || 0, LIVE_CHAT_MESSAGE_PAGE_SIZE),
+          LIVE_CHAT_MAX_LOADED_MESSAGES,
+        )
+        const page = await fetchSessionMessagesPage(sessionId, 0, limit, target.profile)
+        if (page?.messages && requestSequence === switchSessionRequestSequence && activeSessionId.value === sessionId) {
+          const t = sessions.value.find(s => s.id === sessionId)
+          if (t) {
+            restLoadedMessages = true
+            t.messages = mapHermesMessages(page.messages as any[])
+            restorePersistedSubagentStreams(sessionId)
+            restoreWorkspaceRunChangeMessages(sessionId)
+            t.loadedMessageCount = page.messages.length
+            t.messageTotal = (page as any).total ?? t.messageCount ?? t.loadedMessageCount
+            t.messageCount = t.messageTotal
+            t.hasMoreBefore = (page as any).hasMore ?? (t.loadedMessageCount || 0) < (t.messageTotal || 0)
+            // Update profile from API response — critical for unimported sessions
+            // whose stub may have wrong default/cross-profile profile. The socket
+            // must connect to the session's actual profile or sendMessage will fail
+            // with "Session not found" or profile mismatch.
+            if (page.session?.profile) t.profile = page.session.profile
+            if (!t.title) {
+              const firstUser = t.messages.find(m => m.role === 'user')
+              if (firstUser) {
+                const ttl = firstUser.content.slice(0, 40)
+                t.title = ttl + (firstUser.content.length > 40 ? '...' : '')
+              }
+            }
+            activeSession.value = t
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[switchSession] REST load failed, will try socket resume:', err)
+      restLoadedMessages = false
+    }
+
+    // P0: always reattach to authoritative server state (isWorking + background).
+    // Local memory (serverWorking/target.isWorking) is cleared on refresh and
+    // the session list has no isWorking field — gating on it skips the resume
+    // and leaves a live绘画 run stuck at isWorking=false.
+    try {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('resume timeout')), 15_000)
         resumeSession(sessionId, (data) => {
@@ -1876,13 +2126,21 @@ export const useChatStore = defineStore('chat', () => {
           target.parentLastMessage = (data as any).parentLastMessage || target.parentLastMessage || null
           target.parentLastMessageRole = (data as any).parentLastMessageRole || target.parentLastMessageRole || null
           if (data.messages?.length) {
-            target.messages = mapHermesMessages(data.messages as any[])
-            restorePersistedSubagentStreams(sessionId)
-            restoreWorkspaceRunChangeMessages(sessionId)
-            target.loadedMessageCount = data.messageLoadedCount ?? data.messages.length
-            target.messageTotal = data.messageTotal ?? target.messageCount ?? target.loadedMessageCount
-            target.messageCount = target.messageTotal
-            target.hasMoreBefore = data.hasMoreBefore ?? target.loadedMessageCount < target.messageTotal
+            // P0: if the REST-first path already populated the message list
+            // (restLoadedMessages), do NOT clobber it with the socket `resumed`
+            // payload. On mobile/slow networks that payload can arrive late or
+            // stale; overwriting here is what made the first render wait for the
+            // 12s background poll. `resumed` still refreshes isWorking/queue/
+            // state below, so the live run status stays correct.
+            if (!restLoadedMessages) {
+              target.messages = mapHermesMessages(data.messages as any[])
+              restorePersistedSubagentStreams(sessionId)
+              restoreWorkspaceRunChangeMessages(sessionId)
+              target.loadedMessageCount = data.messageLoadedCount ?? data.messages.length
+              target.messageTotal = data.messageTotal ?? target.messageCount ?? target.loadedMessageCount
+              target.messageCount = target.messageTotal
+              target.hasMoreBefore = data.hasMoreBefore ?? target.loadedMessageCount < target.messageTotal
+            }
           }
           if (!target.title) {
             const firstUser = target.messages.find(m => m.role === 'user')
@@ -3094,18 +3352,18 @@ export const useChatStore = defineStore('chat', () => {
   function completionNotificationAgent(session: Session): { icon: string } {
     const codingAgentId = session.codingAgentId || agentToCodingAgentId(session.agent)
     if (codingAgentId === 'codex') {
-      return { icon: '/coding-agents/codex-openai.png' }
+      return { icon: './coding-agents/codex-openai.png' }
     }
     if (codingAgentId === 'claude-code') {
-      return { icon: '/coding-agents/claude-code.svg' }
+      return { icon: './coding-agents/claude-code.svg' }
     }
     if (codingAgentId === 'pi') {
-      return { icon: '/coding-agents/pi.svg' }
+      return { icon: './coding-agents/pi.svg' }
     }
     if (codingAgentId === 'ekko-agent') {
-      return { icon: '/coding-agents/ekko-agent.png' }
+      return { icon: './coding-agents/ekko-agent.png' }
     }
-    return { icon: '/coding-agents/hermes.png' }
+    return { icon: './coding-agents/hermes.png' }
   }
 
   function completionNotificationBody(session: Session, message?: Message): string {
@@ -3130,6 +3388,144 @@ export const useChatStore = defineStore('chat', () => {
       icon: agent.icon,
       tag: `hermes-complete-${sessionId}-${message?.id || Date.now()}`,
     })
+  }
+
+  function bumpSessionUpdatedAt(sid: string) {
+    const s = sessions.value.find(s => s.id === sid)
+    if (s) s.updatedAt = Date.now()
+  }
+
+  // Shared run-event helpers — single source for the two big switch blocks
+  // (startRunViaSocket + resumeServerWorkingRun). Mutates ctx in place.
+  type RunEventCtx = {
+    sid: string
+    activeAssistantMessageId: string | null
+    reasoningAssistantMessageId: string | null
+    activeRunMarker: string | null
+    runProducedAssistantText: boolean
+    runProducedAssistantContent: boolean
+    runHadToolActivity: boolean
+  }
+
+  function handleReasoningDeltaShared(evt: RunEvent, ctx: RunEventCtx) {
+    const text = (evt as any).text || (evt as any).delta || ''
+    if (!text) return
+    ctx.runProducedAssistantText = true
+    bumpSessionUpdatedAt(ctx.sid)
+    const msgs = getSessionMsgs(ctx.sid)
+    const reasoningTargetId = ctx.reasoningAssistantMessageId || ctx.activeAssistantMessageId
+    const last = reasoningTargetId ? msgs.find(m => m.id === reasoningTargetId) : null
+    if (last?.role === 'assistant') {
+      last.reasoning = (last.reasoning || '') + text
+      ctx.reasoningAssistantMessageId = last.id
+      noteReasoningStart(last.id)
+    } else {
+      if (isDuplicateAssistantContent(msgs, 'assistant', text, Date.now())) return
+      const newId = uid()
+      addMessage(ctx.sid, { id: newId, role: 'assistant', content: '', timestamp: Date.now(), isStreaming: true, reasoning: text } as Message)
+      ctx.activeAssistantMessageId = newId
+      ctx.reasoningAssistantMessageId = newId
+      noteReasoningStart(newId)
+    }
+  }
+
+  function handleMessageDeltaShared(evt: RunEvent, ctx: RunEventCtx) {
+    if ((evt as any).delta) {
+      ctx.runProducedAssistantText = true
+      ctx.runProducedAssistantContent = true
+    }
+    const msgs = getSessionMsgs(ctx.sid)
+    const last = ctx.activeAssistantMessageId ? msgs.find(m => m.id === ctx.activeAssistantMessageId) : null
+    if (last?.role === 'assistant' && last.isStreaming) {
+      const prev = last.content
+      const next = prev + ((evt as any).delta || '')
+      noteThinkingDelta(last.id, prev, next)
+      if (last.reasoning) noteReasoningEnd(last.id)
+      last.content = next
+    } else {
+      const nextContent = (evt as any).delta || ''
+      if (isDuplicateAssistantContent(msgs, 'assistant', nextContent, Date.now())) return
+      const newId = uid()
+      noteThinkingDelta(newId, '', nextContent)
+      addMessage(ctx.sid, { id: newId, role: 'assistant', content: nextContent, timestamp: Date.now(), isStreaming: true } as Message)
+      ctx.activeAssistantMessageId = newId
+    }
+  }
+
+  function handleMessageInterimShared(evt: RunEvent, ctx: RunEventCtx) {
+    const text = String((evt as any).text || '')
+    if (!text.trim()) return
+    ctx.runProducedAssistantText = true
+    ctx.runProducedAssistantContent = true
+    const msgs = getSessionMsgs(ctx.sid)
+    const active = ctx.activeAssistantMessageId ? msgs.find(m => m.id === ctx.activeAssistantMessageId) : null
+    if (active?.role === 'assistant') {
+      active.content = text
+      active.isStreaming = false
+      if (active.reasoning) noteReasoningEnd(active.id)
+    } else {
+      if (isDuplicateAssistantContent(msgs, 'assistant', text, Date.now())) return
+      addMessage(ctx.sid, { id: uid(), role: 'assistant', content: text, timestamp: Date.now(), isStreaming: false } as Message)
+    }
+    ctx.activeAssistantMessageId = null
+    ctx.reasoningAssistantMessageId = null
+  }
+
+  function handleToolStartedShared(evt: RunEvent, ctx: RunEventCtx) {
+    ctx.runHadToolActivity = true
+    const startedToolName = (evt as any).tool || (evt as any).name
+    if (isBackgroundDelegateToolPayload(startedToolName, (evt as any).arguments) || (isEkkoAgentSession(ctx.sid) && startedToolName === 'delegate_task')) return
+    bumpSessionUpdatedAt(ctx.sid)
+    const msgs = getSessionMsgs(ctx.sid)
+    const toolCallId = (evt as any).tool_call_id as string | undefined
+    const last = ctx.activeAssistantMessageId ? msgs.find(m => m.id === ctx.activeAssistantMessageId) : msgs[msgs.length - 1]
+    const toolReasoning = last?.role === 'assistant' && last.reasoning?.trim() ? last.reasoning : undefined
+    if (last?.isStreaming) updateMessage(ctx.sid, last.id, { isStreaming: false })
+    ctx.activeAssistantMessageId = null
+    ctx.reasoningAssistantMessageId = null
+    const existingTool = toolCallId ? msgs.find(m => m.role === 'tool' && m.toolCallId === toolCallId) : null
+    if (existingTool) {
+      updateMessage(ctx.sid, existingTool.id, {
+        toolName: (evt as any).tool || (evt as any).name,
+        toolArgs: hasRuntimeToolPayload((evt as any).arguments) ? (evt as any).arguments : existingTool.toolArgs,
+        toolPreview: (evt as any).preview || existingTool.toolPreview,
+        reasoning: (existingTool as any).reasoning || toolReasoning,
+        toolStatus: (existingTool as any).toolStatus || 'running',
+      })
+      return
+    }
+    addMessage(ctx.sid, {
+      id: uid(), role: 'tool', content: '', timestamp: Date.now(),
+      toolName: (evt as any).tool || (evt as any).name, toolCallId,
+      toolPreview: (evt as any).preview, toolArgs: runtimeToolPayloadOrUndefined((evt as any).arguments),
+      reasoning: toolReasoning, toolStatus: 'running',
+    } as Message)
+  }
+
+  function handleToolCompletedShared(evt: RunEvent, ctx: RunEventCtx) {
+    ctx.runHadToolActivity = true
+    const msgs = getSessionMsgs(ctx.sid)
+    const toolCallId = (evt as any).tool_call_id as string | undefined
+    const toolMsgs = toolCallId ? msgs.filter(m => m.role === 'tool' && m.toolCallId === toolCallId) : msgs.filter(m => m.role === 'tool' && (m as any).toolStatus === 'running')
+    const output = runtimeToolOutputFromEvent(evt)
+    const toolName = (evt as any).tool || (evt as any).name || toolMsgs[toolMsgs.length - 1]?.toolName
+    if (isBackgroundDelegateToolPayload(toolName, output)) {
+      const session = sessions.value.find(item => item.id === ctx.sid)
+      if (session) session.messages = session.messages.filter(message => !toolMsgs.includes(message as any))
+      addHermesBackgroundDelegateAnchors(ctx.sid, toolCallId, output, (toolMsgs[toolMsgs.length - 1] as any)?.toolArgs)
+      return
+    }
+    if (isEkkoAgentSession(ctx.sid) && toolName === 'delegate_task' && runtimeObjectPayload(output)?.runtime === 'ekko') {
+      const session = sessions.value.find(item => item.id === ctx.sid)
+      if (session) session.messages = session.messages.filter(message => !toolMsgs.includes(message as any))
+      return
+    }
+    if (toolMsgs.length > 0) {
+      const last = toolMsgs[toolMsgs.length - 1] as any
+      const hasError = (evt as any).event === 'tool.failed' || (evt as any).error === true || runtimeToolOutputHasError(output)
+      const duration = (evt as any).duration
+      updateMessage(ctx.sid, last.id, { toolStatus: hasError ? 'error' : 'done', toolDuration: duration, toolResult: output })
+    }
   }
 
   async function sendMessage(content: string, attachments?: Attachment[]) {
@@ -3619,33 +4015,14 @@ export const useChatStore = defineStore('chat', () => {
 
             case 'reasoning.delta':
             case 'thinking.delta': {
-              const text = evt.text || evt.delta || ''
-              if (!text) break
-              runProducedAssistantText = true
-              const msgs = getSessionMsgs(sid)
-              const reasoningTargetId = reasoningAssistantMessageId || activeAssistantMessageId
-              const last = reasoningTargetId
-                ? msgs.find(m => m.id === reasoningTargetId)
-                : null
-              if (last?.role === 'assistant') {
-                last.reasoning = (last.reasoning || '') + text
-                reasoningAssistantMessageId = last.id
-                noteReasoningStart(last.id)
-              } else {
-                const newId = uid()
-                addMessage(sid, {
-                  id: newId,
-                  role: 'assistant',
-                  content: '',
-                  timestamp: Date.now(),
-                  isStreaming: true,
-                  reasoning: text,
-                })
-                activeAssistantMessageId = newId
-                reasoningAssistantMessageId = newId
-                noteReasoningStart(newId)
-              }
-
+              const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+              handleReasoningDeltaShared(evt, _c)
+              activeAssistantMessageId = _c.activeAssistantMessageId
+              reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+              activeRunMarker = _c.activeRunMarker
+              runProducedAssistantText = _c.runProducedAssistantText
+              runProducedAssistantContent = _c.runProducedAssistantContent
+              runHadToolActivity = _c.runHadToolActivity
               break
             }
 
@@ -3679,63 +4056,26 @@ export const useChatStore = defineStore('chat', () => {
             }
 
             case 'message.delta': {
-              if (evt.delta) {
-                runProducedAssistantText = true
-                runProducedAssistantContent = true
-              }
-              const msgs = getSessionMsgs(sid)
-              const last = activeAssistantMessageId
-                ? msgs.find(m => m.id === activeAssistantMessageId)
-                : null
-              if (last?.role === 'assistant' && last.isStreaming) {
-                const prev = last.content
-                const next = prev + (evt.delta || '')
-                noteThinkingDelta(last.id, prev, next)
-                // 若之前有 reasoning 累积，则 content 到达即视为推理结束。
-                if (last.reasoning) noteReasoningEnd(last.id)
-                last.content = next
-              } else {
-                const newId = uid()
-                const nextContent = evt.delta || ''
-                noteThinkingDelta(newId, '', nextContent)
-                addMessage(sid, {
-                  id: newId,
-                  role: 'assistant',
-                  content: nextContent,
-                  timestamp: Date.now(),
-                  isStreaming: true,
-                })
-                activeAssistantMessageId = newId
-              }
-
+              const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+              handleMessageDeltaShared(evt, _c)
+              activeAssistantMessageId = _c.activeAssistantMessageId
+              reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+              activeRunMarker = _c.activeRunMarker
+              runProducedAssistantText = _c.runProducedAssistantText
+              runProducedAssistantContent = _c.runProducedAssistantContent
+              runHadToolActivity = _c.runHadToolActivity
               break
             }
 
             case 'message.interim': {
-              const text = String(evt.text || '')
-              if (!text.trim()) break
-              runProducedAssistantText = true
-              runProducedAssistantContent = true
-              const msgs = getSessionMsgs(sid)
-              const active = activeAssistantMessageId
-                ? msgs.find(m => m.id === activeAssistantMessageId)
-                : null
-              if (active?.role === 'assistant') {
-                active.content = text
-                active.isStreaming = false
-                if (active.reasoning) noteReasoningEnd(active.id)
-              } else {
-                addMessage(sid, {
-                  id: uid(),
-                  role: 'assistant',
-                  content: text,
-                  timestamp: Date.now(),
-                  isStreaming: false,
-                })
-              }
-              activeAssistantMessageId = null
-              reasoningAssistantMessageId = null
-
+              const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+              handleMessageInterimShared(evt, _c)
+              activeAssistantMessageId = _c.activeAssistantMessageId
+              reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+              activeRunMarker = _c.activeRunMarker
+              runProducedAssistantText = _c.runProducedAssistantText
+              runProducedAssistantContent = _c.runProducedAssistantContent
+              runHadToolActivity = _c.runHadToolActivity
               break
             }
 
@@ -3745,96 +4085,27 @@ export const useChatStore = defineStore('chat', () => {
             }
 
             case 'tool.started': {
-              runHadToolActivity = true
-              const startedToolName = evt.tool || evt.name
-              if (
-                isBackgroundDelegateToolPayload(startedToolName, (evt as any).arguments)
-                || (isEkkoAgentSession(sid) && startedToolName === 'delegate_task')
-              ) break
-              const msgs = getSessionMsgs(sid)
-              const toolCallId = (evt as any).tool_call_id as string | undefined
-              const last = activeAssistantMessageId
-                ? msgs.find(m => m.id === activeAssistantMessageId)
-                : msgs[msgs.length - 1]
-              const toolReasoning =
-                last?.role === 'assistant' && last.reasoning?.trim()
-                  ? last.reasoning
-                  : undefined
-              if (last?.isStreaming) {
-                updateMessage(sid, last.id, { isStreaming: false })
-              }
-              activeAssistantMessageId = null
-              reasoningAssistantMessageId = null
-              const existingTool = toolCallId
-                ? msgs.find(m => m.role === 'tool' && m.toolCallId === toolCallId)
-                : null
-              if (existingTool) {
-                updateMessage(sid, existingTool.id, {
-                  toolName: evt.tool || evt.name,
-                  toolArgs: hasRuntimeToolPayload((evt as any).arguments) ? (evt as any).arguments : existingTool.toolArgs,
-                  toolPreview: evt.preview || existingTool.toolPreview,
-                  reasoning: existingTool.reasoning || toolReasoning,
-                  toolStatus: existingTool.toolStatus || 'running',
-                })
-                break
-              }
-              addMessage(sid, {
-                id: uid(),
-                role: 'tool',
-                content: '',
-                timestamp: Date.now(),
-                toolName: evt.tool || evt.name,
-                toolCallId,
-                toolPreview: evt.preview,
-                toolArgs: runtimeToolPayloadOrUndefined((evt as any).arguments),
-                reasoning: toolReasoning,
-                toolStatus: 'running',
-              })
-
+              const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+              handleToolStartedShared(evt, _c)
+              activeAssistantMessageId = _c.activeAssistantMessageId
+              reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+              activeRunMarker = _c.activeRunMarker
+              runProducedAssistantText = _c.runProducedAssistantText
+              runProducedAssistantContent = _c.runProducedAssistantContent
+              runHadToolActivity = _c.runHadToolActivity
               break
             }
 
             case 'tool.completed':
             case 'tool.failed': {
-              runHadToolActivity = true
-              const msgs = getSessionMsgs(sid)
-              const toolCallId = (evt as any).tool_call_id as string | undefined
-              const toolMsgs = toolCallId
-                ? msgs.filter(m => m.role === 'tool' && m.toolCallId === toolCallId)
-                : msgs.filter(m => m.role === 'tool' && m.toolStatus === 'running')
-              const output = runtimeToolOutputFromEvent(evt)
-              const toolName = evt.tool || evt.name || toolMsgs[toolMsgs.length - 1]?.toolName
-              if (isBackgroundDelegateToolPayload(toolName, output)) {
-                const session = sessions.value.find(item => item.id === sid)
-                if (session) session.messages = session.messages.filter(message => !toolMsgs.includes(message))
-                addHermesBackgroundDelegateAnchors(
-                  sid,
-                  toolCallId,
-                  output,
-                  toolMsgs[toolMsgs.length - 1]?.toolArgs,
-                )
-                break
-              }
-              if (
-                isEkkoAgentSession(sid)
-                && toolName === 'delegate_task'
-                && runtimeObjectPayload(output)?.runtime === 'ekko'
-              ) {
-                const session = sessions.value.find(item => item.id === sid)
-                if (session) session.messages = session.messages.filter(message => !toolMsgs.includes(message))
-                break
-              }
-              if (toolMsgs.length > 0) {
-                const last = toolMsgs[toolMsgs.length - 1]
-                const hasError = evt.event === 'tool.failed' || (evt as any).error === true || runtimeToolOutputHasError(output)
-                const duration = (evt as any).duration
-                updateMessage(sid, last.id, {
-                  toolStatus: hasError ? 'error' : 'done',
-                  toolDuration: duration,
-                  toolResult: output,
-                })
-              }
-
+              const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+              handleToolCompletedShared(evt, _c)
+              activeAssistantMessageId = _c.activeAssistantMessageId
+              reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+              activeRunMarker = _c.activeRunMarker
+              runProducedAssistantText = _c.runProducedAssistantText
+              runProducedAssistantContent = _c.runProducedAssistantContent
+              runHadToolActivity = _c.runHadToolActivity
               break
             }
 
@@ -3938,16 +4209,20 @@ export const useChatStore = defineStore('chat', () => {
                     })
                   }
                 } else if (parsedContentTrimmed) {
-                  addMessage(sid, {
-                    id: uid(),
-                    role: 'assistant',
-                    content: parsedContent,
-                    reasoning: typeof (evt as any).parsed_reasoning === 'string' ? (evt as any).parsed_reasoning : undefined,
-                    timestamp: Date.now(),
-                  })
-                  finalOutputTrimmed = parsedContentTrimmed
-                  runProducedAssistantText = true
-                  runProducedAssistantContent = true
+                  if (isDuplicateAssistantContent(getSessionMsgs(sid), 'assistant', parsedContent, Date.now())) {
+                    finalOutputTrimmed = parsedContentTrimmed
+                  } else {
+                    addMessage(sid, {
+                      id: uid(),
+                      role: 'assistant',
+                      content: parsedContent,
+                      reasoning: typeof (evt as any).parsed_reasoning === 'string' ? (evt as any).parsed_reasoning : undefined,
+                      timestamp: Date.now(),
+                    })
+                    finalOutputTrimmed = parsedContentTrimmed
+                    runProducedAssistantText = true
+                    runProducedAssistantContent = true
+                  }
                 }
               } else {
                 // Fallback to output field (legacy behavior)
@@ -3962,15 +4237,19 @@ export const useChatStore = defineStore('chat', () => {
                   if (activeAssistant) {
                     updateMessage(sid, activeAssistant.id, { content: finalOutput })
                   } else {
-                    addMessage(sid, {
-                      id: uid(),
-                      role: 'assistant',
-                      content: finalOutput,
-                      timestamp: Date.now(),
-                    })
+                    if (isDuplicateAssistantContent(getSessionMsgs(sid), 'assistant', finalOutput, Date.now())) {
+                      runProducedAssistantText = true
+                    } else {
+                      addMessage(sid, {
+                        id: uid(),
+                        role: 'assistant',
+                        content: finalOutput,
+                        timestamp: Date.now(),
+                      })
+                      runProducedAssistantText = true
+                      runProducedAssistantContent = true
+                    }
                   }
-                  runProducedAssistantText = true
-                  runProducedAssistantContent = true
                 }
               }
               // Workaround for upstream hermes-agent bug: when the agent
@@ -4169,6 +4448,12 @@ export const useChatStore = defineStore('chat', () => {
     const markIdleKeepingBackgroundListener = () => {
       streamStates.value.delete(sid)
       serverWorking.value.delete(sid)
+      // P0: when the main run completes but a background delegate (e.g.绘画
+      // via delegate_task background) is still running, we keep the listener
+      // but MUST clear any lingering assistant isStreaming flag so the top
+      // "thinking" indicator turns off. Otherwise isStreaming stays true
+      // forever and the UI shows "thinking" even though the run ended.
+      closeStreamingAssistant()
     }
 
     const ensureAbortHandle = () => {
@@ -4337,33 +4622,14 @@ export const useChatStore = defineStore('chat', () => {
 
         case 'reasoning.delta':
         case 'thinking.delta': {
-          const text = evt.text || evt.delta || ''
-          if (!text) break
-          runProducedAssistantText = true
-          const msgs = getSessionMsgs(sid)
-          const reasoningTargetId = reasoningAssistantMessageId || activeAssistantMessageId
-          const last = reasoningTargetId
-            ? msgs.find(m => m.id === reasoningTargetId)
-            : null
-          if (last?.role === 'assistant') {
-            last.reasoning = (last.reasoning || '') + text
-            reasoningAssistantMessageId = last.id
-            noteReasoningStart(last.id)
-          } else {
-            const newId = uid()
-            addMessage(sid, {
-              id: newId,
-              role: 'assistant',
-              content: '',
-              timestamp: Date.now(),
-              isStreaming: true,
-              reasoning: text,
-            })
-            activeAssistantMessageId = newId
-            reasoningAssistantMessageId = newId
-            noteReasoningStart(newId)
-          }
-
+          const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+          handleReasoningDeltaShared(evt, _c)
+          activeAssistantMessageId = _c.activeAssistantMessageId
+          reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+          activeRunMarker = _c.activeRunMarker
+          runProducedAssistantText = _c.runProducedAssistantText
+          runProducedAssistantContent = _c.runProducedAssistantContent
+          runHadToolActivity = _c.runHadToolActivity
           break
         }
 
@@ -4390,62 +4656,26 @@ export const useChatStore = defineStore('chat', () => {
         }
 
         case 'message.delta': {
-          if (evt.delta) {
-            runProducedAssistantText = true
-            runProducedAssistantContent = true
-          }
-          const msgs = getSessionMsgs(sid)
-          const last = activeAssistantMessageId
-            ? msgs.find(m => m.id === activeAssistantMessageId)
-            : null
-          if (last?.role === 'assistant' && last.isStreaming) {
-            const prev = last.content
-            const next = prev + (evt.delta || '')
-            noteThinkingDelta(last.id, prev, next)
-            if (last.reasoning) noteReasoningEnd(last.id)
-            last.content = next
-          } else {
-            const newId = uid()
-            const nextContent = evt.delta || ''
-            noteThinkingDelta(newId, '', nextContent)
-            addMessage(sid, {
-              id: newId,
-              role: 'assistant',
-              content: nextContent,
-              timestamp: Date.now(),
-              isStreaming: true,
-            })
-            activeAssistantMessageId = newId
-          }
-
+          const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+          handleMessageDeltaShared(evt, _c)
+          activeAssistantMessageId = _c.activeAssistantMessageId
+          reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+          activeRunMarker = _c.activeRunMarker
+          runProducedAssistantText = _c.runProducedAssistantText
+          runProducedAssistantContent = _c.runProducedAssistantContent
+          runHadToolActivity = _c.runHadToolActivity
           break
         }
 
         case 'message.interim': {
-          const text = String(evt.text || '')
-          if (!text.trim()) break
-          runProducedAssistantText = true
-          runProducedAssistantContent = true
-          const msgs = getSessionMsgs(sid)
-          const active = activeAssistantMessageId
-            ? msgs.find(m => m.id === activeAssistantMessageId)
-            : null
-          if (active?.role === 'assistant') {
-            active.content = text
-            active.isStreaming = false
-            if (active.reasoning) noteReasoningEnd(active.id)
-          } else {
-            addMessage(sid, {
-              id: uid(),
-              role: 'assistant',
-              content: text,
-              timestamp: Date.now(),
-              isStreaming: false,
-            })
-          }
-          activeAssistantMessageId = null
-          reasoningAssistantMessageId = null
-
+          const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+          handleMessageInterimShared(evt, _c)
+          activeAssistantMessageId = _c.activeAssistantMessageId
+          reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+          activeRunMarker = _c.activeRunMarker
+          runProducedAssistantText = _c.runProducedAssistantText
+          runProducedAssistantContent = _c.runProducedAssistantContent
+          runHadToolActivity = _c.runHadToolActivity
           break
         }
 
@@ -4455,94 +4685,27 @@ export const useChatStore = defineStore('chat', () => {
         }
 
         case 'tool.started': {
-          runHadToolActivity = true
-          const startedToolName = evt.tool || evt.name
-          if (
-            isBackgroundDelegateToolPayload(startedToolName, (evt as any).arguments)
-            || (isEkkoAgentSession(sid) && startedToolName === 'delegate_task')
-          ) break
-          const msgs = getSessionMsgs(sid)
-          const toolCallId = (evt as any).tool_call_id as string | undefined
-          const last = activeAssistantMessageId
-            ? msgs.find(m => m.id === activeAssistantMessageId)
-            : msgs[msgs.length - 1]
-          const toolReasoning =
-            last?.role === 'assistant' && last.reasoning?.trim()
-              ? last.reasoning
-              : undefined
-          if (last?.isStreaming) {
-            updateMessage(sid, last.id, { isStreaming: false })
-          }
-          activeAssistantMessageId = null
-          reasoningAssistantMessageId = null
-          const existingTool = toolCallId
-            ? msgs.find(m => m.role === 'tool' && m.toolCallId === toolCallId)
-            : null
-          if (existingTool) {
-            updateMessage(sid, existingTool.id, {
-              toolName: evt.tool || evt.name,
-              toolArgs: hasRuntimeToolPayload((evt as any).arguments) ? (evt as any).arguments : existingTool.toolArgs,
-              toolPreview: evt.preview || existingTool.toolPreview,
-              reasoning: existingTool.reasoning || toolReasoning,
-              toolStatus: existingTool.toolStatus || 'running',
-            })
-            break
-          }
-          addMessage(sid, {
-            id: uid(),
-            role: 'tool',
-            content: '',
-            timestamp: Date.now(),
-            toolName: evt.tool || evt.name,
-            toolCallId,
-            toolPreview: evt.preview,
-            toolArgs: runtimeToolPayloadOrUndefined((evt as any).arguments),
-            reasoning: toolReasoning,
-            toolStatus: 'running',
-          })
-
+          const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+          handleToolStartedShared(evt, _c)
+          activeAssistantMessageId = _c.activeAssistantMessageId
+          reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+          activeRunMarker = _c.activeRunMarker
+          runProducedAssistantText = _c.runProducedAssistantText
+          runProducedAssistantContent = _c.runProducedAssistantContent
+          runHadToolActivity = _c.runHadToolActivity
           break
         }
 
         case 'tool.completed':
         case 'tool.failed': {
-          runHadToolActivity = true
-          const msgs = getSessionMsgs(sid)
-          const toolCallId = (evt as any).tool_call_id as string | undefined
-          const toolMsgs = toolCallId
-            ? msgs.filter(m => m.role === 'tool' && m.toolCallId === toolCallId)
-            : msgs.filter(m => m.role === 'tool' && m.toolStatus === 'running')
-          const output = runtimeToolOutputFromEvent(evt)
-          const toolName = evt.tool || evt.name || toolMsgs[toolMsgs.length - 1]?.toolName
-          if (isBackgroundDelegateToolPayload(toolName, output)) {
-            const session = sessions.value.find(item => item.id === sid)
-            if (session) session.messages = session.messages.filter(message => !toolMsgs.includes(message))
-            addHermesBackgroundDelegateAnchors(
-              sid,
-              toolCallId,
-              output,
-              toolMsgs[toolMsgs.length - 1]?.toolArgs,
-            )
-            break
-          }
-          if (
-            isEkkoAgentSession(sid)
-            && toolName === 'delegate_task'
-            && runtimeObjectPayload(output)?.runtime === 'ekko'
-          ) {
-            const session = sessions.value.find(item => item.id === sid)
-            if (session) session.messages = session.messages.filter(message => !toolMsgs.includes(message))
-            break
-          }
-          if (toolMsgs.length > 0) {
-            const hasError = evt.event === 'tool.failed' || (evt as any).error === true || runtimeToolOutputHasError(output)
-            updateMessage(sid, toolMsgs[toolMsgs.length - 1].id, {
-              toolStatus: hasError ? 'error' : 'done',
-              toolDuration: (evt as any).duration,
-              toolResult: output,
-            })
-          }
-
+          const _c: RunEventCtx = { sid, activeAssistantMessageId, reasoningAssistantMessageId, activeRunMarker, runProducedAssistantText, runProducedAssistantContent, runHadToolActivity }
+          handleToolCompletedShared(evt, _c)
+          activeAssistantMessageId = _c.activeAssistantMessageId
+          reasoningAssistantMessageId = _c.reasoningAssistantMessageId
+          activeRunMarker = _c.activeRunMarker
+          runProducedAssistantText = _c.runProducedAssistantText
+          runProducedAssistantContent = _c.runProducedAssistantContent
+          runHadToolActivity = _c.runHadToolActivity
           break
         }
 
@@ -4647,16 +4810,20 @@ export const useChatStore = defineStore('chat', () => {
                 })
               }
             } else if (parsedContentTrimmed) {
-              addMessage(sid, {
-                id: uid(),
-                role: 'assistant',
-                content: parsedContent,
-                reasoning: typeof (evt as any).parsed_reasoning === 'string' ? (evt as any).parsed_reasoning : undefined,
-                timestamp: Date.now(),
-              })
-              finalOutputTrimmed = parsedContentTrimmed
-              runProducedAssistantText = true
-              runProducedAssistantContent = true
+              if (isDuplicateAssistantContent(getSessionMsgs(sid), 'assistant', parsedContent, Date.now())) {
+                finalOutputTrimmed = parsedContentTrimmed
+              } else {
+                addMessage(sid, {
+                  id: uid(),
+                  role: 'assistant',
+                  content: parsedContent,
+                  reasoning: typeof (evt as any).parsed_reasoning === 'string' ? (evt as any).parsed_reasoning : undefined,
+                  timestamp: Date.now(),
+                })
+                finalOutputTrimmed = parsedContentTrimmed
+                runProducedAssistantText = true
+                runProducedAssistantContent = true
+              }
             }
           } else {
             // Fallback to output field (legacy behavior)
@@ -4670,14 +4837,19 @@ export const useChatStore = defineStore('chat', () => {
               if (activeAssistant) {
                 updateMessage(sid, activeAssistant.id, { content: finalOutput })
               } else {
-                addMessage(sid, {
-                  id: uid(),
-                  role: 'assistant',
-                  content: finalOutput,
-                  timestamp: Date.now(),
-                })
+                if (isDuplicateAssistantContent(getSessionMsgs(sid), 'assistant', finalOutput, Date.now())) {
+                  runProducedAssistantText = true
+                } else {
+                  addMessage(sid, {
+                    id: uid(),
+                    role: 'assistant',
+                    content: finalOutput,
+                    timestamp: Date.now(),
+                  })
+                  runProducedAssistantText = true
+                  runProducedAssistantContent = true
+                }
               }
-              runProducedAssistantText = true
               runProducedAssistantContent = true
             }
           }
@@ -4937,20 +5109,40 @@ export const useChatStore = defineStore('chat', () => {
   // Tab visibility: re-sync when returning to foreground
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && !isStreaming.value) {
+      if (document.visibilityState === 'visible') {
         // Live-sync the session list so sessions created elsewhere (CLI,
         // Telegram, another device) appear without a manual reload.
+        // (removed `!isStreaming` guard — see P0 deadlock note below)
         void refreshSessionListOnly()
       }
-      if (document.visibilityState === 'visible' && activeSessionId.value && !isStreaming.value) {
+      if (document.visibilityState === 'visible' && activeSessionId.value) {
         const sid = activeSessionId.value
-        if (sid && !streamStates.value.has(sid)) {
-          // Re-load messages via resume (server loads from DB)
+        if (sid) {
+          // P1: MUST run even when streamStates.has(sid) — a lost run.completed
+          // leaves serverWorking/isStreaming stuck forever. resumeSession is
+          // idempotent (read-only) so repeated calls are safe.
+          // P0: this re-sync MUST run even when isStreaming is currently true.
+          // A lost terminal event can leave serverWorking stuck at true, which
+          // makes isStreaming stay true forever; if we gate on `!isStreaming`
+          // here we can never re-query authoritative isWorking and the "thinking"
+          // indicator deadlocks. resumeSession re-attaches to the server and
+          // returns the real isWorking, breaking the deadlock.
           resumeSession(sid, (data) => {
             if (data.isWorking) {
               serverWorking.value.add(sid)
             } else {
               serverWorking.value.delete(sid)
+              streamStates.value.delete(sid)
+              // Clear per-message isStreaming so the header indicator turns off
+              // even when data.messages is empty (short tasks).
+              const msgs = getSessionMsgs(sid)
+              msgs.forEach(m => {
+                if (m.role === 'assistant' && m.isStreaming) {
+                  updateMessage(sid, m.id, { isStreaming: false })
+                }
+              })
+              setAbortState(sid, null)
+              setCompressionState(sid, null)
             }
             if (data.isAborting) {
               setAbortState(sid, { aborting: true, synced: null })
@@ -4988,6 +5180,55 @@ export const useChatStore = defineStore('chat', () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
       if (isStreaming.value) return
       void refreshSessionListOnly()
+      // Live-sync NEW messages only. The server paginates newest-first
+      // (offset=0 = latest page). We re-fetch the latest page and prepend any
+      // messages whose id is newer than the client's current newest id.
+      // We do NOT touch loadedMessageCount (that is owned by
+      // loadOlderMessages for backward pagination) and we never re-add
+      // existing messages, so this cannot introduce duplicates or make the
+      // visible messages appear to drift older.
+      const sid = activeSessionId.value
+      if (sid && !streamStates.value.has(sid)) {
+        const target = sessions.value.find(s => s.id === sid)
+        if (target && target.messages?.length && !liveMessageSyncInFlight) {
+          liveMessageSyncInFlight = true
+          fetchSessionMessagesPage(sid, 0, LIVE_CHAT_MESSAGE_PAGE_SIZE, target.profile).then(page => {
+            if (!page?.messages?.length) return
+            const freshMsgs = mapHermesMessages(page.messages as any[])
+            const currentNewestId = target.messages[target.messages.length - 1]?.id
+            const currentNewestTs = target.messages[target.messages.length - 1]?.timestamp || 0
+            // Keep only messages newer than the newest we already display.
+            const newMsgs = freshMsgs.filter(m => {
+              if (m.id === currentNewestId) return false
+              if (m.timestamp > currentNewestTs) return true
+              // Same-timestamp but different id: let content dedup decide
+              if (m.timestamp === currentNewestTs) return true
+              return false
+            })
+            if (!newMsgs.length) return
+            // Drop any already-present ids (safety).
+            const existingIds = new Set(target.messages.map(m => m.id))
+            const dedupedById = newMsgs.filter(m => !existingIds.has(m.id))
+            if (!dedupedById.length) return
+            const deduped = dedupedById.filter(m => {
+              // Only assistant replies are deduped; user messages are never
+              // dropped (re-sending after a network failure is legitimate).
+              if (m.role !== 'assistant') return true
+              return !isDuplicateAssistantContent(target.messages, m.role, m.content, m.timestamp)
+            })
+            if (!deduped.length) return
+            target.messages.push(...deduped)
+            target.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+            target.messageTotal = page.total
+            target.messageCount = page.total
+            target.hasMoreBefore = (page as any).hasMore ?? (target.loadedMessageCount || 0) < target.messageTotal
+            restorePersistedSubagentStreams(sid)
+            restoreWorkspaceRunChangeMessages(sid)
+          }).catch(() => {}).finally(() => {
+            liveMessageSyncInFlight = false
+          })
+        }
+      }
     }, 12_000)
   }
 
@@ -5109,6 +5350,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionProfileFilter,
     setSessionProfileFilter,
     validateSessionProfileFilter,
+    setHermesSessionProfileFilter,
     compressionState,
     abortState,
     isAborting,
@@ -5134,6 +5376,7 @@ export const useChatStore = defineStore('chat', () => {
     newCliSession,
     switchSession,
     ensureSessionLoaded,
+    ensureSessionByDirectFetch,
     loadOlderMessages,
     switchSessionModel,
     addOrUpdateSession,
@@ -5159,5 +5402,6 @@ export const useChatStore = defineStore('chat', () => {
     loadWorkspaceRunChangeFile,
     setSessionReasoningEffort,
     setRuntimeMode,
+    historySessionProfileFilter,
   }
 })
