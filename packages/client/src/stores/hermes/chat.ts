@@ -5197,13 +5197,16 @@ export const useChatStore = defineStore('chat', () => {
             const freshMsgs = mapHermesMessages(page.messages as any[])
             const currentNewestId = target.messages[target.messages.length - 1]?.id
             const currentNewestTs = target.messages[target.messages.length - 1]?.timestamp || 0
-            // Keep only messages newer than the newest we already display.
+            // Keep only messages strictly newer than the newest we already
+            // display. Same-timestamp messages are NOT auto-accepted here;
+            // they must be validated via id dedup below. The previous
+            // `timestamp === currentNewestTs` backdoor let re-inserted old
+            // messages (new autoincrement id, old second-precision timestamp)
+            // slip through when the tail-window count misclassified them as
+            // missing.
             const newMsgs = freshMsgs.filter(m => {
               if (m.id === currentNewestId) return false
-              if (m.timestamp > currentNewestTs) return true
-              // Same-timestamp but different id: let content dedup decide
-              if (m.timestamp === currentNewestTs) return true
-              return false
+              return m.timestamp > currentNewestTs
             })
             if (!newMsgs.length) return
             // Drop any already-present ids (safety).

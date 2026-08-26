@@ -25,11 +25,17 @@ const DEFAULT_INTERVAL_MS = 15 * 60_000 // 15 min
 const SYNC_WINDOW_HOURS = 24 // only touch sessions active in last 24h
 // 15s debounce for "on session open" triggers
 const DEBOUNCE_MS = 15_000
-// Tail-window reconciliation: state.db is append-only per session, so gaps
-// only appear at the tail. Reading the newest SYNC_TAIL_LIMIT rows from both
-// sides is sufficient; a mid-history gap (should not happen for imported
-// snapshots) is covered by the on-session-open debounced sync.
-const SYNC_TAIL_LIMIT = 500
+// Tail-window read, full-table count: state.db is append-only per session
+// so new gaps only appear at the tail — reading the newest 500 rows from
+// state.db is sufficient for the hot path. Counting, however, MUST scan the
+// full webui message history; a 500-row tail count would classify an early
+// (role,content) that reappears at the tail as "missing" and re-insert an
+// old message with a new autoincrement id, which then pollutes the paginated
+// newest page (ORDER BY id DESC LIMIT 150). Mid-history gaps are covered by
+// the on-session-open debounced sync.
+const SYNC_TAIL_READ_LIMIT = 500
+// Keep old name as alias for any external import (no behavior change).
+const SYNC_TAIL_LIMIT = SYNC_TAIL_READ_LIMIT
 
 interface SyncResult {
   scanned: number
@@ -142,10 +148,10 @@ export class SessionMessageSync {
     }
     if (!profile) return { scanned: 1, missing: 0, inserted: 0, skipped: 0 }
 
-    // Read state.db authoritative messages for this session.
+    // Read state.db authoritative messages for this session — newest tail only.
     let stateDetail: any
     try {
-      stateDetail = await getSessionDetailPaginatedFromDbWithProfile(sessionId, profile, 0, SYNC_TAIL_LIMIT)
+      stateDetail = await getSessionDetailPaginatedFromDbWithProfile(sessionId, profile, 0, SYNC_TAIL_READ_LIMIT)
     } catch (err) {
       logger.warn('[SessionMessageSync] read state.db %s failed: %s', sessionId, (err as any)?.message || err)
       return { scanned: 1, missing: 0, inserted: 0, skipped: 0 }
@@ -189,14 +195,16 @@ export class SessionMessageSync {
       dedupedStateMsgs.push(m)
     }
 
-    // Existing webui keys for this session — tail window only (matches the
-    // state.db side; see SYNC_TAIL_LIMIT above).
+    // Existing webui keys for this session — MUST scan the full history
+    // for counting. A tail-window count would misclassify an early
+    // (role,content) that reappears at the tail as "missing" and re-insert an
+    // old message with a new autoincrement id, polluting ORDER BY id pagination.
     // Use count-aware check: if webui already has N copies of same (role,content)
     // and state has M, only insert M-N. Previous Set existence check would hide
     // a legitimate second "继续" forever.
     const existing = db.prepare(
-      'SELECT role, content FROM (SELECT role, content, id FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id',
-    ).all(sessionId, SYNC_TAIL_LIMIT) as Array<{ role: string; content: string }>
+      'SELECT role, content FROM messages WHERE session_id = ?',
+    ).all(sessionId) as Array<{ role: string; content: string }>
     const existingCount = new Map<string, number>()
     for (const r of existing) {
       const k = `${r.role}\u0000${normalize(r.content)}`
