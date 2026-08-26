@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getBaseUrlValue } from '@/api/client'
 import { groupAgentRunMessages, useGroupChatStore } from '@/stores/hermes/group-chat'
 import type { RoomAgentHandoffChain } from '@/api/hermes/group-chat'
 import { handoffErrorTranslationKey, isPresentableHandoffChain } from './handoff-presentation'
@@ -26,11 +27,12 @@ const { t } = useI18n()
 const { toolTraceVisible } = useToolTraceVisibility()
 const listRef = ref<InstanceType<typeof VirtualMessageList> | null>(null)
 const showScrollBottomButton = ref(false)
+const base = getBaseUrlValue()
 const emptyStateAgents = [
-    { name: 'Hermes', src: '/coding-agents/hermes.png' },
-    { name: 'Ekko', src: '/coding-agents/ekko-agent.png' },
-    { name: 'Codex', src: '/coding-agents/codex-openai.png' },
-    { name: 'Claude', src: '/coding-agents/claude-code.svg' },
+    { name: 'Hermes', src: `${base}/coding-agents/hermes.png` },
+    { name: 'Ekko', src: `${base}/coding-agents/ekko-agent.png` },
+    { name: 'Codex', src: `${base}/coding-agents/codex-openai.png` },
+    { name: 'Claude', src: `${base}/coding-agents/claude-code.svg` },
 ]
 const displayMessages = computed(() => groupAgentRunMessages(store.sortedMessages.filter(msg =>
     msg.role !== 'tool' ||

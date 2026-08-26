@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { NButton, NSwitch, NInputNumber, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { getBaseUrlValue } from '@/api/client'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import { primeCompletionSound } from '@/utils/completion-sound'
 import { requestCompletionNotificationPermission, showCompletionNotification, showSystemNotification, type CompletionNotificationPermissionResult } from '@/utils/completion-notification'
@@ -48,10 +49,11 @@ async function handleNotifyOnApprovalChange(value: boolean) {
       message.error(t(notificationPermissionErrorKey(result)))
       return
     }
+    const base = getBaseUrlValue()
     const shown = await showSystemNotification({
       title: 'Hermes',
       body: t('settings.display.notifyOnApprovalTest'),
-      icon: '/coding-agents/hermes.png',
+      icon: `${base}/coding-agents/hermes.png`,
       tag: `hermes-approval-test-${Date.now()}`,
     }, { requireBackground: false, deduplicate: false })
     if (!shown) {
@@ -68,10 +70,11 @@ async function testApprovalNotification() {
     message.error(t(notificationPermissionErrorKey(result)))
     return
   }
+  const base = getBaseUrlValue()
   const shown = await showSystemNotification({
     title: 'Hermes',
     body: t('settings.display.notifyOnApprovalTest'),
-    icon: '/coding-agents/hermes.png',
+    icon: `${base}/coding-agents/hermes.png`,
     tag: `hermes-approval-test-${Date.now()}`,
   }, { requireBackground: false, deduplicate: false })
   if (!shown) {
@@ -91,10 +94,11 @@ async function handleNotifyOnCompleteChange(value: boolean) {
   }
   await save({ notify_on_complete: value })
   if (value) {
+    const base = getBaseUrlValue()
     void showCompletionNotification({
       title: 'Hermes',
       body: t('settings.display.notifyOnCompleteTest'),
-      icon: '/coding-agents/hermes.png',
+      icon: `${base}/coding-agents/hermes.png`,
       tag: `hermes-complete-test-${Date.now()}`,
     })
   }
@@ -106,10 +110,11 @@ async function testCompletionNotification() {
     message.error(t(notificationPermissionErrorKey(result)))
     return
   }
+  const base = getBaseUrlValue()
   const shown = await showCompletionNotification({
     title: 'Hermes',
     body: t('settings.display.notifyOnCompleteTest'),
-    icon: '/coding-agents/hermes.png',
+    icon: `${base}/coding-agents/hermes.png`,
     tag: `hermes-complete-test-${Date.now()}`,
   })
   if (!shown) {

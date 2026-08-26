@@ -90,6 +90,7 @@ const messageListRef = ref<InstanceType<typeof MessageList> | null>(null);
 const chatInputRef = ref<(InstanceType<typeof ChatInput> & {
   addFiles?: (files: File[]) => void;
   addBrowserAttachment?: (file: File, context: string) => void;
+  focusComposer?: () => void;
 }) | null>(null);
 const chatContentWrapperRef = ref<HTMLElement | null>(null);
 const chatMainContentRef = ref<HTMLElement | null>(null);
@@ -441,6 +442,11 @@ watch(
     }
 
     await nextTick();
+    // A session you just opened should be ready to type in. Without this the
+    // composer keeps whatever focus the sidebar click left behind, so the first
+    // keystroke goes nowhere.
+    chatInputRef.value?.focusComposer?.();
+
     const surface = chatMainContentRef.value;
     if (!surface || typeof surface.animate !== "function") return;
 
@@ -873,6 +879,29 @@ function getSelectableModelGroupsForProfile(profile: string) {
   return getModelGroupsForProfile(profile).filter(isNewChatProviderAllowed);
 }
 
+function resolveProfileDefault(
+  profile: string,
+  groups: AvailableModelGroup[],
+): { provider: string; model: string } | null {
+  const profileModels = appStore.profileModelGroups.find(
+    (entry) => entry.profile === profile,
+  );
+  const defaultProvider = profileModels?.default_provider || "";
+  const defaultModel = profileModels?.default || "";
+  if (!defaultProvider || !defaultModel) return null;
+  const providerGroup = groups.find((g) => g.provider === defaultProvider);
+  const isUnlistedDefault = !!(
+    providerGroup && !providerGroup.models.includes(defaultModel)
+  );
+  if (isUnlistedDefault) return { provider: defaultProvider, model: defaultModel };
+  if (!providerGroup) {
+    const knownInCustom = (appStore.customModels[defaultProvider] || []).includes(defaultModel);
+    if (knownInCustom) return { provider: defaultProvider, model: defaultModel };
+    return { provider: defaultProvider, model: defaultModel };
+  }
+  return { provider: defaultProvider, model: defaultModel };
+}
+
 function getDefaultModelForProfile(profile: string) {
   const groups = getSelectableModelGroupsForProfile(profile);
   const activeProfileName = profilesStore.activeProfileName || "default";
@@ -890,20 +919,12 @@ function getDefaultModelForProfile(profile: string) {
       model: selectedModel,
     };
   }
-  const profileModels = appStore.profileModelGroups.find(
-    (entry) => entry.profile === profile,
-  );
-  const defaultProvider = profileModels?.default_provider || "";
-  const defaultModel = profileModels?.default || "";
-  const providerGroup = defaultProvider
-    ? groups.find((group) => group.provider === defaultProvider)
-    : undefined;
-  const fallbackGroup = providerGroup || groups.find((group) => group.models.length > 0);
+  const resolved = resolveProfileDefault(profile, groups);
+  if (resolved) return resolved;
+  const fallbackGroup = groups.find((group) => group.models.length > 0);
   return {
     provider: fallbackGroup?.provider || "",
-    model: fallbackGroup?.models.includes(defaultModel)
-      ? defaultModel
-      : fallbackGroup?.models[0] || "",
+    model: fallbackGroup?.models[0] || "",
   };
 }
 
@@ -1016,18 +1037,10 @@ function handleNewChatModelKindChange(value: "model" | "moa") {
     newChatProvider.value = "moa";
     newChatModel.value = group.models[0];
   } else {
+    const defaults = getDefaultModelForProfile(newChatProfile.value);
     newChatModelKind.value = "model";
-    const groups = getSelectableModelGroupsForProfile(newChatProfile.value)
-      .filter((group) => group.provider !== "moa");
-    const profileModels = appStore.profileModelGroups.find(
-      (entry) => entry.profile === newChatProfile.value,
-    );
-    const defaultGroup = groups.find((group) => group.provider === profileModels?.default_provider);
-    const group = defaultGroup || groups.find((item) => item.models.length > 0);
-    newChatProvider.value = group?.provider || "";
-    newChatModel.value = group?.models.includes(profileModels?.default || "")
-      ? profileModels?.default || ""
-      : group?.models[0] || "";
+    newChatProvider.value = defaults.provider;
+    newChatModel.value = defaults.model;
   }
   newChatBaseUrl.value = "";
   newChatApiKey.value = "";
@@ -1728,7 +1741,15 @@ async function openSessionModelModal(sessionId: string) {
     ? groups.find((group) => group.provider === session.provider)
     : undefined;
   const fallbackGroup = providerGroup || groups.find((group) => group.models.length > 0);
-  const defaults = {
+  // A-fix: if the session already has a valid provider+model, trust it even when
+  // the live catalog doesn't yet list that model (e.g. custom model not in
+  // provider_models cache). Only fall back to groups[0] when both are empty.
+  const hasValidSessionModel = !!(session?.provider && session?.model);
+  const sessionProfile = session?.profile || profilesStore.activeProfileName || "default";
+  const profileDefault = hasValidSessionModel
+    ? { provider: session!.provider!, model: session!.model! }
+    : resolveProfileDefault(sessionProfile, groups);
+  const defaults = profileDefault || {
     provider: fallbackGroup?.provider || "",
     model: fallbackGroup?.models.includes(session?.model || "")
       ? session?.model || ""
@@ -1738,10 +1759,10 @@ async function openSessionModelModal(sessionId: string) {
   sessionModelKind.value = usesMoa ? "moa" : "model";
   sessionModelValue.value = usesMoa
     ? session?.model || ""
-    : providerGroup ? session?.model || defaults.model || "" : defaults.model || "";
+    : (profileDefault ? profileDefault.model : (providerGroup ? session?.model || defaults.model || "" : defaults.model || ""));
   sessionModelProvider.value = usesMoa
     ? "moa"
-    : providerGroup ? session?.provider || "" : defaults.provider || "";
+    : (profileDefault ? profileDefault.provider : (providerGroup ? session?.provider || "" : defaults.provider || ""));
   sessionModelCustomProvider.value = usesMoa ? defaults.provider : sessionModelProvider.value;
   sessionModelSearch.value = "";
   sessionModelCustomInput.value = "";
@@ -2629,7 +2650,7 @@ async function handleSessionModelCustomSubmit() {
               </svg>
             </template>
           </NButton>
-          <span class="header-session-title">{{ headerTitle }}</span>
+          <span class="header-session-title" dir="auto">{{ headerTitle }}</span>
           <button
             v-if="chatStore.activeSession?.workspace"
             class="workspace-badge"

@@ -5,7 +5,8 @@ import { useI18n } from "vue-i18n";
 import { setApiKey, clearApiKey, hasApiKey } from "@/api/client";
 import { fetchAuthStatus, loginWithPassword } from "@/api/auth";
 import { isDesktopShell } from "@/utils/desktop-bridge";
-import { resolveLoginRedirect } from "@/utils/login-redirect";
+import { getBaseUrlValue } from '@/api/client'
+import { resolveLoginRedirect } from '@/utils/login-redirect'
 import { useTheme } from "@/composables/useTheme";
 
 const { t } = useI18n();
@@ -72,7 +73,7 @@ async function handlePasswordLogin() {
   <div class="login-view">
     <div class="login-card">
       <div class="login-logo">
-        <img src="/logo.png" alt="Hermes" width="80" height="80" />
+        <img :src="`${getBaseUrlValue()}/logo.png`" alt="Hermes" width="80" height="80" />
       </div>
       <h1 class="login-title">{{ t("login.title") }}</h1>
       <p class="login-desc">{{ t("login.description") }}</p>

@@ -43,7 +43,15 @@ onUnmounted(() => {
 async function loadRouteSession() {
   await chatStore.loadSessions(chatStore.sessionProfileFilter, routeSessionId.value)
   if (routeSessionId.value && chatStore.activeSessionId !== routeSessionId.value) {
-    await router.replace({ name: 'hermes.chat' })
+    // REST-first path: switchSession now loads via HTTP (cross-profile safe),
+    // so a deep link to another profile's session renders without a manual
+    // profile switch. Fall back to the dedicated direct-fetch helper only
+    // if switchSession finds nothing to activate.
+    await chatStore.switchSession(routeSessionId.value)
+    if (chatStore.activeSessionId !== routeSessionId.value) {
+      const direct = await chatStore.ensureSessionByDirectFetch(routeSessionId.value)
+      if (!direct) await router.replace({ name: 'hermes.chat' })
+    }
   }
 }
 

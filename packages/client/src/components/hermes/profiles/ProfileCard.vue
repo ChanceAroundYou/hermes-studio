@@ -54,8 +54,17 @@ async function performHermesSwitch() {
     const ok = await profilesStore.switchHermesProfile(props.profile.name)
     if (ok) {
       message.success(t('profiles.switchSuccess', { name: props.profile.name }))
-      // Reload to refresh all profile-dependent data
-      setTimeout(() => window.location.reload(), 500)
+      // Parallel-profile: no full reload — switchHermesProfile only writes
+      // the active_profile marker; the UI focus moves via the profiles store.
+      // Refresh profile-scoped data in place; chat-run sockets stay alive.
+      await profilesStore.fetchProfiles()
+      const current = router.currentRoute.value
+      if (current.name === 'hermes.chat' || current.name === 'hermes.session') {
+        void router.push({
+          name: 'hermes.chat',
+          query: { ...current.query, profile: props.profile.name },
+        })
+      }
     } else {
       message.error(t('profiles.switchFailed'))
     }

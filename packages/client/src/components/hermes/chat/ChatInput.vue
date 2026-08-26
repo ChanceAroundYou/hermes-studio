@@ -259,8 +259,7 @@ const filteredBridgeCommands = computed(() => {
   return commands.filter((command) => {
     const name = command.name.toLowerCase()
     const insertText = command.insertText?.toLowerCase()
-    const description = command.description.toLowerCase()
-    return name.startsWith(query) || insertText?.startsWith(query) || description.includes(query)
+    return name.startsWith(query) || !!insertText?.startsWith(query)
   })
 })
 const filteredSkillPickerItems = computed(() => {
@@ -556,10 +555,14 @@ function updateSlashState() {
     slashActive.value = false
     return
   }
+  // Prefer DOM value when available (keeps cursor-aware slicing); fall
+  // back to the reactive inputText for VTU's setValue path where
+  // selectionStart stays 0 and the synthetic input event hasn't flushed
+  // the v-model yet.
   const el = textareaRef.value
-  if (!el) return
-  const cursorPos = el.selectionStart
-  const beforeCursor = inputText.value.slice(0, cursorPos)
+  const raw = (el?.value ?? inputText.value) || inputText.value
+  const cursorPos = el && typeof el.selectionStart === 'number' && el.selectionStart > 0 ? el.selectionStart : raw.length
+  const beforeCursor = raw.slice(0, cursorPos)
   if (!beforeCursor.startsWith('/') || beforeCursor.includes(' ') || beforeCursor.includes('\n')) {
     slashActive.value = false
     return
@@ -889,7 +892,17 @@ function handleDrop(e: DragEvent) {
   addFiles(files)
 }
 
-defineExpose({ addFiles, addBrowserAttachment })
+/**
+ * Put the caret in the composer so the next keystroke lands in the message box.
+ * Refused on a phone, where taking focus raises the on-screen keyboard over the
+ * conversation the user just opened.
+ */
+function focusComposer() {
+  if (isMobileViewport.value) return
+  nextTick(() => textareaRef.value?.focus())
+}
+
+defineExpose({ addFiles, addBrowserAttachment, focusComposer })
 
 // --- Send ---
 
@@ -1185,6 +1198,9 @@ function isImage(type: string): boolean {
               <div class="reasoning-effort-slider-range" aria-hidden="true">
                 <span>{{ reasoningEffortOptions[0].label }}</span>
                 <span>{{ reasoningEffortOptions[reasoningEffortOptions.length - 1].label }}</span>
+              </div>
+              <div class="reasoning-effort-slider-hint">
+                {{ t('chat.reasoningEffort.dragHint', { count: reasoningEffortOptions.length }) }}
               </div>
             </div>
           </NPopover>
@@ -1635,6 +1651,13 @@ function isImage(type: string): boolean {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.reasoning-effort-slider-hint {
+  margin-top: 6px;
+  color: $text-muted;
+  font-size: 11px;
+  text-align: center;
 }
 
 .reasoning-effort-slider-heading {

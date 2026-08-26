@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { NButton, NModal, NSpin, useMessage } from 'naive-ui'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import {
@@ -19,6 +20,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const message = useMessage()
+const router = useRouter()
 const profilesStore = useProfilesStore()
 
 const activeName = computed(() => profilesStore.activeProfileName ?? '')
@@ -200,7 +202,21 @@ async function handleSwitchProfile(name: string) {
     const ok = await profilesStore.switchProfile(name)
     if (!ok) throw new Error(t('profiles.switchFailed'))
     message.success(t('profiles.switchSuccess', { name }))
-    window.location.reload()
+    // Parallel-profile: no window.location.reload() needed (and harmful —
+    // it tears down sockets mid-run). The switchProfile API is now just an
+    // active_profile marker write; UI focus moves via SPA routing so the
+    // chat-run socket keeps streaming and reroutes to the new profile with
+    // the next connectChatRun() call.
+    const current = router.currentRoute.value
+    if (current.name === 'hermes.chat' || current.name === 'hermes.session') {
+      void router.push({
+        name: 'hermes.chat',
+        query: { ...current.query, profile: name },
+      })
+    } else {
+      // Other views: keep current route, just refresh profile-scoped data
+      await profilesStore.fetchProfiles()
+    }
   } catch (err: any) {
     message.error(err?.message || t('profiles.switchFailed'))
   } finally {

@@ -363,16 +363,18 @@ export async function deleteSession(id: string): Promise<boolean> {
 
 /**
  * Delete a session from a specific Hermes profile.
+ *
+ * NOTE: must pass `--profile <name>` as a GLOBAL flag (before the subcommand).
+ * Hermes resolves the active profile from HERMES_HOME/active_profile first,
+ * so without the explicit flag, deleting a session that lives in a different
+ * profile than the active one silently reports "not found" — the delete
+ * never happens and the session resurrects on the next refresh.
  */
 export async function deleteSessionForProfile(id: string, profile: string): Promise<boolean> {
   try {
-    await execHermesWithBin(HERMES_BIN, ['sessions', 'delete', id, '--yes'], {
+    await execHermesWithBin(HERMES_BIN, ['--profile', profile, 'sessions', 'delete', id, '--yes'], {
       timeout: 10000,
       ...execOpts,
-      env: {
-        ...process.env,
-        HERMES_HOME: getProfileDir(profile),
-      },
     })
     return true
   } catch (err: any) {
@@ -382,11 +384,18 @@ export async function deleteSessionForProfile(id: string, profile: string): Prom
 }
 
 /**
- * Rename a session title via Hermes CLI
+ * Rename a session title via Hermes CLI.
+ *
+ * Same active-profile caveat as deleteSessionForProfile: without an explicit
+ * global `--profile <name>`, the CLI resolves the active profile first and
+ * renames in the WRONG state.db when the target profile differs — the rename
+ * silently no-ops and the old title reappears after refresh.
  */
-export async function renameSession(id: string, title: string): Promise<boolean> {
+export async function renameSession(id: string, title: string, profile?: string): Promise<boolean> {
   try {
-    await execHermesWithBin(HERMES_BIN, ['sessions', 'rename', id, title], {
+    const args = profile ? ['--profile', profile, 'sessions', 'rename', id, title]
+      : ['sessions', 'rename', id, title]
+    await execHermesWithBin(HERMES_BIN, args, {
       timeout: 10000,
       ...execOpts,
     })

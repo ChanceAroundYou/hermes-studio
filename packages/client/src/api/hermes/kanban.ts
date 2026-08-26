@@ -1,4 +1,4 @@
-import { request, getApiKey, getBaseUrlValue } from '../client'
+import { request, getApiKey, getBaseUrlValue, wsOrigin } from '../client'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -282,7 +282,8 @@ export function buildKanbanEventsWebSocketUrl(opts?: KanbanBoardOptions): string
   const path = `/api/hermes/kanban/events?${params.toString()}`
 
   if (base) {
-    return `${websocketProtocol(base)}//${new URL(base).host}${path}`
+    const { host, prefix } = wsOrigin()
+    return `${websocketProtocol(base)}//${host}${prefix}${path}`
   }
 
   const directDevPort = import.meta.env.VITE_HERMES_DIRECT_WS_PORT

@@ -56,6 +56,14 @@ function formatToolDuration(seconds: number): string {
   return `${mins}m ${secs}s`
 }
 
+function formatToolTime(ts: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const h = d.getHours().toString().padStart(2, '0')
+  const m = d.getMinutes().toString().padStart(2, '0')
+  return `${h}:${m}`
+}
+
 function toolPreviewText(preview?: string): string {
   const text = String(preview || '')
   return text.length > 160 ? `${text.slice(0, 157)}...` : text
@@ -747,8 +755,7 @@ defineExpose({
             <div
               v-for="tc in visibleToolCalls"
               :key="tc.id"
-              class="tool-call-item"
-              :class="{ 'subagent-entry': isSubagentToolCall(tc) }"
+              class="tool-call-row"
               :role="isSubagentToolCall(tc) ? 'button' : undefined"
               :tabindex="isSubagentToolCall(tc) ? 0 : undefined"
               :title="isSubagentToolCall(tc) ? t('subagent.open') : undefined"
@@ -756,6 +763,10 @@ defineExpose({
               @keydown.enter.prevent="handleToolCallClick(tc)"
               @keydown.space.prevent="handleToolCallClick(tc)"
             >
+              <div
+                class="tool-call-item"
+                :class="{ 'subagent-entry': isSubagentToolCall(tc) }"
+              >
               <svg
                 width="12"
                 height="12"
@@ -821,6 +832,10 @@ defineExpose({
                   fill="none"
                 />
               </svg>
+              </div>
+              <span v-if="tc.timestamp" class="tool-call-time">
+                {{ formatToolTime(tc.timestamp) }}
+              </span>
             </div>
           </div>
         </div>
@@ -1603,12 +1618,47 @@ defineExpose({
   gap: 4px;
   width: 100%;
   min-width: 0;
-  max-height: 180px;
+  // 3 rows exactly: 3 * 28px (item) + 2 * 4px (gap) = 92px
+  max-height: calc(3 * 28px + 2 * 4px);
   overflow-y: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  &::-webkit-scrollbar {
-    display: none;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+  &::-webkit-scrollbar { width: 6px; }
+  &::-webkit-scrollbar-thumb { border-radius: 3px; background: rgba(0, 0, 0, 0.18); .dark & { background: rgba(255, 255, 255, 0.18); } }
+  &::-webkit-scrollbar-track { background: transparent; }
+}
+
+.tool-call-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 520px;
+  max-width: 100%;
+  min-width: 0;
+
+  .tool-call-item {
+    flex: 1 1 0;
+  }
+
+  .tool-call-time {
+    color: $text-muted;
+    font-family: $font-code;
+    font-size: 10px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  &:hover .tool-call-time,
+  &:focus-within .tool-call-time {
+    opacity: 1;
+  }
+
+  @media (max-width: 768px) {
+    .tool-call-time {
+      opacity: 1;
+    }
   }
 }
 
@@ -1625,6 +1675,8 @@ defineExpose({
   padding: 3px 8px;
   background: rgba(0, 0, 0, 0.03);
   border-radius: $radius-sm;
+  min-height: 28px;
+  flex-shrink: 0;
 
   &.subagent-entry {
     cursor: pointer;

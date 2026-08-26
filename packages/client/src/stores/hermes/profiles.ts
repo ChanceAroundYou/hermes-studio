@@ -127,6 +127,9 @@ export const useProfilesStore = defineStore('profiles', () => {
     return ok
   }
 
+  // Parallel-profile: switching focus is a pure UI operation. The backend
+  // switchProfile API only writes the active_profile marker (no bridge
+  // session destruction) — in-flight runs in every profile keep running.
   async function switchProfile(name: string) {
     switching.value = true
     try {

@@ -322,6 +322,21 @@ export async function bootstrap() {
   app.use(createRequestBodyParser())
   console.log('[bootstrap] cors + bodyParser registered')
 
+  // ─── Subpath deployment: strip BASE_URL prefix (e.g. /hermes) ───
+  // Single env var BASE_URL (HERMES_BASE_PATH kept as fallback for compat)
+  const basePath = (process.env.BASE_URL || process.env.HERMES_BASE_PATH || '/')
+    .replace(/\/+$/, '')
+  if (basePath && basePath !== '/') {
+    app.use(async (ctx, next) => {
+      if (ctx.path.startsWith(basePath)) {
+        ctx.path = ctx.path.slice(basePath.length) || '/'
+        ctx.request.url = ctx.path + (ctx.request.search || '')
+      }
+      await next()
+    })
+    console.log('[bootstrap] base path stripping enabled: %s', basePath)
+  }
+
   registerDesktopShutdownRoute(app)
 
   // Register all routes (handles auth internally)
@@ -404,18 +419,25 @@ export async function bootstrap() {
   // Session deleter — periodically drain pending session deletes
   const { SessionDeleter } = await import('./services/hermes/session-deleter')
   const sessionDeleter = SessionDeleter.getInstance()
-  const activeProfile = process.env.PROFILE || 'default'
-  sessionDeleter.start(activeProfile)
-  console.log('[bootstrap] session deleter started, profile=%s', activeProfile)
+  sessionDeleter.startAll()
+  console.log('[bootstrap] session deleter started (all profiles)')
+
+  // Session message sync — periodically fill webui DB mirror from state.db
+  // so live CLI/Feishu sessions don't render stale messages.
+  const { startSessionMessageSync } = await import('./services/hermes/session-message-sync')
+  startSessionMessageSync('default')
+  console.log('[bootstrap] session message sync started (all profiles)')
 
   // Catch-all: destroy upgrade requests not handled by terminal or Socket.IO
+  const socketIoBase = (process.env.BASE_URL || process.env.HERMES_BASE_PATH || '').replace(/\/+$/, '') + '/socket.io'
   servers.forEach((httpServer) => {
     httpServer.on('upgrade', (req: any, socket: any) => {
       const url = new URL(req.url || '', `http://${req.headers.host}`)
       if (url.pathname !== '/api/hermes/terminal' &&
         url.pathname !== '/api/hermes/kanban/events' &&
         url.pathname !== getLanPeerSocketPath() &&
-        !url.pathname.startsWith('/socket.io/')) {
+        !url.pathname.startsWith('/socket.io/') &&
+        !url.pathname.startsWith(`${socketIoBase}/`)) {
         socket.destroy()
       }
     })

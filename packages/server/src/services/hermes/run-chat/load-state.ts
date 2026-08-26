@@ -51,7 +51,25 @@ export function resolveRunSource(source?: string, sessionId?: string): ChatRunSo
 export async function loadSessionStateFromDb(sid: string, _sessionMap: Map<string, SessionState>): Promise<SessionState> {
   try {
     const displayStartedAt = Date.now()
-    const actualDetail = getSessionDetailPaginated(sid)
+    const { getSessionDetailPaginated } = await import('../../../db/hermes/session-store')
+    let actualDetail: any = getSessionDetailPaginated(sid)
+    // A session that is ALSO in the Hermes Agent state.db is authoritative
+    // there (cli / feishu / cron keep writing). Prefer the state.db snapshot
+    // when it is newer than the Studio DB mirror, so an active session never
+    // resumes from a stale snapshot.
+    const { getSessionDetailPaginatedFromDbWithProfile } = await import('../../../db/hermes/sessions-db')
+    const { findSessionAcrossProfiles } = await import('../session-profile-lookup')
+    const found = await findSessionAcrossProfiles(sid)
+    if (found) {
+      try {
+        const stateDetail = await getSessionDetailPaginatedFromDbWithProfile(sid, found.profile)
+        if (stateDetail) {
+          const localAct = Number((actualDetail?.session as any)?.last_active || 0)
+          const stateAct = Number((stateDetail as any).session?.last_active || 0)
+          if (!actualDetail || stateAct > localAct) actualDetail = stateDetail
+        }
+      } catch {}
+    }
 
     const messages = actualDetail?.messages ? handleMessage(actualDetail.messages, sid) : []
     const displayElapsedMs = Date.now() - displayStartedAt

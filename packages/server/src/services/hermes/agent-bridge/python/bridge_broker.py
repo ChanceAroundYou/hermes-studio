@@ -415,13 +415,15 @@ class BridgeBroker:
                 if not worker.running:
                     worker.stop()
                     continue
-                try:
-                    resp = worker.request({"action": "destroy_all"})
-                    destroyed += int(resp.get("destroyed") or 0)
-                except Exception:
-                    pass
-                finally:
-                    worker.stop()
+                # Use stop() directly instead of request("destroy_all").
+                # destroy_all can block up to REQUEST_TIMEOUT_SECONDS (120s)
+                # while the worker is mid-run; calling it while holding the
+                # broker _lock also starves every other request.
+                # stop() sends a graceful-shutdown signal (SHUTDOWN_REQUEST_TIMEOUT_SECONDS=15)
+                # and falls back to terminate+kill within ~18s total, entirely
+                # outside the broker lock.
+                worker.stop()
+                destroyed += 1
             return {"profile": profile, "destroyed": destroyed}
 
         if action == "list":

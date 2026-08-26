@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getBaseUrlValue } from '@/api/client'
 import { useRoute } from 'vue-router'
 import { NButton, NInput, NSelect } from 'naive-ui'
 import { useAppStore } from '@/stores/hermes/app'
@@ -561,7 +562,7 @@ onUnmounted(() => {
 <template>
   <main class="group-chat-link-view">
     <section class="link-card">
-      <img src="/logo.png" alt="" class="link-logo">
+      <img :src="`${getBaseUrlValue()}/logo.png`" alt="" class="link-logo">
       <h1>
         {{ editingConnection
           ? t('groupChat.editAgentTitle', { name: editingConnection.agent.name })

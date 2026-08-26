@@ -29,6 +29,7 @@ import { isPreviewableFile } from '@/utils/hermes/file-preview'
 import ToolChangeCard from '@/components/hermes/chat/ToolChangeCard.vue'
 import { useFilesStore } from '@/stores/hermes/files'
 import { useToolPanelStore } from '@/stores/hermes/tool-panel'
+import { useSettingsStore } from '@/stores/hermes/settings'
 import { isServerTtsProvider } from '@/api/hermes/tts'
 import { groupAgentAvatar, groupMessageAgent, parseStoredAvatar } from '@/utils/group-agent-avatar'
 import GroupAgentMessageAvatar from './GroupAgentMessageAvatar.vue'
@@ -149,9 +150,12 @@ const thinkingStreamingNow = computed(() => {
     return false
 })
 const thinkingOverride = ref<boolean | null>(null)
+// Align with MessageItem: show_reasoning controls default expand/collapse for
+// both historical and streaming reasoning. Tapping the header still overrides.
+const settingsStore = useSettingsStore()
 const thinkingExpanded = computed(() => {
     if (thinkingOverride.value !== null) return thinkingOverride.value
-    return false
+    return !!settingsStore.display.show_reasoning
 })
 const assistantBody = computed(() => parsedThinking.value.body || props.message.content || '')
 const contentBlocks = computed(() => {

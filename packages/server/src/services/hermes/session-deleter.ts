@@ -3,10 +3,11 @@
  *
  * Reads from gc_pending_session_deletes table, executes deletion via
  * Hermes CLI, tracks failures (max 3 attempts), and auto-drains on
- * a timer + profile switch.
+ * a timer (across ALL profiles — parallel-profile design).
  */
 import { getDb } from '../../db/index'
 import { deleteSession as hermesDeleteSession } from './hermes-cli'
+import { listProfileNamesFromDisk } from './hermes-profile'
 import { logger } from '../logger'
 
 const MAX_ATTEMPTS = 3
@@ -15,7 +16,6 @@ const DRAIN_INTERVAL_MS = 300_000
 export class SessionDeleter {
   private static _instance: SessionDeleter | null = null
   private timer: ReturnType<typeof setInterval> | null = null
-  private currentProfile: string = 'default'
 
   static getInstance(): SessionDeleter {
     if (!SessionDeleter._instance) {
@@ -24,23 +24,26 @@ export class SessionDeleter {
     return SessionDeleter._instance
   }
 
-  /** Start periodic drain for the given profile */
-  start(profile: string): void {
-    this.currentProfile = profile
+  /** Start periodic drain for ALL profiles (parallel-profile design). */
+  startAll(): void {
     this.stop()
-    logger.info('[SessionDeleter] started, profile=%s, interval=%dms', profile, DRAIN_INTERVAL_MS)
+    logger.info('[SessionDeleter] started (all profiles), interval=%dms', DRAIN_INTERVAL_MS)
     // Drain immediately on start, then on interval
-    this.drain(profile).catch(() => {})
+    void this.drainAll().catch(() => {})
     this.timer = setInterval(() => {
-      this.drain(profile).catch(() => {})
+      void this.drainAll().catch(() => {})
     }, DRAIN_INTERVAL_MS)
   }
 
-  /** Switch to a new profile, stop old timer and start new one */
-  switchProfile(newProfile: string): void {
-    if (newProfile !== this.currentProfile) {
-      logger.info('[SessionDeleter] switching profile %s -> %s', this.currentProfile, newProfile)
-      this.start(newProfile)
+  /** Drain all profiles. */
+  async drainAll(): Promise<void> {
+    const profiles = listProfileNamesFromDisk()
+    for (const profile of profiles) {
+      try {
+        await this.drain(profile)
+      } catch (err: any) {
+        logger.warn('[SessionDeleter] drain failed for profile=%s: %s', profile, err?.message || err)
+      }
     }
   }
 
@@ -52,7 +55,7 @@ export class SessionDeleter {
     }
   }
 
-  /** Drain pending deletes for a specific profile (called on profile switch or manually) */
+  /** Drain pending deletes for a specific profile */
   async drain(profile: string): Promise<{ deleted: string[]; skipped: string[]; failed: string[] }> {
     const db = getDb()
     if (!db) return { deleted: [], skipped: [], failed: [] }

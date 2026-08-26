@@ -2,10 +2,14 @@ import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { checkToken, recordTokenFailure, extractIp } from './login-limiter'
-import { config } from '../config'
+import { getWebUiHome } from '../config'
 
-const APP_HOME = config.appHome
-const TOKEN_FILE = join(APP_HOME, '.token')
+function getAppHome(): string {
+  return getWebUiHome()
+}
+function getTokenFile(): string {
+  return join(getWebUiHome(), '.token')
+}
 
 function generateToken(): string {
   return randomBytes(32).toString('hex')
@@ -20,17 +24,17 @@ export async function getToken(): Promise<string> {
   }
 
   try {
-    const token = await readFile(TOKEN_FILE, 'utf-8')
+    const token = await readFile(getTokenFile(), 'utf-8')
     return token.trim()
   } catch {
     const token = generateToken()
-    await mkdir(APP_HOME, { recursive: true })
+    await mkdir(getAppHome(), { recursive: true })
     // Only set mode on Unix systems (Windows ignores this)
     const options: any = {}
     if (process.platform !== 'win32') {
       options.mode = 0o600
     }
-    await writeFile(TOKEN_FILE, token + '\n', options)
+    await writeFile(getTokenFile(), token + '\n', options)
     return token
   }
 }

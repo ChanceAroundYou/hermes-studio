@@ -2,6 +2,7 @@
 import { h, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { NButton, NInput, useMessage, useNotification, type NotificationReactive } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { getBaseUrlValue } from '@/api/client'
 import { useRoute, useRouter } from 'vue-router'
 import { useChatStore, type PendingApproval } from '@/stores/hermes/chat'
 import { useGroupChatStore, type GroupPendingApproval, type GroupPendingClarify } from '@/stores/hermes/group-chat'
@@ -347,9 +348,10 @@ function pendingSourceClickUrl(action: GlobalPendingAction): string {
 
 function notifyPendingAction(action: GlobalPendingAction) {
   const copy = systemNotificationCopy(action)
+  const base = getBaseUrlValue()
   void showSystemNotification({
     ...copy,
-    icon: '/coding-agents/hermes.png',
+    icon: `${base}/coding-agents/hermes.png`,
     tag: `hermes-pending-${encodeURIComponent(action.profile)}:${action.key}`,
     clickUrl: pendingSourceClickUrl(action),
   })

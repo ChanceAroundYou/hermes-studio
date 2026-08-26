@@ -3231,7 +3231,13 @@ export class GroupChatServer {
         this.storage.init()
         const servers = Array.isArray(httpServers) ? httpServers : [httpServers]
 
+        // Subpath deployment (BASE_URL=/hermes/): Socket.IO upgrade
+        // handshakes bypass Koa middleware, so the server must also listen on
+        // the prefixed path (e.g. /hermes/socket.io) or direct/native access
+        // (http://host:6060/hermes/) fails to connect. Default '' = root.
+        const basePath = (process.env.BASE_URL || process.env.HERMES_BASE_PATH || '').replace(/\/+$/, '')
         this.io = new Server(servers[0], {
+            path: basePath ? `${basePath}/socket.io` : '/socket.io',
             cors: { origin: createSocketIoCorsOrigin(config.corsOrigins) },
             maxHttpBufferSize: 2_000_000,
             allowRequest: (req, callback) => {

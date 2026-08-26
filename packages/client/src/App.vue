@@ -8,6 +8,7 @@ import { useTheme } from '@/composables/useTheme'
 import { useKeyboard } from '@/composables/useKeyboard'
 import { useSessionSearch } from '@/composables/useSessionSearch'
 import { useAppStore } from '@/stores/hermes/app'
+import { getBaseUrlValue } from '@/api/client'
 import AuthEventListener from '@/components/auth/AuthEventListener.vue'
 import { desktopBridge } from '@/utils/desktop-bridge'
 import { naiveLocaleFor } from '@/constants/naiveLocale'
@@ -150,7 +151,7 @@ useKeyboard()
             </div>
             <div class="app-layout" :class="{ 'no-sidebar': isLoginPage || !showAppSidebar }">
               <button v-if="showMobileMenuButton" class="hamburger-btn" @click="handleMobileMenuClick">
-                <img src="/logo.png" alt="Menu" style="width: 24px; height: 24px;" />
+                <img :src="`${getBaseUrlValue()}/logo.png`" alt="Menu" style="width: 24px; height: 24px;" />
               </button>
               <div v-if="!isLoginPage && showAppSidebar && appStore.sidebarOpen" class="mobile-backdrop" @click="appStore.closeSidebar" />
               <AppSidebar v-if="!isLoginPage && showAppSidebar" />

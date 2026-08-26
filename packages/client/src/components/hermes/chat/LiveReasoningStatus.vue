@@ -1,17 +1,28 @@
 <script setup lang="ts">
-import { defineAsyncComponent } from 'vue'
+import { ref, watch, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useSettingsStore } from '@/stores/hermes/settings'
 import thinkingImage from '@/assets/thinking.gif'
 
 const MarkdownRenderer = defineAsyncComponent(async () => (await import('./MarkdownRenderer.vue')).default)
 
-defineProps<{
+const settingsStore = useSettingsStore()
+const props = defineProps<{
   reasoning?: string | null
   reasoningId?: string | number | null
   elapsed: string
 }>()
 
 const { t } = useI18n()
+
+// Default follow show_reasoning; user manual click is stored in expanded and
+// only resets when the setting changes. Clicking the toggle button always
+// flips the local state.
+const expanded = ref(!!settingsStore.display.show_reasoning)
+watch(
+  () => settingsStore.display.show_reasoning,
+  (v) => { expanded.value = !!v },
+)
 </script>
 
 <template>
@@ -27,9 +38,30 @@ const { t } = useI18n()
         <span class="thinking-status-label">{{ t('chat.thinkingInProgress') }}</span>
         <span class="thinking-status-time">{{ elapsed }}</span>
       </div>
+      <button
+        v-if="reasoning"
+        type="button"
+        class="live-reasoning-toggle"
+        :aria-expanded="expanded"
+        @click="expanded = !expanded"
+      >
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          class="thinking-chevron"
+          :class="{ rotated: expanded }"
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+        <span>{{ expanded ? t('common.collapse') : t('common.expand') }}</span>
+      </button>
     </div>
     <div
-      v-if="reasoning"
+      v-if="reasoning && expanded"
       :key="reasoningId ?? reasoning"
       class="live-reasoning-detail"
       :data-reasoning-id="reasoningId"
@@ -87,6 +119,7 @@ const { t } = useI18n()
   row-gap: 2px;
   min-width: 0;
   min-height: 20px;
+  flex: 1;
 }
 
 .thinking-status-label {
@@ -127,6 +160,46 @@ const { t } = useI18n()
   font-variant-numeric: tabular-nums;
   line-height: 20px;
   min-width: 44px;
+}
+
+.thinking-chevron {
+  transition: transform 0.18s ease;
+  flex-shrink: 0;
+}
+
+.thinking-chevron.rotated {
+  transform: rotate(90deg);
+}
+
+.live-reasoning-toggle {
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: transparent;
+  color: $text-muted;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: $text-secondary;
+  }
+
+  .dark & {
+    border-color: rgba(255, 255, 255, 0.12);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: $text-primary;
+    }
+  }
 }
 
 .live-reasoning-detail {

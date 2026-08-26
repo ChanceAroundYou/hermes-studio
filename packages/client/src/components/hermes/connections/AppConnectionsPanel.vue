@@ -3,6 +3,7 @@ import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { NAlert, NButton, NDataTable, NEmpty, NModal, NPopconfirm, NSpin, NTabPane, NTabs, NTag, useMessage } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { getBaseUrlValue } from '@/api/client'
 import QRCode from 'qrcode'
 import {
   createLanAppAuthorization,
@@ -433,7 +434,7 @@ onUnmounted(() => {
           <div class="app-download-intro">
             <div class="app-download-brand">
               <div class="app-download-logo">
-                <img src="/logo.png" alt="">
+                <img :src="`${getBaseUrlValue()}/logo.png`" alt="">
               </div>
               <div>
                 <span>HStudio Mobile</span>

@@ -303,8 +303,10 @@ const thinkingStreamingNow = computed(() => {
 
 const thinkingOverride = ref<boolean | null>(null);
 
+// show_reasoning=false means "default collapsed" — this applies to both
+// historical messages and streaming reasoning. Users can still tap the header
+// to expand a single message via thinkingOverride (stored per-instance).
 const thinkingExpanded = computed(() => {
-  if (thinkingStreamingNow.value) return true;
   if (thinkingOverride.value !== null) return thinkingOverride.value;
   return !!settingsStore.display.show_reasoning;
 });

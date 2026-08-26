@@ -373,13 +373,17 @@ function toOpenAIChatMessages(
           : reasoningReplayField === 'reasoning_details' && reasoningText
             ? { reasoning: reasoningText }
             : {}
+  const validToolCalls = Array.isArray(message.toolCalls)
+    ? message.toolCalls.filter((tc: any) => tc?.id && String(tc.id).length > 0 && tc?.name && String(tc.name).trim().length > 0)
+    : []
+  const toolCallsPayload = validToolCalls.length > 0 ? validToolCalls.map(toOpenAIToolCall) : undefined
   const base: OpenAIChatMessage = {
     role: message.role,
     content,
     ...reasoningReplay,
     name: message.name,
     tool_call_id: message.toolCallId,
-    tool_calls: message.toolCalls?.map(toOpenAIToolCall),
+    ...(toolCallsPayload ? { tool_calls: toolCallsPayload } : {}),
   }
   const images = message.contentParts?.filter(part => part.type === 'image') ?? []
   if (message.role === 'user' && images.length > 0) {

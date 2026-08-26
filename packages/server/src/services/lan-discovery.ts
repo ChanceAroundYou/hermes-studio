@@ -244,14 +244,35 @@ export function getLanBackendUrlForRequest(
 ): string {
   const advertised = normalizeAdvertisedOrigin(advertisedUrl)
   if (advertised) return advertised
+
+  // Extract the request's host/port up front so we can honour a non-default
+  // port (e.g. a loopback proxy on :8648 in front of a server bound to :6060)
+  // even when the host itself is rejected below for being loopback/virtual.
+  let requestedPort: string | undefined
+  let requestedHostname = ''
+  try {
+    const requestedUrl = new URL(requestOrigin)
+    requestedPort = requestedUrl.port
+    requestedHostname = requestedUrl.hostname
+  } catch {
+    requestedPort = undefined
+    requestedHostname = ''
+  }
+
   const requested = normalizeAdvertisedOrigin(requestOrigin, true)
   if (requested) {
-    const requestedHostname = new URL(requested).hostname
     const requestedInterface = interfaces.find(iface => iface.address === requestedHostname)
     const hasNonVirtualInterface = interfaces.some(iface => !isLikelyVirtualInterface(iface.name))
     if (!requestedInterface || !isLikelyVirtualInterface(requestedInterface.name) || !hasNonVirtualInterface) {
       return requested
     }
+  }
+
+  // Fall back to a routable LAN interface, but preserve the request's actual
+  // port so we don't silently rewrite the user-facing port (e.g. a loopback
+  // proxy on :8648 served by a server bound to :6060).
+  if (requestedPort && Number(requestedPort) > 0 && Number(requestedPort) <= 65535) {
+    httpPort = Number(requestedPort)
   }
   const address = selectLanIPv4Address(remoteAddress, interfaces)
   return `http://${address}:${httpPort}`

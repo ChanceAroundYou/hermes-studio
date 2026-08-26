@@ -446,8 +446,8 @@ function handleNodeMouseMove(event: MouseEvent, node: JourneyNode) {
   hoverPoint.value = eventPoint(event)
 }
 
-function handleNodeMouseLeave(nodeId: string) {
-  if (hoverId.value === nodeId) hideNodeHoverTip(true)
+function handleNodeMouseLeave(_nodeId: string) {
+  hideNodeHoverTip(true)
 }
 
 function toggleCategorySelection(category: string) {
@@ -688,6 +688,26 @@ watch(nodes, () => {
   const availableCategories = new Set(nodes.value.map(node => node.category || 'general'))
   selectedCategories.value = selectedCategories.value.filter(category => availableCategories.has(category))
 })
+
+defineExpose({
+  flowNodes,
+  flowEdges,
+  playing,
+  visibleNodes,
+  visibleNodeIds,
+  visibleEdges,
+  selectedId,
+  selectedCategories,
+  detailDrawerOpen,
+  selectedNode,
+  nodes,
+  edges,
+  data,
+  loading,
+  categoryStats,
+  hoverTipId,
+  hoverTipNode,
+})
 </script>
 
 <template>
@@ -832,19 +852,17 @@ watch(nodes, () => {
                 <Controls :show-interactive="false" />
               </VueFlow>
 
-              <Transition name="journey-tooltip">
-                <div
-                  v-if="hoverTipNode"
-                  class="journey-node-tooltip"
-                  role="tooltip"
-                  :style="hoverTipStyle"
-                >
-                  <div class="journey-node-tooltip__name">{{ hoverTipTitle }}</div>
-                  <div v-if="hoverTipDescription" class="journey-node-tooltip__description">
-                    {{ hoverTipDescription }}
-                  </div>
+              <div
+                v-if="hoverTipNode"
+                class="journey-node-tooltip"
+                role="tooltip"
+                :style="hoverTipStyle"
+              >
+                <div class="journey-node-tooltip__name">{{ hoverTipTitle }}</div>
+                <div v-if="hoverTipDescription" class="journey-node-tooltip__description">
+                  {{ hoverTipDescription }}
                 </div>
-              </Transition>
+              </div>
 
               <div v-if="!loading && !visibleNodes.length" class="journey-empty">
                 {{ t('journey.noNodes') }}

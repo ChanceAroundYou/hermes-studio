@@ -771,12 +771,12 @@ export async function switchProfile(ctx: any) {
       return
     }
 
-    try {
-      const result = await bridgeCleanupClient().destroyProfile(name)
-      logger.info('[switchProfile] destroyed bridge sessions for Hermes profile "%s" destroyed=%s', name, result.destroyed)
-    } catch (err: any) {
-      logger.warn(err, '[switchProfile] failed to destroy bridge sessions for profile "%s"', name)
-    }
+    // NOTE(parallel-profile): switching the UI focus profile must NOT destroy
+    // bridge sessions. Each profile already runs in its own bridge worker
+    // process with an isolated session table; destroying on switch is what
+    // caused "unknown run" / session interruption when a user switched to
+    // another profile while a run was in flight. Runs keep running in the
+    // background; resuming the session re-attaches to the live worker.
 
     try {
       const detail = await hermesCli.getProfile(name)
@@ -798,8 +798,9 @@ export async function switchProfile(ctx: any) {
     }
 
     await injectBundledSkillsForProfile(name)
-    SessionDeleter.getInstance().switchProfile(name)
-    logger.info('[switchProfile] switched session deleter to Hermes profile "%s"', name)
+    // NOTE(parallel-profile): SessionDeleter now drains ALL profiles on a
+    // timer (startAll at bootstrap); no per-switch retargeting needed.
+    logger.info('[switchProfile] UI focus switched to Hermes profile "%s"', name)
 
     ctx.body = {
       success: true,

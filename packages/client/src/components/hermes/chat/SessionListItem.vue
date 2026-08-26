@@ -145,7 +145,7 @@ onUnmounted(() => {
             {{ t('chat.profileMissingModelsTip', { profile: profileName }) }}
           </NTooltip>
         </span>
-        <span class="session-item-time">{{ formatTimestampMs(session.createdAt) }}</span>
+        <span class="session-item-time">{{ formatTimestampMs(session.updatedAt) }}</span>
       </span>
       <span class="session-item-agent-row">
         <span class="session-item-agent-logo-wrap" :class="{ streaming }">

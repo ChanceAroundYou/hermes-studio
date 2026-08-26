@@ -33,6 +33,7 @@ import {
   parseCodingAgentSessionCommand,
 } from '../../coding-agents/session-command'
 import { contentBlocksToString } from './content-blocks'
+import { findSessionProfile } from '../session-profile-lookup'
 import { buildOutboundRunEvent, buildResumeEvents, buildResumeMessages } from './resume-payload'
 import type {
   ChatCodingAgentId,
@@ -304,20 +305,31 @@ export class ChatRunSocket {
       }
       return profile
     }
-    const requireSocketSessionAccess = (sessionId: string) => {
+    const requireSocketSessionAccess = async (sessionId: string) => {
       const session = getSession(sessionId)
-      if (!session) throw new Error('Session not found')
-      const sessionProfile = String(session.profile || 'default').trim() || 'default'
-      const authorizedProfile = currentProfile()
-      if (sessionProfile !== authorizedProfile) {
-        throw new Error(`Profile "${sessionProfile}" is not available on this connection`)
+      // Session may only exist in a Hermes Agent state.db (e.g. Feishu-imported
+      // conversations that were never persisted to the Studio DB). Fall back to
+      // scanning profile state.dbs before declaring it missing.
+      if (!session) {
+        const found = await findSessionProfile(sessionId)
+        if (found) return found
+        throw new Error('Session not found')
       }
+      const sessionProfile = String(session.profile || 'default').trim() || 'default'
       if (!profileExists(sessionProfile)) {
         throw new Error(`Profile "${sessionProfile}" does not exist`)
       }
       if (socketUser && !this.canAccessProfile(socketUser, sessionProfile)) {
         throw new Error(`Profile "${sessionProfile}" is not available for this user`)
       }
+      // Parallel-profile: do NOT enforce sessionProfile === currentProfile().
+      // A socket bound to profile A must be able to resume/interact with a
+      // session from profile B (e.g. user switched UI focus while a run is
+      // in flight). Bridge routing uses session.profile per-request; the
+      // socket's handshake profile is only a default for new sessions, not an
+      // access gate. Enforcing equality reintroduces
+      // "Profile X is not available on this connection" on every cross-profile
+      // switch. Permission is already checked above via canAccessProfile.
       return sessionProfile
     }
 
@@ -510,20 +522,20 @@ export class ChatRunSocket {
       }
     })
 
-    socket.on('insert_queued_run', (data: { session_id?: string; queue_id?: string }) => {
+    socket.on('insert_queued_run', async (data: { session_id?: string; queue_id?: string }) => {
       if (!data.session_id || !data.queue_id) return
       try {
-        requireSocketSessionAccess(data.session_id)
+        await requireSocketSessionAccess(data.session_id)
       } catch {
         return
       }
       void this.requestQueuedRunInsertion(data.session_id, data.queue_id)
     })
 
-    socket.on('cancel_queued_run', (data: { session_id?: string; queue_id?: string }) => {
+    socket.on('cancel_queued_run', async (data: { session_id?: string; queue_id?: string }) => {
       if (!data.session_id || !data.queue_id) return
       try {
-        requireSocketSessionAccess(data.session_id)
+        await requireSocketSessionAccess(data.session_id)
       } catch {
         return
       }
@@ -555,7 +567,7 @@ export class ChatRunSocket {
       if (!data.session_id) return
       const sid = data.session_id
       try {
-        requireSocketSessionAccess(sid)
+        await requireSocketSessionAccess(sid)
       } catch (err) {
         socket.emit('run.failed', {
           event: 'run.failed',
@@ -568,12 +580,12 @@ export class ChatRunSocket {
       await this.resumeSession(socket, sid)
     })
 
-    socket.on('abort', (data: { session_id?: string }) => {
+    socket.on('abort', async (data: { session_id?: string }) => {
       if (data.session_id) {
         const sessionId = data.session_id
         let profile: string
         try {
-          profile = requireSocketSessionAccess(sessionId)
+          profile = await requireSocketSessionAccess(sessionId)
         } catch {
           return
         }
@@ -596,7 +608,7 @@ export class ChatRunSocket {
     socket.on('approval.respond', async (data: { session_id?: string; approval_id?: string; choice?: string }) => {
       if (!data.session_id || !data.approval_id) return
       try {
-        requireSocketSessionAccess(data.session_id)
+        await requireSocketSessionAccess(data.session_id)
       } catch (err) {
         socket.emit('approval.resolved', {
           event: 'approval.resolved',
@@ -662,7 +674,7 @@ export class ChatRunSocket {
     socket.on('clarify.respond', async (data: { session_id?: string; clarify_id?: string; response?: string }) => {
       if (!data.session_id || !data.clarify_id) return
       try {
-        requireSocketSessionAccess(data.session_id)
+        await requireSocketSessionAccess(data.session_id)
       } catch (err) {
         socket.emit('clarify.resolved', {
           event: 'clarify.resolved',
@@ -1253,14 +1265,15 @@ export class ChatRunSocket {
   }
 
   private async reattachBridgeRun(socket: Socket, sid: string, state: SessionState) {
-    if (state.runId && state.isWorking) return
+    // P0-C: don't short-circuit on in-memory state after refresh (state is
+    // freshly loaded from DB with isWorking=false). Always verify against bridge.
     const session = getSession(sid)
     const source = state.source || session?.source
     if (!isHermesWorkerBackedSession({ source, agent: session?.agent, agent_session_id: session?.agent_session_id })) return
     const profile = session?.profile || currentProfileFromSocket(socket)
     let pollKey: string | undefined
     try {
-      const status = await this.bridge.statusIfLoaded(sid, profile, { timeoutMs: 1000 }) as Record<string, unknown>
+      const status = await this.bridge.statusIfLoaded(sid, profile, { timeoutMs: 5000 }) as Record<string, unknown>
       const running = status.running === true
       const runId = typeof status.current_run_id === 'string' ? status.current_run_id : ''
       if (!running || !runId) return

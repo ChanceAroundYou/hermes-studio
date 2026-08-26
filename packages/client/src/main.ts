@@ -6,6 +6,11 @@ import App from './App.vue'
 import './styles/global.scss'
 import { desktopBridge } from '@/utils/desktop-bridge'
 
+declare const __BUILD_TIME__: string
+// Force cache-busting: embed build time so Vite includes it in the bundle hash
+// This ensures each rebuild produces a new JS hash, busting the immutable 1yr cache
+console.log(`Hermes Studio built at: ${__BUILD_TIME__}`)
+
 // Apply theme classes before mount to prevent FOUC (Flash of Unstyled Content)
 const savedBrightness = localStorage.getItem('hermes_brightness') || 'system'
 const savedStyle = localStorage.getItem('hermes_style') || 'ink'
