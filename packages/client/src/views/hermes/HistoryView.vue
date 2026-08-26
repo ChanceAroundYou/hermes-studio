@@ -5,7 +5,7 @@ import { type Session } from '@/stores/hermes/chat'
 import { useAppStore } from '@/stores/hermes/app'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import { useSessionBrowserPrefsStore } from '@/stores/hermes/session-browser-prefs'
-import { NButton, NDropdown, NPopconfirm, NTooltip, useMessage, type DropdownOption } from 'naive-ui'
+import { NButton, NDropdown, NPopconfirm, NSelect, NTooltip, useMessage, type DropdownOption } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { getSourceLabel } from '@/shared/session-display'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -15,8 +15,10 @@ import OutlinePanel from '@/components/hermes/chat/OutlinePanel.vue'
 import PageSidebarNav from '@/components/layout/PageSidebarNav.vue'
 import PageSidebarFooter from '@/components/layout/PageSidebarFooter.vue'
 import { batchDeleteSessions, deleteSession, fetchHermesSessionGroups, fetchHermesSessionPage, fetchHermesSession, fetchSessionMessagesPage, importHermesSession, unarchiveSession, type HermesMessage, type SessionSummary } from '@/api/hermes/sessions'
+import { useChatStore } from '@/stores/hermes/chat'
 
 const appStore = useAppStore()
+const chatStore = useChatStore()
 const profilesStore = useProfilesStore()
 const sessionBrowserPrefsStore = useSessionBrowserPrefsStore()
 const message = useMessage()
@@ -34,7 +36,34 @@ const routeProfile = computed(() => {
   return typeof value === 'string' && value.trim() ? value : null
 })
 
-const effectiveHistoryProfile = computed(() => profilesStore.activeProfileName || routeProfile.value || null)
+// The history page shows ALL profiles by default (no active-profile filter).
+// A local dropdown (historyProfileFilter) lets the user narrow to one profile;
+// 'all' means no filter (matches the server's empty-?profile= all-profiles scan).
+// Synced with chatStore.historySessionProfileFilter so it matches the main chat
+// list's filter behavior when switching to "all".
+const historyProfileFilter = computed<string>({
+  get() {
+    return chatStore.historySessionProfileFilter ? chatStore.historySessionProfileFilter : 'all'
+  },
+  set(val) {
+    chatStore.setHermesSessionProfileFilter(val === 'all' ? null : val)
+  },
+})
+
+const historyProfileFilterOptions = computed<
+  Array<{ label: string; value: string }>
+>(() => [
+  { label: t('chat.allProfiles'), value: 'all' },
+  ...profilesStore.profiles.map(profile => ({
+    label: profile.alias || profile.name,
+    value: profile.name,
+  })),
+])
+
+const effectiveHistoryProfile = computed(() =>
+  historyProfileFilter.value === 'all' ? null : historyProfileFilter.value,
+)
+watch(historyProfileFilter, () => { void loadHermesSessions() })
 
 // Hermes history sessions grouped by source, including Web UI/API Server.
 const hermesSessions = ref<SessionSummary[]>([])
@@ -317,6 +346,13 @@ async function loadOlderHistoryMessages(sessionId: string): Promise<boolean> {
 }
 
 async function handleSessionClick(sessionId: string, profile?: string | null) {
+  // Switch the active profile to match the session before opening it, so the
+  // active session loads against the right profile (chatStore.switchSession
+  // also does this, but doing it here first keeps the transition seamless).
+  const targetProfile = profile || 'default'
+  if (targetProfile !== profilesStore.activeProfileName) {
+    await profilesStore.switchHermesProfile(targetProfile)
+  }
   await router.push({
     name: 'hermes.historySession',
     params: { sessionId },
@@ -835,7 +871,13 @@ function handleBatchDeleteConfirm() {
           @primary="openNewChatPage"
         />
         <div class="session-list-toolbar">
-          <span class="session-list-title">{{ t('chat.hermesHistory') }}</span>
+          <NSelect
+            v-model:value="historyProfileFilter"
+            :options="historyProfileFilterOptions"
+            size="small"
+            placement="bottom-start"
+            class="history-profile-filter"
+          />
           <div class="session-list-actions">
             <button class="session-close-btn" @click="showSessions = false">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1180,6 +1222,11 @@ function handleBatchDeleteConfirm() {
   &:hover {
     background: rgba($accent-primary, 0.06);
   }
+}
+
+.history-profile-filter {
+  width: 168px;
+  flex-shrink: 0;
 }
 
 .session-list-title {

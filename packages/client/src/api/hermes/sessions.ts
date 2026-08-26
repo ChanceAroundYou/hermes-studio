@@ -164,8 +164,13 @@ export async function fetchSessions(source?: string, limit?: number, profile?: s
   const params = new URLSearchParams()
   if (source) params.set('source', source)
   if (limit) params.set('limit', String(limit))
-  if (profile) params.set('profile', profile)
+  // Only pass profile if it's a non-empty string (not 'null', '__all__', etc.)
+  const normalizedProfile = profile?.trim()
+  if (normalizedProfile && normalizedProfile !== 'null' && normalizedProfile !== '__all__') {
+    params.set('profile', normalizedProfile)
+  }
   const query = params.toString()
+  // Use /api/hermes/sessions (main chat list, WebUI DB only) for the runtime session list
   const res = await request<{ sessions: SessionSummary[] }>(`/api/hermes/sessions${query ? `?${query}` : ''}`)
   return res.sessions
 }
@@ -354,7 +359,11 @@ export async function fetchHermesSessionGroups(
   includedSessionIds: string[] = [],
 ): Promise<HermesSessionGroupsResult> {
   const params = new URLSearchParams({ limit: String(limit) })
-  if (profile) params.set('profile', profile)
+  // Only pass profile if it's a non-empty valid string (not 'null', '__all__', etc.)
+  const normalizedProfile = profile?.trim()
+  if (normalizedProfile && normalizedProfile !== 'null' && normalizedProfile !== '__all__') {
+    params.set('profile', normalizedProfile)
+  }
   for (const sessionId of includedSessionIds) params.append('include', sessionId)
   return request<HermesSessionGroupsResult>(`/api/hermes/sessions/hermes/groups?${params}`)
 }

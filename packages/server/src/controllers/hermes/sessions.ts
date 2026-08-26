@@ -1,4 +1,5 @@
 import * as hermesCli from '../../services/hermes/hermes-cli'
+import { isHermesHistorySessionSource, isHistoryVisibleSource } from '../../lib/history-sources'
 import { listSessionSummaries, listSessionSummaryGroups, getUsageStatsFromDb, getSessionDetailFromDb, getSessionDetailFromDbWithProfile, getSessionDetailPaginatedFromDbWithProfile, getExactSessionDetailFromDbWithProfile } from '../../db/hermes/sessions-db'
 import {
   listSessions as localListSessions,
@@ -151,9 +152,10 @@ function requestedSessionSources(source?: string): string[] {
   return ['api_server', 'cli', 'coding_agent', 'global_agent']
 }
 
-function isHermesHistorySessionSource(source?: string | null): boolean {
-  return source !== 'global_agent' && source !== 'workflow' && source !== 'group_chat'
-}
+// History source visibility rules live in lib/history-sources.ts (shared with
+// the db layer to avoid a circular import). Re-exported here so existing
+// consumers of the controller module keep working unchanged.
+export { isHermesHistorySessionSource, isHistoryVisibleSource } from '../../lib/history-sources'
 
 function sessionLastActive(session: any): number {
   return Number(session?.last_active || session?.ended_at || session?.started_at || 0)
@@ -188,6 +190,34 @@ function mergeHermesHistorySessions(
   for (const [id, session] of historySessionsById) {
     const localSession = localSessionsById.get(id)
     if (localSession?.is_archived != null) session.is_archived = localSession.is_archived
+    // Renames made in the Studio UI only update the local webui DB; the
+    // Hermes Agent state.db keeps the CLI-side title. Prefer the local
+    // title whenever the local record has one and it differs, so a rename
+    // survives a page refresh.
+    const hermesTitle = String(session.title || '').trim()
+    const localTitle = String(localSession?.title || '').trim()
+    if (localTitle && localTitle !== hermesTitle) session.title = localTitle
+    // Fix provider drift: Hermes Agent state.db stores legacy bare "custom"
+    // (or omits provider) while the Studio DB has the canonical "custom:name"
+    // form. Prefer the more complete provider from the local record so the
+    // model picker can still match a provider group (otherwise the picker
+    // shows no highlight — looks like the selection resets).
+    const hermesProvider = String(session.provider || '').trim()
+    const localProvider = String(localSession?.provider || '').trim()
+    if (!hermesProvider || hermesProvider === 'custom') {
+      if (localProvider) session.provider = localProvider
+      else if (hermesProvider === 'custom' && localSession?.base_url) {
+        const match = /custom:([a-z0-9-]+)/i.exec(String(localSession.base_url || ''))
+        if (match) session.provider = `custom:${match[1]}`
+      }
+    }
+    // Model changes made in the Studio UI only update the local webui DB;
+    // the Hermes Agent state.db keeps the CLI-side model. Prefer the local
+    // model whenever the local record has one and it differs, so a manual
+    // model/provider selection survives the periodic refresh (otherwise the
+    // 12s poll re-reads state.db and resets the picker back to "ag").
+    if (localSession?.model && localSession.model !== session.model) session.model = localSession.model
+    if (localSession?.provider && localSession.provider !== session.provider) session.provider = localSession.provider
   }
 
   for (const session of localSessions) {
@@ -200,6 +230,69 @@ function mergeHermesHistorySessions(
     (!source || session.source === source) &&
     (isHermesHistorySessionSource(session.source) || (isArchivedSession(session) && session.source !== 'global_agent')),
   ))
+}
+
+/**
+ * Scan every Hermes Agent profile's state.db for recent session summaries and
+ * merge them into one list. Each returned row carries its own `profile` so the
+ * Studio UI can render/filter all profiles together (session detail, rename,
+ * message sync, etc. resolve the profile per-row — never by active profile).
+ * A per-profile limit keeps the full-scan bounded; the per-profile state.db
+ * is already sorted newest-first.
+ */
+async function listHermesSessionSummariesAllProfiles(source?: string, perProfileLimit = 2000): Promise<any[]> {
+  const profiles = listProfileNamesFromDisk()
+  const combined: any[] = []
+  for (const profile of profiles) {
+    const rows = await listSessionSummaries(source, perProfileLimit, profile)
+    for (const row of rows) {
+      if (!isHistoryVisibleSource((row as any).source)) continue
+      combined.push({ ...row, profile })
+    }
+  }
+  return combined.sort(compareSessionSummariesNewestFirst)
+}
+
+function compareSessionSummariesNewestFirst(a: any, b: any): number {
+  const aLast = Number(a.last_active || a.ended_at || a.started_at || 0)
+  const bLast = Number(b.last_active || b.ended_at || b.started_at || 0)
+  if (bLast !== aLast) return bLast - aLast
+  return String(a.id || '').localeCompare(String(b.id || ''))
+}
+
+/**
+ * Per-profile page for each source, with rows carrying their profile. Merges
+ * across all Hermes Agent profiles so the groups view can render all profiles
+ * together (the Studio UI filters by source-group, not by profile).
+ */
+async function listHermesSessionSummaryGroupsAllProfiles(limitPerSource = 20, includedSessionIds: string[] = []): Promise<any> {
+  const groups: Array<{ source: string; sessions: any[]; total: number; hasMore: boolean }> = []
+  const included = new Map<string, any>()
+  const profiles = listProfileNamesFromDisk()
+  for (const profile of profiles) {
+    const result = await listSessionSummaryGroups(limitPerSource, profile, includedSessionIds)
+    for (const group of result.groups) {
+      if (!isHistoryVisibleSource(group.source)) continue
+      const rows = group.sessions.map((s: any) => ({ ...s, profile }))
+      const existing = groups.find(g => g.source === group.source)
+      if (existing) {
+        existing.sessions.push(...rows)
+        existing.total = (existing.total || 0) + group.total
+        existing.hasMore = existing.hasMore || group.hasMore
+      } else {
+        groups.push({ source: group.source, sessions: rows, total: group.total, hasMore: group.hasMore })
+      }
+    }
+    for (const s of result.included) {
+      if (!included.has(s.id)) included.set(s.id, { ...s, profile })
+    }
+  }
+  for (const group of groups) {
+    group.sessions.sort(compareSessionSummariesNewestFirst)
+    group.hasMore = group.sessions.length > limitPerSource
+    group.sessions = group.sessions.slice(0, limitPerSource)
+  }
+  return { groups, included: [...included.values()] }
 }
 
 function isCodingAgentSession(session?: { source?: string | null; agent?: string | null; agent_session_id?: string | null } | null): boolean {
@@ -558,13 +651,18 @@ export async function listHermesSessions(ctx: any) {
   const source = (ctx.query.source as string) || undefined
   const limit = ctx.query.limit ? parseInt(ctx.query.limit as string, 10) : undefined
   const offset = ctx.query.offset ? parseInt(ctx.query.offset as string, 10) : 0
-  const profile = requestedProfile(ctx)
+  const requested = requestedProfile(ctx)
+  const allProfiles = requested == null || requested === ''
+  const profile: string | undefined = allProfiles ? undefined : requested
+
   const effectiveLimit = limit && limit > 0 ? limit : 2000
   const normalizedOffset = Number.isFinite(offset) && offset > 0 ? offset : 0
   const paginated = Boolean(source) || normalizedOffset > 0
   const candidateLimit = paginated ? normalizedOffset + effectiveLimit + 1 : effectiveLimit
-  const localSessions = localListSessions(profile, source, candidateLimit)
-  const allSessions = await listSessionSummaries(source, candidateLimit, profile)
+  const localSessions = localListSessions(allProfiles ? undefined : profile, source, candidateLimit)
+  const allSessions: any[] = allProfiles
+    ? await listHermesSessionSummariesAllProfiles(source, candidateLimit)
+    : await listSessionSummaries(source, candidateLimit, profile)
   const merged = mergeHermesHistorySessions(ctx, profile, allSessions, localSessions, source)
 
   if (paginated) {
@@ -589,9 +687,11 @@ export async function listHermesSessions(ctx: any) {
  * GET /api/hermes/sessions/hermes/groups?limit=&include=&profile=
  */
 export async function listHermesSessionGroups(ctx: any) {
-  const requestedLimit = ctx.query.limit ? parseInt(ctx.query.limit as string, 10) : 20
+  const requestedLimit = ctx.query.limit ? parseInt(ctx.query.limit as string) : 20
   const limit = Number.isFinite(requestedLimit) ? Math.min(100, Math.max(1, requestedLimit)) : 20
-  const profile = requestedProfile(ctx)
+  const requested = requestedProfile(ctx)
+  const allProfiles = requested == null || requested === ''
+  const profile: string | undefined = allProfiles ? undefined : requested
   const rawIncluded = ctx.query.include
   const includedIds = (Array.isArray(rawIncluded) ? rawIncluded : rawIncluded ? [rawIncluded] : [])
     .map(value => String(value || '').trim())
@@ -599,13 +699,15 @@ export async function listHermesSessionGroups(ctx: any) {
     .slice(0, 100)
 
   const [hermesResult, localSessions] = await Promise.all([
-    listSessionSummaryGroups(limit, profile, includedIds),
-    Promise.resolve(localListSessions(profile, undefined, 2000)),
+    allProfiles
+      ? listHermesSessionSummaryGroupsAllProfiles(limit, includedIds)
+      : listSessionSummaryGroups(limit, profile, includedIds),
+    Promise.resolve(localListSessions(allProfiles ? undefined : profile, undefined, 2000)),
   ])
-  const hermesGroups = new Map(hermesResult.groups.map(group => [group.source, group]))
-  const sources = new Set([
+  const hermesGroups = new Map<string, any>((hermesResult as any).groups.map((group: any) => [group.source, group]))
+  const sources = new Set<string>([
     ...hermesGroups.keys(),
-    ...localSessions.map(session => session.source).filter(Boolean),
+    ...localSessions.map(session => String(session.source)).filter(Boolean),
   ])
   const groups: Array<{ source: string; sessions: any[]; hasMore: boolean }> = []
 
@@ -615,7 +717,7 @@ export async function listHermesSessionGroups(ctx: any) {
     const merged = mergeHermesHistorySessions(
       ctx,
       profile,
-      hermesGroup?.sessions || [],
+      (hermesGroup as any)?.sessions || [],
       localSourceSessions,
       source,
     ).sort(compareSessionsNewestFirst)
@@ -624,12 +726,12 @@ export async function listHermesSessionGroups(ctx: any) {
     groups.push({
       source,
       sessions,
-      hasMore: Boolean(hermesGroup?.hasMore) || merged.length > sessions.length,
+      hasMore: Boolean((hermesGroup as any)?.hasMore) || merged.length > sessions.length,
     })
   }
 
   const localIncluded = localSessions.filter(session => includedIds.includes(session.id))
-  const included = mergeHermesHistorySessions(ctx, profile, hermesResult.included, localIncluded)
+  const included = mergeHermesHistorySessions(ctx, profile, (hermesResult as any).included, localIncluded)
   ctx.body = { groups, included }
 }
 
@@ -1134,18 +1236,21 @@ export async function importHermesSession(ctx: any) {
 
   const profileDefault = await getProfileDefaultModel(profile)
   const importTimestamp = Math.floor(Date.now() / 1000)
+  // Preserve the session's true origin (cli/feishu/tui/telegram/...) so the
+  // imported mirror reflects reality rather than hard-coding everything to cli.
+  const importSource = detail.source || 'cli'
 
   localCreateSession({
     id: detail.id,
     profile,
-    source: 'cli',
+    source: importSource,
     model: profileDefault.model,
     provider: profileDefault.provider,
     title: detail.title || undefined,
   })
 
   localUpdateSession(detail.id, {
-    source: 'cli',
+    source: importSource,
     user_id: detail.user_id,
     model: profileDefault.model,
     provider: profileDefault.provider,
@@ -1192,8 +1297,29 @@ export async function importHermesSession(ctx: any) {
 export async function remove(ctx: any) {
   const sessionId = ctx.params.id
   const existing = localGetSession(sessionId)
-  if (denySessionAccess(ctx, existing)) return
-  const hermesProfile = requestedProfile(ctx) || existing?.profile || getActiveProfileName()
+  let foundProfiles: string[] = []
+  if (!existing) {
+    // Session not in the local Studio DB — may still exist in a Hermes Agent
+    // state.db (e.g. sessions imported from Feishu that were never persisted
+    // to the webui DB). Scan all known profiles to find and delete it there,
+    // so a user-initiated delete is permanent and not resurrected on the next
+    // refresh.
+    const profiles = listProfileNamesFromDisk()
+    for (const p of profiles) {
+      try {
+        const row = await getExactSessionDetailFromDbWithProfile(sessionId, p)
+        if (row) {
+          foundProfiles.push(p)
+          await hermesCli.deleteSessionForProfile(sessionId, p)
+        }
+      } catch { /* profile DB missing / unreadable — skip */ }
+    }
+  } else if (denySessionAccess(ctx, existing)) {
+    return
+  }
+  // Use the profile(s) actually scanned above; otherwise fall back to the
+  // request-scoped profile, the local record's profile, or the active one.
+  const hermesProfile = foundProfiles[0] || requestedProfile(ctx) || existing?.profile || getActiveProfileName()
   const codingAgentSession = isCodingAgentSession(existing)
   if (codingAgentSession) codingAgentRunManager.stop(sessionId, { reportClosed: false })
   const hermes = codingAgentSession
@@ -1325,10 +1451,16 @@ export async function rename(ctx: any) {
     ctx.body = { error: 'title is required' }
     return
   }
+  const trimmed = title.trim()
   const existing = localGetSession(ctx.params.id)
   if (denySessionAccess(ctx, existing)) return
-  const ok = localRenameSession(ctx.params.id, title.trim())
-  if (!ok) {
+  const localOk = localRenameSession(ctx.params.id, trimmed)
+  // Session not in the local Studio DB — write to the Hermes Agent state.db
+  // so a rename (like a delete) is permanent and survives a refresh.
+  const hermesOk = !localOk
+    ? await hermesCli.renameSession(ctx.params.id, trimmed, existing?.profile || getActiveProfileName())
+    : true
+  if (!localOk && !hermesOk) {
     ctx.status = 500
     ctx.body = { error: 'Failed to rename session' }
     return
@@ -1950,10 +2082,23 @@ export async function getConversationMessagesPaginated(ctx: any) {
   const profile = requestedProfile(ctx)
 
   const { getSessionDetailPaginated } = await import('../../db/hermes/session-store')
+  // Local Studio DB first, but a session that is ALSO in the Hermes Agent
+  // state.db (cli / feishu / cron source) is authoritative in state.db —
+  // the Studio DB only holds a mirror snapshot that goes stale after the
+  // CLI/agent keeps writing. If both exist, pick the one with the newer
+  // activity so we never render an old snapshot for an active session.
   const localResult = getSessionDetailPaginated(ctx.params.id, offset, limit)
-  const result = localResult && (!profile || localResult.session.profile === profile)
-    ? localResult
-    : await getSessionDetailPaginatedFromDbWithProfile(ctx.params.id, profile || 'default', offset, limit)
+  let result: any = localResult
+  if (localResult) {
+    const stateResult = await getSessionDetailPaginatedFromDbWithProfile(ctx.params.id, profile || 'default', offset, limit)
+    if (stateResult) {
+      const localAct = Number((localResult.session as any).last_active || 0)
+      const stateAct = Number((stateResult.session as any).last_active || 0)
+      if (stateAct > localAct) result = stateResult
+    }
+  } else {
+    result = await getSessionDetailPaginatedFromDbWithProfile(ctx.params.id, profile || 'default', offset, limit)
+  }
 
   if (!result) {
     ctx.status = 404
@@ -1962,6 +2107,18 @@ export async function getConversationMessagesPaginated(ctx: any) {
   }
   const session = { ...result.session, profile: (result.session as any).profile || profile || 'default' }
   if (denySessionAccess(ctx, session)) return
+
+  // When state.db wins on freshness (active session), it replaces the whole
+  // session including manually-edited fields. Re-surface the Studio-side
+  // model/provider edits so the UI picker survives the 12s refresh — only
+  // messages should follow state.db authority (title is left as state.db so
+  // CLI-updated titles are honored).
+  if (localResult && (localResult.session as any).model && (localResult.session as any).model !== session.model) {
+    session.model = (localResult.session as any).model
+  }
+  if (localResult && (localResult.session as any).provider && (localResult.session as any).provider !== session.provider) {
+    session.provider = (localResult.session as any).provider
+  }
 
   ctx.body = {
     session: {
@@ -1989,4 +2146,10 @@ export async function getConversationMessagesPaginated(ctx: any) {
     limit: result.limit,
     hasMore: result.hasMore,
   }
+  // On-session-open reconciliation (non-blocking, debounced): ensure the
+  // webui mirror isn't stale for a live CLI/Feishu session.
+  try {
+    const { SessionMessageSync } = await import('../../services/hermes/session-message-sync')
+    SessionMessageSync.getInstance().scheduleSessionSync(ctx.params.id)
+  } catch { /* non-fatal */ }
 }

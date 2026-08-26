@@ -2,6 +2,7 @@ import { getActiveProfileDir, getHermesBaseDir } from '../../services/hermes/her
 import { join } from 'path'
 import { existsSync } from 'fs'
 import type { LocalUsageStats } from './usage-store'
+import { isHermesHistorySessionSource, isHistoryVisibleSource } from '../../lib/history-sources'
 
 const SQLITE_AVAILABLE = (() => {
   const [major, minor] = process.versions.node.split('.').map(Number)
@@ -14,6 +15,7 @@ const SEARCH_CANDIDATE_MIN = 100
 
 export interface HermesSessionRow {
   id: string
+  profile?: string  // FIX: add profile field for CLI sessions from state.db
   source: string
   user_id: string | null
   model: string
@@ -127,6 +129,7 @@ function mapRow(row: Record<string, unknown>): HermesSessionRow {
   const startedAt = normalizeNumber(row.started_at)
   return {
     id: String(row.id || ''),
+    profile: row.profile ? String(row.profile) : undefined,
     source: String(row.source || ''),
     user_id: normalizeNullableString(row.user_id),
     model: String(row.model || ''),
@@ -170,6 +173,7 @@ const SESSION_SELECT = `
   COALESCE(s.estimated_cost_usd, 0) AS estimated_cost_usd,
   s.actual_cost_usd AS actual_cost_usd,
   COALESCE(s.cost_status, '') AS cost_status,
+  COALESCE(s.profile_name, 'default') AS profile,  -- FIX: include profile for CLI sessions
   COALESCE(
     (
       SELECT SUBSTR(REPLACE(REPLACE(m.content, CHAR(10), ' '), CHAR(13), ' '), 1, 63)
@@ -551,6 +555,12 @@ function getLatestContinuationChild(
     .map(id => idx.byId.get(id))
     .filter((c): c is HermesSessionInternalRow => !!c)
   return selectCompressionContinuationChild(parent, candidates)
+}
+
+function isCompressionContinuationChild(session: HermesSessionInternalRow, idx: SessionIndex): boolean {
+  if (!session.parent_session_id) return false
+  const parent = idx.byId.get(session.parent_session_id)
+  return !!parent && getLatestContinuationChild(parent, idx)?.id === session.id
 }
 
 function collectCompressionPath(
@@ -1502,28 +1512,11 @@ export async function listSessionSummaries(source?: string, limit = 2000, profil
   const db = new DatabaseSync(dbPath, { open: true, readOnly: true })
 
   try {
-    const clauses = ["s.parent_session_id IS NULL", "s.source != 'tool'", "s.id NOT LIKE 'compress_%'"]
-    const params: any[] = []
-    if (source) {
-      clauses.push('s.source = ?')
-      params.push(source)
-    }
-    params.push(Math.max(limit * 4, limit))
-
-    const rawRows = db.prepare(`
-      SELECT
-        ${SESSION_SELECT},
-        s.parent_session_id AS parent_session_id
-      FROM sessions s
-      WHERE ${clauses.join(' AND ')}
-      ORDER BY s.started_at DESC
-      LIMIT ?
-    `).all(...params) as Record<string, unknown>[] | undefined
-    const roots = (Array.isArray(rawRows) ? rawRows : []).map(mapInternalSessionRow)
-
     const idx = loadAllSessions(db)
-    return roots
-      .map(root => projectSessionSummary(root, collectSessionChain(root, idx)))
+    return [...idx.byId.values()]
+      .filter(session => !source || session.source === source)
+      .filter(session => !isCompressionContinuationChild(session, idx))
+      .map(session => projectSessionSummary(session, collectSessionChain(session, idx)))
       .sort(compareSessionSummariesNewestFirst)
       .slice(0, limit)
   } finally {
@@ -1548,11 +1541,17 @@ export async function listSessionSummaryGroups(
     const included = new Map<string, HermesSessionRow>()
 
     for (const root of idx.byId.values()) {
-      if (root.parent_session_id != null) continue
+      if (isCompressionContinuationChild(root, idx)) continue
       const summary = projectSessionSummary(root, collectSessionChain(root, idx))
-      const sessions = grouped.get(summary.source) || []
+      // History visibility policy (lib/history-sources.ts): blacklist
+      // global_agent/workflow/group_chat plus system task sources cron and
+      // subagent. feishu/tui/telegram/cli sessions ARE shown here — only the
+      // main chat list (isVisibleWebUiSessionSource whitelist) hides them.
+      const source = summary.source || ''
+      if (!isHistoryVisibleSource(source)) continue
+      const sessions = grouped.get(source) || []
       sessions.push(summary)
-      grouped.set(summary.source, sessions)
+      grouped.set(source, sessions)
       if (includedIds.has(summary.id)) included.set(summary.id, summary)
     }
 

@@ -18,10 +18,21 @@ export async function ensureDesktopAuthReady(): Promise<void> {
   }
 }
 
+// Sub-path comes from Vite's native BASE_URL (see vite.config.ts `base`).
+
 function getBaseUrl(): string {
   if (import.meta.env.VITE_HERMES_PREVIEW === '1') return DEFAULT_BASE_URL
   if (isDesktopShell()) return DEFAULT_BASE_URL
-  return localStorage.getItem('hermes_server_url') || DEFAULT_BASE_URL
+
+  // Backward-compat: user may have set hermes_server_url in localStorage
+  const stored = localStorage.getItem('hermes_server_url')
+  if (stored) return stored
+
+  // Native Vite base — single source of truth (BASE_URL=/hermes/ → /hermes/)
+  // Vite normalizes to always have leading+trailing slash.
+  const viteBase = (import.meta.env.BASE_URL as string) || '/hermes/'
+  // Strip trailing slash for request() which does `${base}${path}` where path starts with /
+  return viteBase.replace(/\/+$/, '') || ''
 }
 
 export function getApiKey(): string {
@@ -48,6 +59,7 @@ function clearAuthSessionState() {
 export function hasApiKey(): boolean {
   return !!getApiKey()
 }
+
 
 export type StoredUserRole = 'super_admin' | 'admin'
 
@@ -127,12 +139,19 @@ function shouldAttachProfileHeader(path: string, options: RequestInit): boolean 
   return !bodyHasProfileSelector(options.body)
 }
 
+// MAINTENANCE CONTRACT: every cross-profile session-collection endpoint MUST
+// be listed here, otherwise request()'s active-profile header injection
+// (X-Hermes-Profile) silently hijacks it and pins results to one profile.
+// Prefer explicit ?profile= on new endpoints; add them here when the endpoint
+// is meant to scan all profiles by default.
 function isProfileWideSessionCollection(pathname: string): boolean {
   return pathname === '/api/hermes/sessions' ||
     pathname === '/api/hermes/sessions/batch-delete' ||
     pathname === '/api/hermes/search/sessions' ||
     pathname === '/api/hermes/sessions/search' ||
-    pathname === '/api/hermes/sessions/conversations'
+    pathname === '/api/hermes/sessions/conversations' ||
+    pathname === '/api/hermes/sessions/hermes/groups' ||
+    pathname === '/api/hermes/sessions/hermes'
 }
 
 function emitAuthNotice(kind: 'expired' | 'forbidden') {
@@ -232,4 +251,26 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
 
 export function getBaseUrlValue(): string {
   return getBaseUrl()
+}
+
+/**
+ * Resolve WS/WSS host + sub-path prefix for native WebSocket connections.
+ *
+ * base may be:
+ *  - '' (direct access, root)            → host=location.host, prefix=''
+ *  - '/hermes' (nginx sub-path)          → host=location.host, prefix='/hermes'
+ *  - 'https://host/hermes' (full URL)    → host='host', prefix='/hermes'
+ *
+ * NOTE: new URL(relativePath).host throws ERR_INVALID_URL — the upstream
+ * code called new URL(base).host directly, which broke under relative
+ * sub-path bases. Centralizing here avoids duplicating the fix.
+ */
+export function wsOrigin(): { host: string; prefix: string } {
+  const base = getBaseUrlValue()
+  if (!base) return { host: location.host, prefix: '' }
+  if (base.startsWith('http')) {
+    const u = new URL(base)
+    return { host: u.host, prefix: u.pathname.replace(/\/$/, '') }
+  }
+  return { host: location.host, prefix: base.replace(/\/$/, '') }
 }
