@@ -735,10 +735,30 @@ export function connectChatRun(requestedProfile?: string | null, transport: Chat
     return chatRunSocket
   }
 
-  // Clean up old socket to prevent duplicate event listeners
+  // Clean up old socket to prevent duplicate event listeners.
+  // CRITICAL: disable reconnection BEFORE disconnecting, otherwise socket.io-client
+  // keeps the socket instance alive and auto-reconnects with the OLD query.profile.
+  // That phantom socket then hits the server with the wrong profile, tripping
+  // "Profile X is not available on this connection" and breaking in-flight runs
+  // via handleSocketDisconnect → handleSocketError → onError.
   if (chatRunSocket) {
+    // Disable auto-reconnect before disconnect: socket.io-client keeps the
+    // socket instance alive and would reconnect with the OLD query.profile,
+    // producing a phantom socket that trips "Profile X not available" and
+    // breaks in-flight runs via handleSocketDisconnect → onError.
+    const ioMgr = chatRunSocket.io as any
+    try {
+      ioMgr.reconnection = false
+    } catch {
+      // ignore
+    }
     chatRunSocket.removeAllListeners()
     chatRunSocket.disconnect()
+    try {
+      ioMgr._destroy?.(false)
+    } catch {
+      // ignore
+    }
     globalListenersRegistered = false
     chatRunSocketProfile = null
   }
@@ -762,7 +782,8 @@ export function connectChatRun(requestedProfile?: string | null, transport: Chat
   chatRunSocketTransport = transport
 
   const namespace = transport === 'global-agent' ? '/global-agent' : '/chat-run'
-  chatRunSocket = io(`${baseUrl}${namespace}`, {
+  chatRunSocket = io(namespace, {
+    path: `${baseUrl}/socket.io`,
     auth: { token },
     query: { profile },
     transports: ['websocket', 'polling'],
@@ -833,7 +854,19 @@ export function connectChatRun(requestedProfile?: string | null, transport: Chat
 
 export function disconnectChatRun(): void {
   if (chatRunSocket) {
+    const ioMgr = chatRunSocket.io as any
+    try {
+      ioMgr.reconnection = false
+    } catch {
+      // ignore
+    }
+    chatRunSocket.removeAllListeners()
     chatRunSocket.disconnect()
+    try {
+      ioMgr._destroy?.(false)
+    } catch {
+      // ignore
+    }
     chatRunSocket = null
     chatRunSocketProfile = null
     chatRunSocketTransport = 'chat-run'

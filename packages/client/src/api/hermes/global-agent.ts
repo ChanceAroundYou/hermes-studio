@@ -48,12 +48,17 @@ export function connectGlobalAgent(profile?: string | null): Socket {
   const nextProfile = activeProfile(profile)
   if (socket && socket.connected && socketProfile === nextProfile) return socket
   if (socket) {
+    const ioMgr = socket.io as any
+    try { ioMgr.reconnection = false } catch {}
+    socket.removeAllListeners?.()
     socket.disconnect()
+    try { ioMgr._destroy?.(false) } catch {}
     socket = null
   }
 
   socketProfile = nextProfile
-  socket = io(`${getBaseUrlValue()}/global-agent`, {
+  socket = io('/global-agent', {
+    path: `${getBaseUrlValue()}/socket.io`,
     auth: {
       token: getApiKey(),
       profile: nextProfile,
@@ -70,8 +75,14 @@ export function connectGlobalAgent(profile?: string | null): Socket {
 }
 
 export function disconnectGlobalAgent(): void {
-  socket?.disconnect()
-  socket = null
+  if (socket) {
+    const ioMgr = socket.io as any
+    try { ioMgr.reconnection = false } catch {}
+    socket.removeAllListeners?.()
+    socket.disconnect()
+    try { ioMgr._destroy?.(false) } catch {}
+    socket = null
+  }
   socketProfile = null
 }
 

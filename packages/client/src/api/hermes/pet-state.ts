@@ -33,14 +33,20 @@ function activeProfile(profile?: string | null): string {
 
 export function connectPetStateSocket(profile?: string | null): Socket {
   const nextProfile = activeProfile(profile)
-  if (socket && socketProfile === nextProfile) return socket
+  if (socket && (socket as any).connected && socketProfile === nextProfile) return socket
   if (socket) {
+    const ioMgr = socket.io as any
+    try { ioMgr.reconnection = false } catch {}
+    socket.removeAllListeners?.()
     socket.disconnect()
+    try { ioMgr._destroy?.(false) } catch {}
     socket = null
   }
 
   socketProfile = nextProfile
-  socket = io(`${getBaseUrlValue()}/pet-state`, {
+  const base = getBaseUrlValue() || ''
+  socket = io('/pet-state', {
+    path: `${base}/socket.io`,
     auth: { token: getApiKey() },
     query: { profile: nextProfile },
     transports: ['websocket', 'polling'],
@@ -55,8 +61,14 @@ export function connectPetStateSocket(profile?: string | null): Socket {
 }
 
 export function disconnectPetStateSocket(): void {
-  socket?.disconnect()
-  socket = null
+  if (socket) {
+    const ioMgr = socket.io as any
+    try { ioMgr.reconnection = false } catch {}
+    socket.removeAllListeners?.()
+    socket.disconnect()
+    try { ioMgr._destroy?.(false) } catch {}
+    socket = null
+  }
   socketProfile = null
 }
 

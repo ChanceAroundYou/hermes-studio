@@ -1,5 +1,5 @@
 import { io } from 'socket.io-client'
-import { request, getApiKey } from '../client'
+import { request, getApiKey, getBaseUrlValue } from '../client'
 import { fetchAuthenticatedBlob, saveBlob } from './binary-content'
 
 // ─── Types ──────────────────────────────────────────────────
@@ -274,6 +274,7 @@ export function connectGroupChat(opts?: {
     if (!opts?.userId) localStorage.setItem('gc_user_id', userId)
 
     socket = io('/group-chat', {
+        path: `${getBaseUrlValue() || ''}/socket.io`,
         auth: {
             token: token || undefined,
             userId,
@@ -323,7 +324,11 @@ export function getSocket(options: { requireConnected?: boolean } = {}): ReturnT
 
 export function disconnectGroupChat(): void {
     if (socket) {
+        const ioMgr = socket.io as any
+        try { ioMgr.reconnection = false } catch {}
+        socket.removeAllListeners()
         socket.disconnect()
+        try { ioMgr._destroy?.(false) } catch {}
         socket = null
     }
 }

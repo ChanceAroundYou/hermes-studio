@@ -11,6 +11,8 @@ vi.mock('@/api/client', () => ({
   getActiveProfileName: vi.fn(() => 'default'),
   getApiKey: vi.fn(() => 'test-key'),
   getBaseUrlValue: vi.fn(() => 'http://localhost:3000'),
+
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
 describe('workflow socket client', () => {
@@ -21,7 +23,7 @@ describe('workflow socket client', () => {
     ioMock.mockImplementation(() => {
       const listeners = new Map<string, Set<(payload: any) => void>>()
       const socket = {
-        connected: false,
+        connected: true,
         disconnect: vi.fn(),
         on: vi.fn((event: string, handler: (payload: any) => void) => {
           const handlers = listeners.get(event) || new Set()
@@ -31,6 +33,11 @@ describe('workflow socket client', () => {
         }),
         off: vi.fn((event: string, handler: (payload: any) => void) => {
           listeners.get(event)?.delete(handler)
+          return socket
+        }),
+        removeAllListeners: vi.fn((event?: string) => {
+          if (event) listeners.delete(event)
+          else listeners.clear()
           return socket
         }),
         trigger: (event: string, payload: any) => {

@@ -39,14 +39,20 @@ function activeProfile(profile?: string | null): string {
 
 export function connectWorkflowSocket(profile?: string | null): Socket {
   const nextProfile = activeProfile(profile)
-  if (socket && socketProfile === nextProfile) return socket
+  if (socket && socket.connected && socketProfile === nextProfile) return socket
   if (socket) {
+    const ioMgr = socket.io as any
+    try { ioMgr.reconnection = false } catch {}
+    socket.removeAllListeners?.()
     socket.disconnect()
+    try { ioMgr._destroy?.(false) } catch {}
     socket = null
   }
 
   socketProfile = nextProfile
-  socket = io(`${getBaseUrlValue()}/workflow`, {
+  const base = getBaseUrlValue() || ''
+  socket = io('/workflow', {
+    path: `${base}/socket.io`,
     auth: { token: getApiKey() },
     query: { profile: nextProfile },
     transports: ['websocket', 'polling'],
@@ -61,8 +67,14 @@ export function connectWorkflowSocket(profile?: string | null): Socket {
 }
 
 export function disconnectWorkflowSocket(): void {
-  socket?.disconnect()
-  socket = null
+  if (socket) {
+    const ioMgr = socket.io as any
+    try { ioMgr.reconnection = false } catch {}
+    socket.removeAllListeners?.()
+    socket.disconnect()
+    try { ioMgr._destroy?.(false) } catch {}
+    socket = null
+  }
   socketProfile = null
 }
 
