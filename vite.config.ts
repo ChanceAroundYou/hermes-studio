@@ -7,6 +7,13 @@ import pkg from './package.json'
 const FRONTEND_PORT = Number(process.env.HERMES_WEB_UI_FRONTEND_PORT || 8649)
 const BACKEND_PORT = process.env.HERMES_WEB_UI_BACKEND_PORT || '8648'
 const BACKEND = `http://127.0.0.1:${BACKEND_PORT}`
+// Single source of truth for sub-path. Vite's `base` is exposed to client as
+// `import.meta.env.BASE_URL` — no custom define needed. Env single variable:
+// BASE_URL (see .env / systemd); HERMES_BASE_PATH kept as fallback for server.
+// Trailing slash is required for Vite; client strips it.
+const BASE_URL = (process.env.BASE_URL || process.env.HERMES_BASE_PATH || '/hermes').replace(/\/+$/, '') + '/'
+
+const BUILD_TIME = new Date().toISOString().replace(/[:.]/g, '-')
 
 function createProxyConfig(): ProxyOptions {
   return {
@@ -32,9 +39,11 @@ function createProxyConfig(): ProxyOptions {
 
 export default defineConfig({
   root: 'packages/client',
+  base: BASE_URL,  // native sub-path: emits /hermes/assets/... absolute URLs
   plugins: [vue()],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   resolve: {
     alias: {
@@ -49,15 +58,16 @@ export default defineConfig({
     // Disable sourcemap generation for faster builds
     sourcemap: false,
     target: 'es2020',
-    // Increase chunk size warning limit (default: 500KB)
-    chunkSizeWarningLimit: 1000,
+    // Monaco editor bundle is ~3.7MB; suppress false positive chunk-size warning
+    chunkSizeWarningLimit: 4000,
     // CSS code splitting for better caching
     cssCodeSplit: true,
     rollupOptions: {
       output: {
-        // Optimize chunk file names for better caching
-        chunkFileNames: 'assets/js/[name]-[hash].js',
-        entryFileNames: 'assets/js/[name]-[hash].js',
+        // ponytail: embed BUILD_TIME in filenames → unique fingerprint per
+        // build, busting the 1-year immutable asset cache.
+        chunkFileNames: `assets/js/[name]-${BUILD_TIME}-[hash].js`,
+        entryFileNames: `assets/js/[name]-${BUILD_TIME}-[hash].js`,
         assetFileNames: 'assets/[ext]/[name]-[hash].[ext]',
       },
     },

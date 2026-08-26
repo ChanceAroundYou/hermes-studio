@@ -1,4 +1,5 @@
 import { request } from './client'
+import { getBaseUrlValue } from './client'
 import type { UserThemeSettings } from './theme'
 
 export interface AuthStatus {
@@ -7,7 +8,8 @@ export interface AuthStatus {
 }
 
 export async function fetchAuthStatus(): Promise<AuthStatus> {
-  const res = await fetch('/api/auth/status')
+  const base = getBaseUrlValue()
+  const res = await fetch(`${base}/api/auth/status`)
   if (!res.ok) throw new Error('Failed to fetch auth status')
   return res.json()
 }
@@ -19,7 +21,8 @@ export interface LoginResponse {
 }
 
 export async function loginWithPassword(username: string, password: string): Promise<LoginResponse> {
-  const res = await fetch('/api/auth/login', {
+  const base = getBaseUrlValue()
+  const res = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
