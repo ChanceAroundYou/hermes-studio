@@ -43,7 +43,11 @@ vi.mock('@/stores/hermes/settings', () => ({ useSettingsStore: () => settingsSta
 vi.mock('@/utils/clipboard', () => clipboardMock)
 vi.mock('@/utils/completion-notification', () => systemNotificationMock)
 vi.mock('@/utils/completion-sound', () => ({ playCompletionSound: vi.fn(async () => true) }))
-vi.mock('vue-router', () => ({ useRoute: () => routeState, useRouter: () => ({ push: routerPush }) }))
+vi.mock('vue-router', async (importOriginal) => ({
+  ...await importOriginal<typeof import('vue-router')>(),
+  useRoute: () => routeState,
+  useRouter: () => ({ push: routerPush }),
+}))
 vi.mock('@/api/hermes/workflows', () => ({ approveWorkflowNode: workflowMock.approveWorkflowNode }))
 vi.mock('@/api/hermes/workflow-socket', () => ({
   listWorkflowsSocket: workflowMock.listWorkflowsSocket,

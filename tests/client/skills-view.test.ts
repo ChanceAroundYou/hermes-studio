@@ -15,6 +15,29 @@ vi.mock('@/api/hermes/skills', () => ({
   fetchSkills: mockFetchSkills,
 }))
 
+// Named global.stubs are unreliable for script-setup children here, so the
+// child components are replaced at module level instead.
+vi.mock('@/components/hermes/skills/SkillList.vue', () => ({
+  default: defineComponent({
+    props: ['categories', 'selectedSkill'],
+    emits: ['select', 'deleted'],
+    template: '<aside class="skill-list-stub" :data-selected="selectedSkill"></aside>',
+  }),
+}))
+
+vi.mock('@/components/hermes/skills/SkillDetail.vue', () => ({
+  default: defineComponent({
+    props: ['category', 'skill', 'skillName'],
+    template: '<article class="skill-detail-stub" :data-category="category" :data-skill="skill">{{ skillName }}</article>',
+  }),
+}))
+
+vi.mock('@/components/hermes/skills/SkillImportModal.vue', () => ({ default: true }))
+
+vi.mock('@/components/hermes/skills/SkillExternalDirsModal.vue', () => ({ default: true }))
+
+vi.mock('@/components/hermes/skills/PendingWriteApprovals.vue', () => ({ default: true }))
+
 vi.mock('@/api/hermes/write-gate', () => ({
   fetchPendingWrites: mockFetchPendingWrites,
 }))
@@ -51,6 +74,13 @@ vi.mock('naive-ui', () => ({
     emits: ['update:value'],
     template: '<input class="n-input-stub" :value="value" @input="$emit(\'update:value\', $event.target.value)" />',
   }),
+  NSwitch: defineComponent({
+    props: ['value', 'size'],
+    emits: ['update:value'],
+    template: '<button class="n-switch-stub" type="button" role="switch"></button>',
+  }),
+  useMessage: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }),
+  useDialog: () => ({ create: vi.fn(), warning: vi.fn(), info: vi.fn(), success: vi.fn(), error: vi.fn() }),
   NSelect: defineComponent({
     props: ['value', 'options', 'size'],
     emits: ['update:value'],
@@ -94,24 +124,7 @@ describe('SkillsView', () => {
       archived: [],
     })
 
-    const wrapper = mount(SkillsView, {
-      global: {
-        stubs: {
-          SkillList: defineComponent({
-            props: ['categories', 'selectedSkill'],
-            emits: ['select', 'deleted'],
-            template: '<aside class="skill-list-stub" :data-selected="selectedSkill"></aside>',
-          }),
-          SkillDetail: defineComponent({
-            props: ['category', 'skill', 'skillName'],
-            template: '<article class="skill-detail-stub" :data-category="category" :data-skill="skill">{{ skillName }}</article>',
-          }),
-          SkillImportModal: true,
-          SkillExternalDirsModal: true,
-          PendingWriteApprovals: true,
-        },
-      },
-    })
+    const wrapper = mount(SkillsView)
 
     await flushPromises()
 

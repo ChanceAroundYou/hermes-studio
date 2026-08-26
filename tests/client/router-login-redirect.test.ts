@@ -7,6 +7,9 @@ const mockIsStoredSuperAdmin = vi.hoisted(() => vi.fn())
 vi.mock('@/api/client', () => ({
   hasApiKey: mockHasApiKey,
   isStoredSuperAdmin: mockIsStoredSuperAdmin,
+
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
 async function loadRouter() {

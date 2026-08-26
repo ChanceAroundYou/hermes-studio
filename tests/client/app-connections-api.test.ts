@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const request = vi.hoisted(() => vi.fn())
 
-vi.mock('@/api/client', () => ({ request }))
+vi.mock('@/api/client', () => ({ request ,
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
+}))
 
 describe('App connections API', () => {
   beforeEach(() => {

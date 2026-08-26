@@ -1451,7 +1451,9 @@ broker._compression_profile["compression-a"] = "default"
 broker._compression_worker_key["compression-a"] = "default"
 
 destroy_profile_result = broker.handle({"action": "destroy_profile", "profile": "default"})
-assert destroy_profile_result == {"profile": "default", "destroyed": 2}
+# destroy_profile now uses stop() directly (perf fix) and counts stopped
+# workers itself instead of trusting each worker's self-reported count.
+assert destroy_profile_result == {"profile": "default", "destroyed": 1}
 assert profile_worker.stopped
 assert "default" not in broker._workers
 assert broker._run_profile == {}

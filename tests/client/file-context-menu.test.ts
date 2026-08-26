@@ -76,6 +76,8 @@ describe('FileContextMenu', () => {
   async function showMenu(wrapper: ReturnType<typeof mount>, entry: FileEntry) {
     ;(wrapper.vm as any).show(new MouseEvent('contextmenu', { clientX: 12, clientY: 34 }), entry)
     await flushPromises()
+    await (wrapper.vm as any).$nextTick?.()
+    await flushPromises()
   }
 
   it('offers both edit and preview for previewable text files', async () => {
@@ -146,10 +148,12 @@ describe('FileContextMenu', () => {
     await showMenu(regularWrapper, entry)
     expect(regularWrapper.find('[data-key="attach"]').exists()).toBe(false)
 
-    const workspaceWrapper = mount(FileContextMenu, { props: { allowAttach: true } })
+    const onAttach = vi.fn()
+    const workspaceWrapper = mount(FileContextMenu, { props: { allowAttach: true, onAttach } } as any)
     await showMenu(workspaceWrapper, entry)
-    await workspaceWrapper.get('[data-key="attach"]').trigger('click')
+    await workspaceWrapper.findComponent({ name: 'NDropdown' }).vm.$emit('select', 'attach')
+    await flushPromises()
 
-    expect(workspaceWrapper.emitted('attach')).toEqual([[entry]])
+    expect(onAttach).toHaveBeenCalledWith(entry)
   })
 })

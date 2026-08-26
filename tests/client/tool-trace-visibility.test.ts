@@ -10,23 +10,60 @@ vi.mock('vue-i18n', () => ({
   }),
 }))
 
+vi.mock('naive-ui', () => ({
+  useMessage: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }),
+}))
+
 vi.mock('@/composables/useTheme', () => ({
   useTheme: () => ({ isDark: false }),
+}))
+
+vi.mock('@/components/hermes/chat/VirtualMessageList.vue', () => ({
+  default: defineComponent({
+    name: 'VirtualMessageList',
+    props: {
+      messages: { type: Array, default: () => [] },
+      virtualized: { type: Boolean, default: true },
+    },
+    setup(_props, { expose }) {
+      expose({
+        isNearBottom: () => true,
+        shouldAutoFollowBottom: () => true,
+        scrollToBottom: vi.fn(),
+        scrollToMessage: vi.fn(),
+        scrollToAnchor: vi.fn(),
+        captureScrollPosition: () => null,
+        restoreScrollPosition: vi.fn(),
+        captureViewportPosition: () => null,
+        restoreViewportPosition: vi.fn(),
+      })
+    },
+    template: `
+      <div class="virtual-message-list-stub">
+        <slot name="empty" />
+        <slot name="before" />
+        <slot name="item" v-for="message in messages" :key="message.id" :message="message" />
+        <slot name="after" />
+      </div>
+    `,
+  }),
+}))
+
+vi.mock('@/components/hermes/chat/MessageItem.vue', () => ({
+  default: defineComponent({
+    name: 'MessageItem',
+    props: {
+      message: { type: Object, required: true },
+      highlight: { type: Boolean, default: false },
+    },
+    template: '<div class="stub-message" :data-role="message.role" :data-id="message.id">{{ message.toolName || message.content }}</div>',
+  }),
 }))
 
 import MessageList from '@/components/hermes/chat/MessageList.vue'
 import HistoryMessageList from '@/components/hermes/chat/HistoryMessageList.vue'
 import { useChatStore, type Message, type Session } from '@/stores/hermes/chat'
 import { useToolTraceVisibility } from '@/composables/useToolTraceVisibility'
-
-const MessageItemStub = defineComponent({
-  name: 'MessageItem',
-  props: {
-    message: { type: Object, required: true },
-    highlight: { type: Boolean, default: false },
-  },
-  template: '<div class="stub-message" :data-role="message.role" :data-id="message.id">{{ message.toolName || message.content }}</div>',
-})
 
 function makeSession(messages: Message[]): Session {
   return {
@@ -58,14 +95,7 @@ describe('tool trace visibility', () => {
     chatStore.activeSession = makeSession(sampleMessages)
     chatStore.abortState = { aborting: true, synced: false }
 
-    return mount(MessageList, {
-      global: {
-        stubs: {
-          MessageItem: MessageItemStub,
-          Transition: false,
-        },
-      },
-    })
+    return mount(MessageList, {})
   }
 
   it('shows named transcript and live tool traces by default while keeping unnamed internal tools hidden', () => {
@@ -82,9 +112,6 @@ describe('tool trace visibility', () => {
   it('applies the same default-visible rule to history sessions', () => {
     const wrapper = mount(HistoryMessageList, {
       props: { session: makeSession(sampleMessages) },
-      global: {
-        stubs: { MessageItem: MessageItemStub },
-      },
     })
 
     expect(wrapper.findAll('.stub-message').map(node => node.attributes('data-id'))).toEqual([
@@ -99,11 +126,7 @@ describe('tool trace visibility', () => {
     chatStore.activeSessionId = 'session-1'
     chatStore.activeSession = makeSession(sampleMessages)
 
-    const wrapper = mount(HistoryMessageList, {
-      global: {
-        stubs: { MessageItem: MessageItemStub },
-      },
-    })
+    const wrapper = mount(HistoryMessageList, {})
 
     expect(wrapper.findAll('.stub-message')).toHaveLength(0)
   })
@@ -120,9 +143,6 @@ describe('tool trace visibility', () => {
 
     const historyWrapper = mount(HistoryMessageList, {
       props: { session: makeSession(sampleMessages) },
-      global: {
-        stubs: { MessageItem: MessageItemStub },
-      },
     })
     expect(historyWrapper.findAll('.stub-message').map(node => node.attributes('data-id'))).toEqual([
       'user-1',
@@ -140,14 +160,7 @@ describe('tool trace visibility', () => {
     ])
     chatStore.abortState = { aborting: true, synced: false }
 
-    const wrapper = mount(MessageList, {
-      global: {
-        stubs: {
-          MessageItem: MessageItemStub,
-          Transition: false,
-        },
-      },
-    })
+    const wrapper = mount(MessageList, {})
 
     expect(wrapper.findAll('.stub-message').map(node => node.attributes('data-id'))).toContain('tool-weather')
     expect(wrapper.findAll('.tool-call-name').map(node => node.text())).not.toContain('weather')

@@ -72,7 +72,10 @@ vi.mock('@/stores/hermes/models', () => ({ useModelsStore: () => modelsStore }))
 vi.mock('@/stores/hermes/profiles', () => ({ useProfilesStore: () => profilesStore }))
 vi.mock('@/stores/hermes/settings', () => ({ useSettingsStore: () => settingsStore }))
 vi.mock('@/api/hermes/copilot-auth', () => ({ checkCopilotToken: vi.fn(async () => {}) }))
-vi.mock('@/api/client', () => ({ isStoredSuperAdmin: () => false }))
+vi.mock('@/api/client', () => ({ isStoredSuperAdmin: () => false ,
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
+}))
 
 vi.mock('@/components/hermes/models/AuxiliaryModelsPanel.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('@/components/hermes/models/CombinationModelsPanel.vue', () => ({ default: { template: '<div />' } }))
@@ -130,6 +133,18 @@ describe('Models voice settings tabs', () => {
 
     expect(wrapper.findComponent({ name: 'NTabs' }).props('value')).toBe('general')
     expect(routerReplace).toHaveBeenCalledWith({ query: {} })
+  })
+
+  it('keeps fallback settings in Auxiliary Models and redirects the old tab link', async () => {
+    routeState.query = { tab: 'fallback', profile: 'work' }
+    const wrapper = mount(ModelsView)
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'NTabs' }).props('value')).toBe('auxiliary')
+    expect(wrapper.find('[data-tab="fallback"]').exists()).toBe(false)
+    expect(routerReplace).toHaveBeenCalledWith({
+      query: { tab: 'auxiliary', profile: 'work' },
+    })
   })
 
   it('redirects the legacy Settings voice link to Models TTS', async () => {

@@ -46,6 +46,8 @@ const clientApiMock = vi.hoisted(() => ({
   getBaseUrlValue: vi.fn(() => ''),
   getActiveProfileName: vi.fn(() => 'research'),
   getStoredUsername: vi.fn(() => null),
+
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 const authApiMock = vi.hoisted(() => ({
   fetchCurrentUser: vi.fn(),

@@ -378,7 +378,7 @@ describe('Profile Routes', () => {
   })
 
   describe('Hermes CLI active profile switch', () => {
-    it('only destroys bridge sessions for the target profile', async () => {
+    it('switches UI focus without destroying bridge sessions (parallel-profile)', async () => {
       const hermesHome = await mkdtemp(join(tmpdir(), 'hermes-profile-switch-'))
       tempHomes.push(hermesHome)
       process.env.HERMES_HOME = hermesHome
@@ -408,9 +408,12 @@ describe('Profile Routes', () => {
 
       expect(ctx.status).toBe(200)
       expect(ctx.body).toMatchObject({ success: true, active: 'work' })
-      expect(agentBridgeMocks.destroyProfile).toHaveBeenCalledWith('work')
+      // Parallel-profile: switching focus must NOT destroy bridge sessions,
+      // otherwise in-flight runs in other profiles get killed.
+      expect(agentBridgeMocks.destroyProfile).not.toHaveBeenCalled()
       expect(agentBridgeMocks.destroyAll).not.toHaveBeenCalled()
-      expect(sessionDeleterMocks.switchProfile).toHaveBeenCalledWith('work')
+      // SessionDeleter now drains ALL profiles on a timer; no retargeting.
+      expect(sessionDeleterMocks.switchProfile).not.toHaveBeenCalled()
     })
   })
 

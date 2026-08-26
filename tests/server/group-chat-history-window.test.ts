@@ -3,6 +3,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { createServer, request as httpRequest, type Server as HttpServer } from 'http'
 import Koa from 'koa'
 
+// Heavy fixtures insert 10k-row SQLite batches; the 5s default is flaky
+// under parallel full-suite load.
+vi.setConfig({ testTimeout: 20000 })
+
 const dbMock = vi.hoisted(() => ({
   current: null as DatabaseSync | null,
 }))

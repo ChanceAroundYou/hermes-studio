@@ -31,6 +31,9 @@ vi.mock('vue-i18n', () => ({
 
 vi.mock('@/api/client', () => ({
   getApiKey: mockGetApiKey,
+
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
 vi.mock('@/stores/hermes/models', () => ({

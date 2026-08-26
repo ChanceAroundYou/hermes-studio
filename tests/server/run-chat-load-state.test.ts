@@ -36,6 +36,16 @@ vi.mock('../../packages/server/src/services/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
 
+// load-state dynamically imports these to prefer a newer Hermes Agent state.db
+// snapshot. On a real machine they scan live profile DBs and can throw — mock
+// them out so the Studio DB path under test stays deterministic.
+vi.mock('../../packages/server/src/db/hermes/sessions-db', () => ({
+  getSessionDetailPaginatedFromDbWithProfile: vi.fn(async () => null),
+}))
+vi.mock('../../packages/server/src/services/hermes/session-profile-lookup', () => ({
+  findSessionAcrossProfiles: vi.fn(async () => null),
+}))
+
 vi.mock('../../packages/server/src/services/hermes/run-chat/compression', () => ({
   buildCompressedHistory: vi.fn(),
   buildDbHistory: buildDbHistoryMock,

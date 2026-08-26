@@ -6,6 +6,8 @@ const fetchMock = vi.hoisted(() => vi.fn())
 vi.mock('@/api/client', () => ({
   getBaseUrlValue: () => 'https://chat.example.test',
   getApiKey: () => 'account-token',
+
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 vi.stubGlobal('fetch', fetchMock)
 

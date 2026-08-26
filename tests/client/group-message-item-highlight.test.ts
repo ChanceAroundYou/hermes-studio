@@ -9,6 +9,11 @@ vi.mock('vue-i18n', () => ({
   }),
 }))
 
+vi.mock('@/components/hermes/chat/MarkdownRenderer.vue', () => {
+  const { defineComponent: dc } = require('vue')
+  return { default: dc({ props: ['content'], template: '<div class="markdown-stub">{{ content }}</div>' }) }
+})
+
 vi.mock('naive-ui', () => ({
   useMessage: () => ({
     error: vi.fn(),
@@ -139,8 +144,13 @@ describe('GroupMessageItem tool details', () => {
     expect(wrapper.find('.thinking-body').exists()).toBe(false)
     expect(wrapper.get('.thinking-label').text()).toBe('chat.thinkingInProgress')
     await wrapper.get('.thinking-header').trigger('click')
-    expect(wrapper.get('.thinking-body markdown-renderer-stub').attributes('content'))
-      .toBe('Inspecting several possible approaches.')
+    await wrapper.vm.$nextTick()
+    const { flushPromises: fp } = await import('@vue/test-utils')
+    await fp()
+    await wrapper.vm.$nextTick()
+    const thinkStub = wrapper.find('.thinking-body .markdown-stub')
+    const thinkContent = thinkStub.exists() ? thinkStub.text() : wrapper.get('.thinking-body markdown-renderer-stub').attributes('content')
+    expect(thinkContent).toBe('Inspecting several possible approaches.')
   })
 
   it('throttles streaming body Markdown and commits the final body immediately', async () => {
@@ -162,18 +172,30 @@ describe('GroupMessageItem tool details', () => {
         members: [],
         currentUserId: 'user-1',
       },
-      global: { stubs: { MarkdownRenderer: true, ProfileAvatar: true } },
+      global: { stubs: { ProfileAvatar: true } },
     })
 
-    expect(wrapper.get('.msg-content markdown-renderer-stub').attributes('content')).toBe('A')
+    const getMdContent = () => {
+      const stub = wrapper.find('.msg-content .markdown-stub')
+      if (stub.exists()) return stub.text()
+      const legacy = wrapper.find('.msg-content markdown-renderer-stub')
+      return legacy.exists() ? (legacy.attributes('content') || legacy.text()) : wrapper.find('.msg-content').text()
+    }
+    // MarkdownRenderer is defineAsyncComponent — let it resolve
+    const { flushPromises: fp0 } = await import('@vue/test-utils')
+    await fp0()
+    await wrapper.vm.$nextTick()
+    expect(getMdContent()).toBe('A')
     await wrapper.setProps({ message: { ...baseMessage, content: 'AB' } })
-    expect(wrapper.get('.msg-content markdown-renderer-stub').attributes('content')).toBe('A')
+    expect(getMdContent()).toBe('A')
 
     await vi.advanceTimersByTimeAsync(100)
-    expect(wrapper.get('.msg-content markdown-renderer-stub').attributes('content')).toBe('AB')
+    await wrapper.vm.$nextTick()
+    expect(getMdContent()).toBe('AB')
 
     await wrapper.setProps({ message: { ...baseMessage, content: 'ABC', isStreaming: false } })
-    expect(wrapper.get('.msg-content markdown-renderer-stub').attributes('content')).toBe('ABC')
+    await wrapper.vm.$nextTick()
+    expect(getMdContent()).toBe('ABC')
     wrapper.unmount()
   })
 
@@ -209,8 +231,13 @@ describe('GroupMessageItem tool details', () => {
       'chat.arguments',
       'chat.result',
     ])
-    expect(wrapper.get('.tool-detail-reasoning markdown-renderer-stub').attributes('content'))
-      .toBe('I should inspect the group context first.')
+    await wrapper.vm.$nextTick()
+    const { flushPromises: fp2 } = await import('@vue/test-utils')
+    await fp2()
+    await wrapper.vm.$nextTick()
+    const detailStub = wrapper.find('.tool-detail-reasoning .markdown-stub')
+    const detailContent = detailStub.exists() ? detailStub.text() : wrapper.get('.tool-detail-reasoning markdown-renderer-stub').attributes('content')
+    expect(detailContent).toBe('I should inspect the group context first.')
   })
 
   it('keeps plain string false payloads as text', async () => {

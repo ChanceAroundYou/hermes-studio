@@ -29,6 +29,14 @@ vi.mock('@/utils/desktop-browser', () => ({
   openHtmlInDesktopBrowser: previewMocks.openHtmlInDesktopBrowser,
 }))
 
+// `HtmlFilePreview` is a defineAsyncComponent; Vue Test Utils does not reliably
+// apply `global.stubs` to locally-imported async components (the real component
+// resolves instead of the stub). Mock the module directly so the Web-UI iframe
+// path is exercised synchronously without loading the real async component.
+vi.mock('@/components/hermes/files/HtmlFilePreview.vue', () => ({
+  default: { props: ['content'], template: '<iframe :data-content="content" />' },
+}))
+
 import { useFilesStore } from '@/stores/hermes/files'
 import FilePreview from '@/components/hermes/files/FilePreview.vue'
 

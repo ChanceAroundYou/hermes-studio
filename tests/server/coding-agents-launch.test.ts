@@ -3,6 +3,13 @@ import { createCipheriv, randomBytes } from 'crypto'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// config.port is computed once at import time (parseInt(process.env.PORT || '8648')).
+// The host shell exports PORT (hermes-webui.service uses 6060), which would leak
+// into codex-proxy base_url assertions. Pin it BEFORE the service modules load.
+vi.hoisted(() => {
+  process.env.PORT = '8648'
+})
 import { claudeProxyMessages, claudeProxyModels, registerClaudeCodeProxyTarget } from '../../packages/server/src/services/coding-agents/claude-code/proxy'
 import { codexProxyModels, codexProxyResponses, registerCodexProxyTarget } from '../../packages/server/src/services/coding-agents/codex/proxy'
 import {
@@ -31,6 +38,9 @@ function makeHome() {
   homes.push(home)
   process.env.HERMES_WEB_UI_HOME = home
   process.env.HERMES_CODING_AGENT_GLOBAL_HOME = join(home, 'global-home')
+  // Host shell may export PORT (e.g. hermes-webui.service uses 6060); the launch
+  // config must use the default 8648 that these assertions expect.
+  process.env.PORT = '8648'
   return home
 }
 
@@ -42,6 +52,7 @@ afterEach(() => {
   delete process.env.HERMES_WEB_UI_HOME
   delete process.env.HERMES_CODING_AGENT_GLOBAL_HOME
   delete process.env.HERMES_AGENT_NODE
+  delete process.env.PORT
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })

@@ -22,6 +22,7 @@ function createSchema(db: any) {
       id TEXT PRIMARY KEY,
       source TEXT NOT NULL,
       user_id TEXT,
+      profile_name TEXT,
       model TEXT,
       model_config TEXT,
       system_prompt TEXT,

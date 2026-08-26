@@ -765,7 +765,7 @@ describe('ChatRunSocket bridge readiness gating', () => {
 
     expect(sourceAtResume).toBe('workflow')
     expect(ensureReadyMock).not.toHaveBeenCalled()
-    expect(bridgeMock.statusIfLoaded).toHaveBeenCalledWith('session-1', 'default', { timeoutMs: 1000 })
+    expect(bridgeMock.statusIfLoaded).toHaveBeenCalledWith('session-1', 'default', { timeoutMs: 5000 })
     expect(resumeBridgeRunMock).toHaveBeenCalledWith(
       expect.anything(),
       socket,
@@ -811,7 +811,7 @@ describe('ChatRunSocket bridge readiness gating', () => {
     await handlers.get('resume')?.({ session_id: 'session-1' })
 
     expect(ensureReadyMock).not.toHaveBeenCalled()
-    expect(bridgeMock.statusIfLoaded).toHaveBeenCalledWith('session-1', 'default', { timeoutMs: 1000 })
+    expect(bridgeMock.statusIfLoaded).toHaveBeenCalledWith('session-1', 'default', { timeoutMs: 5000 })
     expect(resumeBridgeRunMock).toHaveBeenCalledWith(
       expect.anything(),
       socket,
@@ -861,7 +861,7 @@ describe('ChatRunSocket bridge readiness gating', () => {
     await handlers.get('resume')?.({ session_id: 'session-1' })
 
     expect(ensureReadyMock).not.toHaveBeenCalled()
-    expect(bridgeMock.statusIfLoaded).toHaveBeenCalledWith('session-1', 'default', { timeoutMs: 1000 })
+    expect(bridgeMock.statusIfLoaded).toHaveBeenCalledWith('session-1', 'default', { timeoutMs: 5000 })
     expect(resumeBridgeRunMock).not.toHaveBeenCalled()
     expect(emitted.some(({ event }) => event === 'run.reattach_failed')).toBe(false)
     expect(socket.emit).toHaveBeenCalledWith('resumed', expect.objectContaining({

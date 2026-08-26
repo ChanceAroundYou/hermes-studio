@@ -41,7 +41,10 @@ vi.mock('@/api/hermes/chat', () => ({
   onSessionWorkspaceUpdated: vi.fn(() => vi.fn()),
 }))
 
-vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default' }))
+vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default' ,
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
+}))
 vi.mock('@/api/hermes/download', () => ({ getDownloadUrl: (_path: string, name: string) => `/download/${name}` }))
 vi.mock('@/utils/completion-sound', () => ({ primeCompletionSound: vi.fn(), playCompletionSound: vi.fn() }))
 vi.mock('@/utils/completion-notification', () => ({ showCompletionNotification: vi.fn() }))

@@ -4,6 +4,9 @@ const mockRequest = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/client', () => ({
   request: mockRequest,
+
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
 import { fetchConversationDetail, fetchConversationSummaries } from '@/api/hermes/conversations'

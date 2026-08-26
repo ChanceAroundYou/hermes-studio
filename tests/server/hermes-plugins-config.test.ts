@@ -12,6 +12,11 @@ describe('Hermes plugin configuration', () => {
     vi.resetModules()
     tempDir = mkdtempSync(join(tmpdir(), 'hermes-plugins-config-'))
     process.env = { ...originalEnv }
+    // Host shell exports HERMES_AGENT_ROOT/HERMES_AGENT_BRIDGE_PYTHON pointing at
+    // the real Hermes Agent install; resolveAgentBridgeCommand() would pick the
+    // real venv python instead of the fake hermes fixture below.
+    delete process.env.HERMES_AGENT_ROOT
+    delete process.env.HERMES_AGENT_BRIDGE_PYTHON
     process.env.HERMES_HOME = join(tempDir, 'home')
     installFakeHermes()
   })

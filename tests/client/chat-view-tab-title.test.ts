@@ -55,6 +55,9 @@ vi.mock('@/api/hermes/sessions', () => ({
 
 vi.mock('@/api/client', () => ({
   getActiveProfileName: () => 'default',
+
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
 vi.mock('@/api/hermes/download', () => ({

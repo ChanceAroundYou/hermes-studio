@@ -68,19 +68,21 @@ describe('CopilotLoginModal device-flow state machine', () => {
     })
     mockApi.pollCopilotLogin.mockResolvedValue({ status: 'approved', error: null })
 
-    const wrapper = mountModal()
+    const onSuccess = vi.fn()
+    const wrapper = mount(CopilotLoginModal, { props: { onSuccess } } as any)
     await flushPromises()
 
-    // 推动一次 poll timer
+    // Poll fires at 3000ms; approved triggers 1000ms + 200ms nested timeouts
     await vi.advanceTimersByTimeAsync(3000)
     await flushPromises()
 
     expect(mockMessage.success).toHaveBeenCalledWith('models.copilotApproved')
 
-    // approved 后 1s 自动关闭
-    await vi.advanceTimersByTimeAsync(1500)
+    // approved -> 1000ms close + 200ms emit
+    await vi.advanceTimersByTimeAsync(1300)
     await flushPromises()
-    expect(wrapper.emitted('success')).toBeTruthy()
+    await vi.runAllTimersAsync()
+    expect(onSuccess).toHaveBeenCalled()
   })
 
   it('expired 时进入 expired 状态并显示重试按钮', async () => {

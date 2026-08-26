@@ -33,20 +33,25 @@ vi.mock('naive-ui', async () => {
   }
 })
 
+vi.mock('@/components/hermes/chat/MarkdownRenderer.vue', () => ({
+  default: {
+    name: 'MarkdownRenderer',
+    props: ['content'],
+    template: '<article class="markdown-renderer-stub">{{ content }}</article>',
+  },
+}))
+
 import PendingWriteApprovals from '@/components/hermes/skills/PendingWriteApprovals.vue'
 
-function mountComponent() {
+function mountComponent(onCountChange?: (n: number) => void) {
   return mount(PendingWriteApprovals, {
+    props: onCountChange ? ({ onCountChange } as any) : {},
     global: {
       stubs: {
         NTag: { template: '<span><slot /></span>' },
         NButton: {
           props: ['loading', 'disabled'],
           template: '<button class="n-button" :disabled="disabled || loading" @click="$emit(\'click\')"><slot /></button>',
-        },
-        MarkdownRenderer: {
-          props: ['content'],
-          template: '<article class="markdown-renderer-stub">{{ content }}</article>',
         },
       },
     },
@@ -71,13 +76,14 @@ describe('PendingWriteApprovals', () => {
   })
 
   it('shows an unsupported state for older Hermes Agent versions', async () => {
+    const onCountChange = vi.fn()
     mockFetchPendingWrites.mockResolvedValue({ records: [], counts: { memory: 0, skills: 0 }, supported: false })
 
-    const wrapper = mountComponent()
+    const wrapper = mountComponent(onCountChange)
     await flushPromises()
 
     expect(wrapper.text()).toContain('skills.writeApprovalUnsupported')
-    expect(wrapper.emitted('count-change')?.[0]).toEqual([0])
+    expect(onCountChange).toHaveBeenCalledWith(0)
   })
 
   it('approves and rejects pending write gate records', async () => {

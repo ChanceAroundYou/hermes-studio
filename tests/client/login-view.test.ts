@@ -29,6 +29,9 @@ vi.mock('@/api/client', () => ({
   setApiKey: mockSetApiKey,
   clearApiKey: mockClearApiKey,
   hasApiKey: mockHasApiKey,
+
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
 vi.mock('@/api/auth', () => ({

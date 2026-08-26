@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs'
+// `node:fs` is a stubbed empty module inside the jsdom environment, so the
+// static `import { readFileSync } from 'node:fs'` form resolves to undefined.
+// Vitest exposes CJS `require`, which reaches the real module here.
+const { readFileSync } = require('node:fs')
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockFetch = vi.fn()
@@ -104,7 +107,9 @@ describe('client TTS unified synthesize flow', () => {
         signal: controller.signal,
       },
     )
-    expect(result.audio).toBeInstanceOf(Blob)
+    // jsdom Blob realm differs from Node's Blob — duck-type check instead of instanceof
+    expect(result.audio).toBeTruthy()
+    expect(typeof result.audio.size).toBe('number')
     expect(result.audio.size).toBeGreaterThan(0)
     expect(result.engine).toBe('openai-engine')
     expect(result.provider).toBe('openai')

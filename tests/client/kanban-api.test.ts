@@ -9,6 +9,16 @@ vi.mock('../../packages/client/src/api/client', () => ({
   request: mockRequest,
   getApiKey: mockGetApiKey,
   getBaseUrlValue: mockGetBaseUrlValue,
+
+  wsOrigin: vi.fn(() => {
+    const base = mockGetBaseUrlValue()
+    if (!base) return { host: '', prefix: '' }
+    if (base.startsWith('http')) {
+      const u = new URL(base)
+      return { host: u.host, prefix: u.pathname.replace(/\/$/, '') }
+    }
+    return { host: '', prefix: base.replace(/\/$/, '') }
+  }),
 }))
 
 import {

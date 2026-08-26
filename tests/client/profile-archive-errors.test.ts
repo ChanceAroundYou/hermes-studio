@@ -5,6 +5,8 @@ vi.mock('@/api/client', () => ({
   request: vi.fn(),
   getBaseUrlValue: () => 'http://studio.local',
   getApiKey: () => 'token',
+
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
 import { exportProfile, importProfile } from '@/api/hermes/profiles'

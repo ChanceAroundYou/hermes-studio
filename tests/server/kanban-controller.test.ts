@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockReadFile = vi.hoisted(() => vi.fn())
 const mockListBoards = vi.hoisted(() => vi.fn())
@@ -97,8 +97,13 @@ function ctx(overrides: Record<string, any> = {}) {
 }
 
 describe('kanban controller', () => {
+  const savedHermesHome = process.env.HERMES_HOME
   beforeEach(() => {
     vi.clearAllMocks()
+    // Host shell exports HERMES_HOME (~/.hermes/profiles/<name>) which
+    // detectHermesRootHome() prefers over the mocked os.homedir('/Users/tester'),
+    // breaking attachment path containment checks.
+    delete process.env.HERMES_HOME
     mockListUserProfiles.mockReturnValue([{ profile_name: 'research' }])
     mockGetTask.mockImplementation(async (id: string) => ({
       task: { id, assignee: null, status: 'ready' },
@@ -687,5 +692,9 @@ describe('kanban controller', () => {
     expect(blockCtx.status).toBe(409)
     expect(blockCtx.body).toEqual({ error: 'Cannot block task "task-1" from status "todo"' })
     expect(mockBlockTask).not.toHaveBeenCalled()
+  })
+
+  afterEach(() => {
+    if (savedHermesHome !== undefined) process.env.HERMES_HOME = savedHermesHome
   })
 })

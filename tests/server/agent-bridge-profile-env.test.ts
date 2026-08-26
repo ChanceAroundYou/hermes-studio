@@ -26,6 +26,11 @@ async function runBridgeProbe(script: string): Promise<any> {
       ...process.env,
       BRIDGE_PATH: bridgePath,
       TEST_HERMES_HOME: tempDir,
+      // Host shell runs inside a hermes-agent bridge worker; without clearing
+      // these the probe's _profile_env() short-circuits and profile .env
+      // overlays never apply.
+      HERMES_AGENT_BRIDGE_WORKER_PROFILE: '',
+      HERMES_AGENT_BRIDGE_ENDPOINT: '',
     },
     maxBuffer: 1024 * 1024,
   })

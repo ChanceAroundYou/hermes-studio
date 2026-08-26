@@ -58,6 +58,8 @@ vi.mock('@/api/client', () => ({
   getBaseUrlValue: vi.fn(() => ''),
   getActiveProfileName: vi.fn(() => 'default'),
   getStoredUsername: vi.fn(() => null),
+
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 vi.mock('@/api/auth', () => ({ fetchCurrentUser: vi.fn(async () => { throw new Error('no user') }) }))
 vi.mock('@/api/hermes/download', () => ({ getDownloadUrl: vi.fn((path: string) => `/download?path=${path}`) }))

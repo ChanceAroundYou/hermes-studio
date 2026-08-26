@@ -54,8 +54,9 @@ describe('FilesPanel workspace attachments', () => {
 
   it('loads a session workspace file and emits it as a browser File', async () => {
     fetchSessionAttachment.mockResolvedValue(new Blob(['hello'], { type: 'application/pdf' }))
+    const onAttach = vi.fn()
     const wrapper = mount(FilesPanel, {
-      props: { workspaceSessionId: 'session-1', workspace: '/tmp/workspace' },
+      props: { workspaceSessionId: 'session-1', workspace: '/tmp/workspace', onAttach } as any,
       global: { plugins: [createTestingPinia({ createSpy: vi.fn })] },
     })
 
@@ -63,15 +64,17 @@ describe('FilesPanel workspace attachments', () => {
     await flushPromises()
 
     expect(fetchSessionAttachment).toHaveBeenCalledWith('session-1', 'reports/report.pdf')
-    const file = wrapper.emitted<File[]>('attach')?.[0]?.[0]
+    expect(onAttach).toHaveBeenCalledTimes(1)
+    const file = onAttach.mock.calls[0][0] as File
     expect(file).toBeInstanceOf(File)
     expect(file).toMatchObject({ name: 'report.pdf', type: 'application/pdf', size: 5 })
   })
 
   it('loads a group workspace file from the room endpoint', async () => {
     fetchGroupAttachment.mockResolvedValue(new Blob(['hello'], { type: 'text/plain' }))
+    const onAttach = vi.fn()
     const wrapper = mount(FilesPanel, {
-      props: { workspaceRoomId: 'room-1', workspace: '/tmp/room' },
+      props: { workspaceRoomId: 'room-1', workspace: '/tmp/room', onAttach } as any,
       global: { plugins: [createTestingPinia({ createSpy: vi.fn })] },
     })
 
@@ -79,6 +82,6 @@ describe('FilesPanel workspace attachments', () => {
     await flushPromises()
 
     expect(fetchGroupAttachment).toHaveBeenCalledWith('room-1', 'reports/report.pdf')
-    expect(wrapper.emitted('attach')).toHaveLength(1)
+    expect(onAttach).toHaveBeenCalledTimes(1)
   })
 })

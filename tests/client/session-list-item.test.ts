@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
+// `node:fs` is a stubbed empty module inside the jsdom environment, so the
+// static `import { readFileSync } from 'node:fs'` form resolves to undefined.
+// Vitest exposes CJS `require`, which reaches the real module here.
+const { readFileSync } = require('node:fs')
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
-import { readFileSync } from 'fs'
 import SessionListItem from '@/components/hermes/chat/SessionListItem.vue'
 
 vi.mock('@/stores/hermes/app', () => ({
@@ -146,6 +149,8 @@ describe('SessionListItem', () => {
   })
 
   it('routes modified clicks through the desktop window handler when requested', async () => {
+    const openNewMock = vi.fn()
+    const selectMock = vi.fn()
     const wrapper = mount(SessionListItem, {
       props: {
         session,
@@ -154,6 +159,8 @@ describe('SessionListItem', () => {
         canDelete: true,
         to: '/session/s1',
         interceptModifiedNavigation: true,
+        onOpenNew: openNewMock,
+        onSelect: selectMock,
       },
       global: {
         stubs: {
@@ -164,8 +171,9 @@ describe('SessionListItem', () => {
 
     await wrapper.get('a.session-item').trigger('click', { ctrlKey: true })
 
-    expect(wrapper.emitted('open-new')).toHaveLength(1)
-    expect(wrapper.emitted('select')).toBeUndefined()
+    // VTU's wrapper.emitted() is flaky here; assert via the prop callbacks
+    expect(openNewMock).toHaveBeenCalledTimes(1)
+    expect(selectMock).not.toHaveBeenCalled()
   })
 
   it('renders the Hermes logo for Hermes sessions', () => {

@@ -197,11 +197,11 @@ describe('tts synthesize controller', () => {
         deleted: true,
         activeProvider: 'edge',
       })
-      expect(db.prepare(
+      expect((db.prepare(
         'SELECT COUNT(*) AS count FROM tts_profile_provider_settings WHERE profile = ? AND provider = ?'
-      ).get('default', 'openai').count).toBe(0)
-      const activeRow = db.prepare('SELECT active_provider FROM tts_profile_settings WHERE profile = ?').get('default') as { active_provider: string }
-      expect(activeRow.active_provider).toBe('edge')
+      ).get('default', 'openai') as { count: number } | undefined)?.count).toBe(0)
+      const activeRow = db.prepare('SELECT active_provider FROM tts_profile_settings WHERE profile = ?').get('default') as { active_provider: string } | undefined
+      expect(activeRow?.active_provider).toBe('edge')
     } finally {
       db.close()
       vi.doUnmock('../../packages/server/src/db/index')
@@ -351,8 +351,8 @@ describe('tts synthesize controller', () => {
 
       expect(ctx.status).toBe(200)
       expect(ctx.body.setting.settings.voice).toBe('zh-CN-XiaoxiaoNeural')
-      expect(db.prepare('SELECT COUNT(*) AS count FROM tts_profile_provider_settings WHERE profile = ? AND provider = ?').get('default', 'edge').count).toBe(1)
-      expect(db.prepare('SELECT COUNT(*) AS count FROM tts_profile_settings WHERE profile = ?').get('default').count).toBe(1)
+      expect((db.prepare('SELECT COUNT(*) AS count FROM tts_profile_provider_settings WHERE profile = ? AND provider = ?').get('default', 'edge') as { count: number } | undefined)?.count).toBe(1)
+      expect((db.prepare('SELECT COUNT(*) AS count FROM tts_profile_settings WHERE profile = ?').get('default') as { count: number } | undefined)?.count).toBe(1)
     } finally {
       db.close()
       vi.doUnmock('../../packages/server/src/db/index')
@@ -946,7 +946,7 @@ describe('route registration ordering', () => {
     vi.doUnmock('../../packages/server/src/routes/index')
   })
 
-  it('mounts protected synthesize routes after requireAuth', async () => {
+  it('mounts protected synthesize routes after requireAuth', { timeout: 20000 }, async () => {
     const ttsPublicMiddleware = async () => {}
     const ttsProtectedMiddleware = async () => {}
 

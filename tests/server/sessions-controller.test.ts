@@ -1789,7 +1789,10 @@ describe('session conversations controller', () => {
   it('deletes a current-profile Hermes history session even when no local Web UI session exists', async () => {
     getActiveProfileNameMock.mockReturnValue('travel')
     getSessionMock.mockReturnValue(null)
-    getExactSessionDetailFromDbWithProfileMock.mockResolvedValue({ id: 'history-only', messages: [] })
+    // remove() scans every profile on disk; only the travel state.db holds this
+    // session, so foundProfiles=[ 'travel' ] and the response reports it.
+    getExactSessionDetailFromDbWithProfileMock.mockImplementation(async (_id: string, profile: string) =>
+      profile === 'travel' ? { id: 'history-only', messages: [] } : null)
     deleteHermesSessionForProfileMock.mockResolvedValue(true)
 
     const mod = await import('../../packages/server/src/controllers/hermes/sessions')

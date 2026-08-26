@@ -410,10 +410,15 @@ describe('ChatInput draft persistence', () => {
     const textarea = wrapper.get('textarea')
 
     await textarea.setValue('/')
+    await textarea.trigger('input')
     await nextTick()
     expect(wrapper.findAll('.slash-command-item').length).toBeGreaterThan(0)
 
     await textarea.setValue('/ter')
+    await textarea.trigger('input')
+    await nextTick()
+    // Filtering is reactive; DOM settles on next tick after slashQuery update
+    await new Promise((r) => setTimeout(r, 80))
     await nextTick()
 
     expect(wrapper.find('.slash-command-dropdown').exists()).toBe(false)

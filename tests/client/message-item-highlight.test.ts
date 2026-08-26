@@ -19,6 +19,11 @@ vi.mock('vue-i18n', () => ({
   }),
 }))
 
+vi.mock('@/components/hermes/chat/MarkdownRenderer.vue', () => {
+  const { defineComponent: dc } = require('vue')
+  return { default: dc({ props: ['content'], template: '<div class="markdown-stub">{{ content }}</div>' }) }
+})
+
 vi.mock('naive-ui', () => ({
   NButton: { template: '<button><slot /></button>' },
   NDrawer: { template: '<div><slot /></div>' },
@@ -132,6 +137,11 @@ describe('MessageItem tool details', () => {
     })
 
     await wrapper.find('.tool-line').trigger('click')
+    await wrapper.vm.$nextTick()
+    // MarkdownRenderer is async — flush its resolved render
+    const { flushPromises } = await import('@vue/test-utils')
+    await flushPromises()
+    await wrapper.vm.$nextTick()
 
     const sections = wrapper.findAll('.tool-details .tool-detail-section')
     expect(sections).toHaveLength(3)
@@ -140,9 +150,10 @@ describe('MessageItem tool details', () => {
       'chat.arguments',
       'chat.result',
     ])
-    expect(wrapper.get('.tool-detail-reasoning').text()).toContain(
-      'I should search for the current answer.',
-    )
+    // With vi.mock'd MarkdownRenderer the content lives in .markdown-stub (not plain text fallback)
+    const reasoningStub = wrapper.find('.tool-detail-reasoning .markdown-stub')
+    const reasoningText = reasoningStub.exists() ? reasoningStub.text() : wrapper.get('.tool-detail-reasoning').text()
+    expect(reasoningText).toContain('I should search for the current answer.')
     const blocks = wrapper.findAll('.tool-details .hljs-code-block')
     expect(blocks).toHaveLength(2)
     expect(blocks[0].find('.code-lang').text()).toBe('json')

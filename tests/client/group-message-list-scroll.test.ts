@@ -26,6 +26,9 @@ vi.mock('@/api/client', () => ({
   getActiveProfileName: vi.fn(() => 'default'),
   getApiKey: vi.fn(() => 'test-token'),
   getStoredUsername: vi.fn(() => null),
+
+  getBaseUrlValue: vi.fn(() => ''),
+  wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
 vi.mock('@/api/auth', () => ({
