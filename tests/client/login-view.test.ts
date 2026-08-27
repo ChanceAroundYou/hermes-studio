@@ -34,7 +34,7 @@ vi.mock('@/api/client', () => ({
   wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
-vi.mock('@/api/auth', () => ({
+vi.mock('@/api/studio/auth', () => ({
   fetchAuthStatus: mockFetchAuthStatus,
   loginWithPassword: mockLoginWithPassword,
 }))

@@ -13,16 +13,13 @@ async function loadAuth(overrides: Partial<FsMocks> & { home?: string } = {}) {
   const mkdir = overrides.mkdir ?? vi.fn()
   const home = overrides.home ?? '/tmp/hermes-home'
 
-  // Isolate from host env: host has HERMES_WEBUI_STATE_DIR=/home/xiaokubao/.hermes/hermes-web-ui
-  // which getWebUiHome() prefers over homedir. Force it to the test temp dir so
-  // lazy getWebUiHome() returns join(home,'.hermes-web-ui').
-  process.env.HERMES_WEB_UI_HOME = join(home, '.hermes-web-ui')
+  delete process.env.HERMES_WEB_UI_HOME
   delete process.env.HERMES_WEBUI_STATE_DIR
   vi.resetModules()
   vi.doMock('fs/promises', () => ({ readFile, writeFile, mkdir }))
   vi.doMock('os', () => ({ homedir: () => home }))
 
-  const mod = await import('../../packages/server/src/services/auth')
+  const mod = await import('../../packages/server/src/modules/studio/services/auth/token-auth')
   return {
     ...mod,
     mocks: { readFile, writeFile, mkdir },
@@ -47,6 +44,7 @@ describe('Auth Service', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv }
+    delete process.env.AUTH_TOKEN
     vi.clearAllMocks()
   })
 
@@ -133,10 +131,10 @@ describe('Auth Service', () => {
       expect(ctx.status).toBe(200)
     })
 
-    it('requires auth for /upload', async () => {
+    it('requires auth for Studio uploads', async () => {
       const { requireAuth } = await loadAuth()
       const middleware = requireAuth('secret')
-      const ctx = createMockCtx('/upload')
+      const ctx = createMockCtx('/api/studio/uploads')
       const next = vi.fn(async () => {})
 
       await middleware(ctx, next)
@@ -149,7 +147,7 @@ describe('Auth Service', () => {
     it('rejects request without auth header for protected API routes', async () => {
       const { requireAuth } = await loadAuth()
       const middleware = requireAuth('secret')
-      const ctx = createMockCtx('/api/hermes/sessions')
+      const ctx = createMockCtx('/api/studio/sessions')
       const next = vi.fn(async () => {})
 
       await middleware(ctx, next)
@@ -161,7 +159,7 @@ describe('Auth Service', () => {
     it('rejects request with the wrong bearer token', async () => {
       const { requireAuth } = await loadAuth()
       const middleware = requireAuth('secret')
-      const ctx = createMockCtx('/api/hermes/sessions', { authorization: 'Bearer wrong' })
+      const ctx = createMockCtx('/api/studio/sessions', { authorization: 'Bearer wrong' })
       const next = vi.fn(async () => {})
 
       await middleware(ctx, next)
@@ -173,7 +171,7 @@ describe('Auth Service', () => {
     it('allows request with the correct bearer token', async () => {
       const { requireAuth } = await loadAuth()
       const middleware = requireAuth('secret')
-      const ctx = createMockCtx('/api/hermes/sessions', { authorization: 'Bearer secret' })
+      const ctx = createMockCtx('/api/studio/sessions', { authorization: 'Bearer secret' })
       const next = vi.fn(async () => {})
 
       await middleware(ctx, next)
@@ -184,7 +182,7 @@ describe('Auth Service', () => {
     it('allows request with the correct query token', async () => {
       const { requireAuth } = await loadAuth()
       const middleware = requireAuth('secret')
-      const ctx = createMockCtx('/api/hermes/sessions', {}, { token: 'secret' })
+      const ctx = createMockCtx('/api/studio/sessions', {}, { token: 'secret' })
       const next = vi.fn(async () => {})
 
       await middleware(ctx, next)
@@ -195,7 +193,7 @@ describe('Auth Service', () => {
     it('returns 401 JSON on auth failure', async () => {
       const { requireAuth } = await loadAuth()
       const middleware = requireAuth('secret')
-      const ctx = createMockCtx('/api/hermes/sessions', { authorization: 'Bearer wrong' })
+      const ctx = createMockCtx('/api/studio/sessions', { authorization: 'Bearer wrong' })
       const next = vi.fn(async () => {})
 
       await middleware(ctx, next)

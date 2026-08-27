@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // `node:fs` is a stubbed empty module inside the jsdom environment, so the
-// static `import { readFileSync } from 'node:fs'` form resolves to undefined.
+// static `import { readFileSync } from 'fs'` form resolves to undefined.
 // Vitest exposes CJS `require`, which reaches the real module here.
 const { readFileSync } = require('node:fs')
 import { describe, expect, it, vi } from 'vitest'

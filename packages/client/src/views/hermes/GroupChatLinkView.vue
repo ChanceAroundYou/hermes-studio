@@ -26,7 +26,12 @@ import {
   updateLocalGroupAgent,
   type LocalGroupAgentConnection,
   type RemoteGroupAgentDescriptor,
-} from '@/api/hermes/group-chat-agent-link'
+} from '@/api/studio/group-chat-agent-link'
+import {
+  fetchAgentStatusSnapshot,
+  isAgentStatusAvailable,
+  type AgentStatusSnapshot,
+} from '@/api/agent-status'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -34,6 +39,7 @@ const appStore = useAppStore()
 const profilesStore = useProfilesStore()
 const profileAgents = ref<RemoteGroupAgentDescriptor[]>([])
 const connections = ref<LocalGroupAgentConnection[]>([])
+const agentStatusSnapshot = ref<AgentStatusSnapshot | null>(null)
 type GroupAgentType = RemoteGroupAgentDescriptor['agent']
 const selectedAgentType = ref<GroupAgentType>('hermes')
 const selectedProfile = ref('')
@@ -91,13 +97,24 @@ const hasServerHandoff = computed(() => (
   && !!handoffRequestSecret.value
   && !!handoffPairingTicket.value
 ))
-const groupAgentTypeOptions = computed<Array<{ label: string; value: GroupAgentType }>>(() => [
+const groupAgentTypeDefinitions: Array<{ label: string; value: GroupAgentType }> = [
   { label: 'Hermes', value: 'hermes' },
   { label: 'Ekko', value: 'ekko' },
   { label: 'Claude', value: 'claude' },
   { label: 'Codex', value: 'codex' },
   { label: 'Pi', value: 'pi' },
-])
+]
+const groupAgentTypeOptions = computed(() => groupAgentTypeDefinitions.map((option) => {
+  const disabled = !isAgentStatusAvailable(agentStatusSnapshot.value, option.value)
+  return {
+    ...option,
+    disabled,
+    label: disabled ? `${option.label} · ${t('codingAgents.notInstalled')}` : option.label,
+  }
+}))
+const firstAvailableGroupAgentType = computed<GroupAgentType | null>(() =>
+  groupAgentTypeOptions.value.find(option => !option.disabled)?.value || null,
+)
 const profileOptions = computed(() => profileAgents.value.map(agent => ({
   label: agent.profile,
   value: agent.profile,
@@ -165,6 +182,7 @@ const agentAvatarPreview = computed(() => (
   agentAvatar.value || defaultGroupAgentAvatar(selectedAgentType.value)
 ))
 const selectedAgent = computed<RemoteGroupAgentDescriptor | null>(() => {
+  if (!isAgentStatusAvailable(agentStatusSnapshot.value, selectedAgentType.value)) return null
   if (!selectedProfile.value || !selectedAgentProvider.value || !selectedAgentModel.value) return null
   return {
     agent: selectedAgentType.value,
@@ -247,10 +265,17 @@ function syncAgentModelSelection(profile: string): void {
   const defaults = getDefaultAgentModel(profile)
   selectedAgentProvider.value = defaults.provider
   selectedAgentModel.value = defaults.model
+  selectedAgentReasoningEffort.value = ''
   syncAgentApiMode()
 }
 
 function handleAgentTypeChange(agent: GroupAgentType): void {
+  if (!isAgentStatusAvailable(agentStatusSnapshot.value, agent)) {
+    const name = groupAgentTypeDefinitions.find(option => option.value === agent)?.label || agent
+    error.value = t('codingAgents.installRequired', { agent: name })
+    return
+  }
+  error.value = ''
   selectedAgentType.value = agent
   syncAgentModelSelection(selectedProfile.value)
 }
@@ -263,7 +288,13 @@ function handleAgentProfileChange(profile: string): void {
 function handleAgentProviderChange(provider: string): void {
   selectedAgentProvider.value = provider
   selectedAgentModel.value = agentModelOptions.value[0]?.value || ''
+  selectedAgentReasoningEffort.value = ''
   syncAgentApiMode()
+}
+
+function handleAgentModelChange(model: string): void {
+  selectedAgentModel.value = model
+  selectedAgentReasoningEffort.value = ''
 }
 
 function applyAgentConfiguration(agent: RemoteGroupAgentDescriptor): void {
@@ -515,14 +546,16 @@ onMounted(async () => {
   window.addEventListener('message', handleParentMessage)
   scheduleParentHandshake()
   try {
-    const [localAgents, localConnections] = await Promise.all([
+    const [localAgents, localConnections, , , agentStatus] = await Promise.all([
       listLocalGroupAgents(),
       listLocalGroupAgentConnections(),
       profilesStore.fetchProfiles(),
       appStore.loadModels(),
+      fetchAgentStatusSnapshot(),
     ])
     profileAgents.value = localAgents.agents
     connections.value = localConnections.connections
+    agentStatusSnapshot.value = agentStatus
     if (editingMode.value) {
       const connection = editingConnection.value
       if (!connection) {
@@ -531,6 +564,7 @@ onMounted(async () => {
         applyAgentConfiguration(connection.agent)
       }
     } else {
+      selectedAgentType.value = firstAvailableGroupAgentType.value || 'hermes'
       selectedProfile.value =
         profilesStore.activeProfileName
         || profilesStore.profiles.find(profile => profile.active)?.name
@@ -640,11 +674,12 @@ onUnmounted(() => {
           <div class="field">
             <label>{{ t('models.models') }}</label>
             <NSelect
-              v-model:value="selectedAgentModel"
+              :value="selectedAgentModel"
               :options="agentModelOptions"
               :placeholder="t('models.selectModel')"
               :disabled="waitingForApproval || !selectedAgentProvider"
               filterable
+              @update:value="handleAgentModelChange"
             />
           </div>
           <div v-if="selectedAgentType !== 'hermes'" class="field">

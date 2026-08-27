@@ -79,7 +79,7 @@ describe('client TTS unified synthesize flow', () => {
       },
     }))
 
-    const { synthesizeSpeech } = await import('../../packages/client/src/api/hermes/tts')
+    const { synthesizeSpeech } = await import('../../packages/client/src/api/studio/tts')
     const controller = new AbortController()
 
     const result = await synthesizeSpeech({
@@ -91,7 +91,7 @@ describe('client TTS unified synthesize flow', () => {
 
     expect(mockFetch).toHaveBeenCalledOnce()
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://hermes.example/api/hermes/tts/synthesize',
+      'https://hermes.example/api/studio/tts/synthesize',
       {
         method: 'POST',
         headers: {
@@ -126,7 +126,7 @@ describe('client TTS unified synthesize flow', () => {
       },
     }))
 
-    const { synthesizeSpeech } = await import('../../packages/client/src/api/hermes/tts')
+    const { synthesizeSpeech } = await import('../../packages/client/src/api/studio/tts')
     await synthesizeSpeech({
       profile: 'group-agent-profile',
       text: 'Profile-owned voice',
@@ -242,7 +242,7 @@ describe('client TTS unified synthesize flow', () => {
 
     expect(mockFetch).toHaveBeenCalledOnce()
     const [url, options] = mockFetch.mock.calls[0]
-    expect(url).toBe('https://hermes.example/api/hermes/tts/synthesize')
+    expect(url).toBe('https://hermes.example/api/studio/tts/synthesize')
     expect(url).not.toContain('/audio/speech')
     expect(JSON.parse(options.body)).toEqual({
       provider: 'openai',
@@ -281,7 +281,7 @@ describe('client TTS unified synthesize flow', () => {
 
     expect(mockFetch).toHaveBeenCalledOnce()
     const [url, options] = mockFetch.mock.calls[0]
-    expect(url).toBe('https://hermes.example/api/hermes/tts/synthesize')
+    expect(url).toBe('https://hermes.example/api/studio/tts/synthesize')
     expect(url).not.toContain('/chat/completions')
     expect(JSON.parse(options.body)).toEqual({
       provider: 'mimo',

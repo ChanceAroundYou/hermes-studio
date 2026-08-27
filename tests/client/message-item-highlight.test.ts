@@ -67,6 +67,50 @@ describe('MessageItem tool details', () => {
     })
   })
 
+  it('renders the profile name and avatar above a user message', () => {
+    const avatar = {
+      type: 'image' as const,
+      dataUrl: 'data:image/png;base64,cHJvZmlsZQ==',
+    }
+    const wrapper = mount(MessageItem, {
+      props: {
+        message: {
+          id: 'user-profile-identity',
+          role: 'user',
+          content: 'Hello',
+          timestamp: Date.now(),
+        } satisfies Message,
+        userProfileName: 'Researcher',
+        userProfileAvatar: avatar,
+      },
+      global: { stubs: { MarkdownRenderer: true } },
+    })
+
+    expect(wrapper.get('.user-message-author .message-author-name').text()).toBe('Researcher')
+    expect(wrapper.get('.user-profile-avatar .profile-avatar-image').attributes('src')).toBe(avatar.dataUrl)
+  })
+
+  it('renders the agent name and avatar above an assistant message', () => {
+    const wrapper = mount(MessageItem, {
+      props: {
+        message: {
+          id: 'assistant-agent-identity',
+          role: 'assistant',
+          content: 'Hello',
+          timestamp: Date.now(),
+        } satisfies Message,
+        assistantAgent: {
+          label: 'Ekko',
+          src: '/coding-agents/ekko-agent.png',
+        },
+      },
+      global: { stubs: { MarkdownRenderer: true } },
+    })
+
+    expect(wrapper.get('.assistant-message-author .message-author-name').text()).toBe('Ekko')
+    expect(wrapper.get('.assistant-message-author .msg-avatar').attributes('src')).toBe('/coding-agents/ekko-agent.png')
+  })
+
   it('selects a completed user or assistant message as the next-turn reference', async () => {
     const chatStore = useChatStore()
     chatStore.activeSessionId = 'session-1'
@@ -136,6 +180,7 @@ describe('MessageItem tool details', () => {
       },
     })
 
+    expect(wrapper.get('.tool-success-icon').attributes('aria-label')).toBe('subagent.completed')
     await wrapper.find('.tool-line').trigger('click')
     await wrapper.vm.$nextTick()
     // MarkdownRenderer is async — flush its resolved render
@@ -143,6 +188,7 @@ describe('MessageItem tool details', () => {
     await flushPromises()
     await wrapper.vm.$nextTick()
 
+    expect(wrapper.find('.tool-details-expand').exists()).toBe(true)
     const sections = wrapper.findAll('.tool-details .tool-detail-section')
     expect(sections).toHaveLength(3)
     expect(sections.map(section => section.find('.tool-detail-label').text())).toEqual([
@@ -158,6 +204,25 @@ describe('MessageItem tool details', () => {
     expect(blocks).toHaveLength(2)
     expect(blocks[0].find('.code-lang').text()).toBe('json')
     expect(blocks[1].find('.code-lang').text()).toBe('json')
+  })
+
+  it('shows a failure status icon for an errored tool', () => {
+    const wrapper = mount(MessageItem, {
+      props: {
+        message: {
+          id: 'tool-error',
+          role: 'tool',
+          content: '',
+          timestamp: Date.now(),
+          toolName: 'shell_exec',
+          toolStatus: 'error',
+        } satisfies Message,
+      },
+      global: { stubs: { MarkdownRenderer: true } },
+    })
+
+    expect(wrapper.get('.tool-error-badge').attributes('aria-label')).toBe('subagent.failed')
+    expect(wrapper.find('.tool-success-icon').exists()).toBe(false)
   })
 
   it('renders patch tool results with diff highlighting instead of plain text', async () => {

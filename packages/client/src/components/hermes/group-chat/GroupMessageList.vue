@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getBaseUrlValue } from '@/api/client'
 import { groupAgentRunMessages, useGroupChatStore } from '@/stores/hermes/group-chat'
-import type { RoomAgentHandoffChain } from '@/api/hermes/group-chat'
+import type { RoomAgentHandoffChain } from '@/api/studio/group-chat'
 import { handoffErrorTranslationKey, isPresentableHandoffChain } from './handoff-presentation'
 import { useToolTraceVisibility } from '@/composables/useToolTraceVisibility'
 import GroupMessageItem from './GroupMessageItem.vue'
@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<{
     canManageHandoff: false,
 })
 const emit = defineEmits<{
-    mentionAgent: [agent: import('@/api/hermes/group-chat').RoomAgent]
+    mentionAgent: [agent: import('@/api/studio/group-chat').RoomAgent]
     continueHandoff: [chainId: string]
     adjustHandoffSettings: []
 }>()
@@ -59,12 +59,12 @@ function scrollToBottom(options?: BottomScrollOptions): void {
     showScrollBottomButton.value = false
 }
 
-function containsSummaryAnchor(message: import('@/api/hermes/group-chat').ChatMessage): boolean {
+function containsSummaryAnchor(message: import('@/api/studio/group-chat').ChatMessage): boolean {
     const anchorId = summaryAnchorMessageId.value
     return !!anchorId && (message.runItems || [message]).some(item => item.id === anchorId)
 }
 
-function handoffChainFor(message: import('@/api/hermes/group-chat').ChatMessage): RoomAgentHandoffChain | null {
+function handoffChainFor(message: import('@/api/studio/group-chat').ChatMessage): RoomAgentHandoffChain | null {
     const messageIds = new Set((message.runItems || [message]).map(item => item.id))
     return [...store.handoffChains.values()].find(chain =>
         isPresentableHandoffChain(chain) && messageIds.has(chain.sourceMessageId)
@@ -80,7 +80,7 @@ function handoffErrorText(error: string | null | undefined): string {
     return key ? t(key) : ''
 }
 
-function isOtherMemberMessage(message: import('@/api/hermes/group-chat').ChatMessage): boolean {
+function isOtherMemberMessage(message: import('@/api/studio/group-chat').ChatMessage): boolean {
     if (!store.userId || message.senderId === store.userId) return false
     return store.members.some(member =>
         member.userId === message.senderId ||
@@ -88,7 +88,7 @@ function isOtherMemberMessage(message: import('@/api/hermes/group-chat').ChatMes
     )
 }
 
-function stableMessageAgentId(message: import('@/api/hermes/group-chat').ChatMessage): string {
+function stableMessageAgentId(message: import('@/api/studio/group-chat').ChatMessage): string {
     if (message.senderAgentRecordId) return message.senderAgentRecordId
     return store.messageAgents.find(agent => agent.agentId === message.senderId)?.id
         || message.senderId

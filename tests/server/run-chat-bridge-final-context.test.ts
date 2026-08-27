@@ -52,11 +52,11 @@ const startWorkspaceRunCheckpointMock = vi.fn()
 const completeWorkspaceRunCheckpointMock = vi.fn()
 const homes: string[] = []
 
-vi.mock('../../packages/server/src/lib/llm-prompt', () => ({
+vi.mock('../../packages/server/src/modules/studio/public/runs/prompt', () => ({
   getSystemPrompt: getSystemPromptMock,
 }))
 
-vi.mock('../../packages/server/src/db/hermes/session-store', () => ({
+vi.mock('../../packages/server/src/modules/studio/repositories/session-store', () => ({
   getSession: getSessionMock,
   createSession: createSessionMock,
   addMessage: addMessageMock,
@@ -64,16 +64,16 @@ vi.mock('../../packages/server/src/db/hermes/session-store', () => ({
   updateSessionStats: updateSessionStatsMock,
 }))
 
-vi.mock('../../packages/server/src/db/hermes/usage-store', () => ({
+vi.mock('../../packages/server/src/modules/studio/repositories/usage-store', () => ({
   updateUsage: updateUsageMock,
 }))
 
-vi.mock('../../packages/server/src/services/logger', () => ({
+vi.mock('../../packages/server/src/modules/studio/public/logging', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   bridgeLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
 
-vi.mock('../../packages/server/src/services/hermes/run-chat/compression', () => ({
+vi.mock('../../packages/server/src/modules/studio/services/chat-run/compression', () => ({
   buildCompressedHistory: buildCompressedHistoryMock,
   buildDbHistory: buildDbHistoryMock,
   buildSnapshotAwareHistory: buildSnapshotAwareHistoryMock,
@@ -83,7 +83,7 @@ vi.mock('../../packages/server/src/services/hermes/run-chat/compression', () => 
   forceCompressBridgeHistory: forceCompressBridgeHistoryMock,
 }))
 
-vi.mock('../../packages/server/src/services/hermes/run-chat/usage', () => ({
+vi.mock('../../packages/server/src/modules/studio/services/chat-run/usage', () => ({
   calcAndUpdateUsage: calcAndUpdateUsageMock,
   estimateUsageTokensFromMessages: estimateUsageTokensFromMessagesMock,
   getCachedBridgeContextOverhead: getCachedBridgeContextOverheadMock,
@@ -92,7 +92,7 @@ vi.mock('../../packages/server/src/services/hermes/run-chat/usage', () => ({
   updateMessageContextTokenUsage: updateMessageContextTokenUsageMock,
 }))
 
-vi.mock('../../packages/server/src/services/hermes/run-chat/bridge-message', () => ({
+vi.mock('../../packages/server/src/modules/studio/services/chat-run/bridge-message', () => ({
   flushBridgePendingToDb: flushBridgePendingToDbMock,
   ensureOpenBridgeAssistantMessage: ensureOpenBridgeAssistantMessageMock,
   syncBridgeReasoningToMessage: syncBridgeReasoningToMessageMock,
@@ -101,20 +101,20 @@ vi.mock('../../packages/server/src/services/hermes/run-chat/bridge-message', () 
   recordBridgeMoaDisplayTool: recordBridgeMoaDisplayToolMock,
 }))
 
-vi.mock('../../packages/server/src/services/hermes/run-chat/model-config', () => ({
+vi.mock('../../packages/server/src/modules/studio/services/chat-run/model-config', () => ({
   resolveBridgeRunModelConfig: resolveBridgeRunModelConfigMock,
 }))
 
-vi.mock('../../packages/server/src/services/hermes/run-chat/workspace-diff-tracker', () => ({
+vi.mock('../../packages/server/src/modules/studio/services/chat-run/workspace-diff-tracker', () => ({
   startWorkspaceRunCheckpoint: startWorkspaceRunCheckpointMock,
   completeWorkspaceRunCheckpoint: completeWorkspaceRunCheckpointMock,
 }))
 
-vi.mock('../../packages/server/src/services/hermes/hermes-profile', () => ({
+vi.mock('../../packages/server/src/modules/studio/public/profile-config', () => ({
   getProfileDir: (profile: string) => `/tmp/hermes-bridge-final-context/${profile || 'default'}`,
 }))
 
-vi.mock('../../packages/server/src/middleware/user-auth', () => ({
+vi.mock('../../packages/server/src/modules/studio/public/auth', () => ({
   issueModelRunJwt: issueModelRunJwtMock,
 }))
 
@@ -235,7 +235,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -296,7 +296,7 @@ describe('bridge run final context usage', () => {
     } as any
 
     const composed = 'system prompt\nAGENT SOUL'
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -335,7 +335,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -412,7 +412,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -511,7 +511,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -592,7 +592,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -654,7 +654,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -704,7 +704,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -766,7 +766,7 @@ describe('bridge run final context usage', () => {
       goalEvaluate,
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -813,7 +813,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -860,7 +860,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -902,7 +902,7 @@ describe('bridge run final context usage', () => {
 
     getSessionMock.mockReturnValue(undefined)
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -966,7 +966,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1024,7 +1024,7 @@ describe('bridge run final context usage', () => {
         }),
       } as any
 
-      const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+      const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
       await handleBridgeRun(
         nsp,
         socket,
@@ -1089,7 +1089,7 @@ describe('bridge run final context usage', () => {
         }),
       } as any
 
-      const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+      const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
       await handleBridgeRun(
         nsp,
         socket,
@@ -1150,7 +1150,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1226,7 +1226,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1274,7 +1274,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1342,7 +1342,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1415,7 +1415,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1497,7 +1497,7 @@ describe('bridge run final context usage', () => {
         }),
       } as any
 
-      const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+      const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
       await handleBridgeRun(
         nsp,
         socket,
@@ -1560,7 +1560,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1624,7 +1624,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1686,7 +1686,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1747,7 +1747,7 @@ describe('bridge run final context usage', () => {
       streamOutput: vi.fn(),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1801,7 +1801,7 @@ describe('bridge run final context usage', () => {
       }),
     } as any
 
-    const { handleBridgeRun } = await import('../../packages/server/src/services/hermes/run-chat/handle-bridge-run')
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
     await handleBridgeRun(
       nsp,
       socket,
@@ -1823,6 +1823,204 @@ describe('bridge run final context usage', () => {
       event: 'agent.event',
       kind: 'lifecycle',
       text: 'Retrying in 3.0s (attempt 1/3)...',
+    }))
+  })
+
+  it('captures the Hermes parent history for background callbacks in process memory', async () => {
+    const emit = vi.fn()
+    const nsp = makeNamespace(emit)
+    const socket = makeSocket()
+    const state = makeState()
+    const sessionMap = new Map([['session-1', state]])
+    recordBridgeToolCompletedMock.mockReturnValue({
+      id: 'delegate-call',
+      messageId: 77,
+      output: JSON.stringify({
+        mode: 'background',
+        delegation_id: 'delegation-1',
+        status: 'dispatched',
+      }),
+    })
+    const exactMessages = [
+      { role: 'user', content: 'previous' },
+      { role: 'user', content: 'start a background task' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'delegate-call' }] },
+      { role: 'tool', content: 'dispatched', tool_call_id: 'delegate-call' },
+      { role: 'assistant', content: 'The background task is running.' },
+    ]
+    const bridge = {
+      chat: vi.fn().mockResolvedValue({ run_id: 'origin-run', status: 'started' }),
+      contextEstimate: vi.fn().mockResolvedValue({ token_count: 100, message_count: 2 }),
+      streamOutput: vi.fn(async function* () {
+        yield {
+          run_id: 'origin-run',
+          done: true,
+          status: 'completed',
+          output: 'The background task is running.',
+          result: { messages: exactMessages },
+          events: [{
+            event: 'tool.completed',
+            tool_name: 'delegate_task',
+            output: JSON.stringify({
+              mode: 'background',
+              delegation_id: 'delegation-1',
+              status: 'dispatched',
+            }),
+          }],
+        }
+      }),
+    } as any
+
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
+    await handleBridgeRun(
+      nsp,
+      socket,
+      { input: 'start a background task', session_id: 'session-1', reasoning_effort: 'high' },
+      'default',
+      sessionMap,
+      bridge,
+      false,
+      vi.fn(),
+      vi.fn(),
+    )
+
+    expect(state.backgroundContinuationContexts['delegation-1']).toEqual(expect.objectContaining({
+      runtime: 'hermes',
+      version: 1,
+      delegationId: 'delegation-1',
+      sessionId: 'session-1',
+      originRunId: 'origin-run',
+      model: 'gpt-test',
+      provider: 'openai',
+      profile: 'default',
+      reasoningEffort: 'high',
+      messages: exactMessages,
+    }))
+  })
+
+  it('runs a Hermes background callback from its origin history instead of later messages', async () => {
+    const emit = vi.fn()
+    const nsp = makeNamespace(emit)
+    const socket = makeSocket()
+    const state = makeState()
+    const sessionMap = new Map([['session-1', state]])
+    state.messages.push({
+      id: 9,
+      session_id: 'session-1',
+      role: 'user',
+      content: 'later B/C conversation',
+      timestamp: 2,
+    })
+    const callbackContext = {
+      runtime: 'hermes' as const,
+      version: 1 as const,
+      delegationId: 'delegation-1',
+      sessionId: 'session-1',
+      originRunId: 'origin-run',
+      messages: [
+        { role: 'user', content: 'original A request' },
+        { role: 'assistant', content: 'I started the background task.' },
+      ],
+      model: 'origin-model',
+      provider: 'origin-provider',
+      profile: 'default',
+      instructions: 'origin system instructions',
+      workspace: null,
+      reasoningEffort: 'high',
+    }
+    state.backgroundContinuationContexts = { 'delegation-1': callbackContext }
+    resolveBridgeRunModelConfigMock.mockResolvedValueOnce({ model: 'origin-model', provider: 'origin-provider' })
+    const bridge = {
+      chat: vi.fn().mockResolvedValue({ run_id: 'callback-run', status: 'started' }),
+      completeBackgroundNotification: vi.fn().mockResolvedValue(undefined),
+      contextEstimate: vi.fn().mockResolvedValue({ token_count: 100, message_count: 2 }),
+      streamOutput: vi.fn(async function* () {
+        yield { run_id: 'callback-run', done: true, status: 'completed', output: 'callback answer' }
+      }),
+    } as any
+
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
+    await handleBridgeRun(
+      nsp,
+      socket,
+      {
+        input: 'Background subtask result: finished',
+        display_input: null,
+        session_id: 'session-1',
+        background_delegation_id: 'delegation-1',
+        background_claim_id: 'claim-1',
+        autonomous: true,
+      },
+      'default',
+      sessionMap,
+      bridge,
+      true,
+      vi.fn(),
+      vi.fn(),
+      callbackContext,
+    )
+
+    expect(buildCompressedHistoryMock).not.toHaveBeenCalled()
+    expect(bridge.chat).toHaveBeenCalledWith(
+      'session-1',
+      'Background subtask result: finished',
+      callbackContext.messages,
+      'origin system instructions',
+      'default',
+      expect.objectContaining({
+        model: 'origin-model',
+        provider: 'origin-provider',
+        reasoning_effort: 'high',
+      }),
+    )
+    expect(bridge.chat.mock.calls[0][2]).not.toContainEqual(expect.objectContaining({
+      content: 'later B/C conversation',
+    }))
+    expect(state.backgroundContinuationContexts['delegation-1']).toBeUndefined()
+  })
+
+  it('rejects a recovered Hermes callback when its process-local origin history is gone', async () => {
+    const emit = vi.fn()
+    const nsp = makeNamespace(emit)
+    const socket = makeSocket()
+    const state = makeState()
+    const sessionMap = new Map([['session-1', state]])
+    const bridge = {
+      chat: vi.fn(),
+      completeBackgroundNotification: vi.fn().mockResolvedValue(undefined),
+    } as any
+
+    const { handleBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
+    await handleBridgeRun(
+      nsp,
+      socket,
+      {
+        input: 'Background subtask result: finished',
+        display_input: null,
+        session_id: 'session-1',
+        background_delegation_id: 'delegation-after-restart',
+        background_claim_id: 'claim-after-restart',
+        autonomous: true,
+      },
+      'default',
+      sessionMap,
+      bridge,
+      true,
+      vi.fn(),
+      vi.fn(),
+    )
+
+    expect(buildCompressedHistoryMock).not.toHaveBeenCalled()
+    expect(bridge.chat).not.toHaveBeenCalled()
+    expect(bridge.completeBackgroundNotification).toHaveBeenCalledWith(
+      'session-1',
+      'default',
+      'delegation-after-restart',
+      'claim-after-restart',
+    )
+    expect(emit).toHaveBeenCalledWith('run.failed', expect.objectContaining({
+      delegation_id: 'delegation-after-restart',
+      error: expect.stringContaining('origin context is unavailable'),
     }))
   })
 })

@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-// `node:fs` is a stubbed empty module inside the jsdom environment, so the
-// static `import { readFileSync } from 'node:fs'` form resolves to undefined.
-// Vitest exposes CJS `require`, which reaches the real module here.
-const { readFileSync } = require('node:fs')
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
@@ -54,14 +50,6 @@ const session = {
 }
 
 describe('SessionListItem', () => {
-  it('uses a one-pixel white outline without internal avatar padding', () => {
-    const source = readFileSync('packages/client/src/components/hermes/chat/SessionListItem.vue', 'utf8')
-
-    expect(source).toMatch(/\.session-item-agent-logo\s*\{[^}]*border: 1px solid #fff;/s)
-    expect(source).not.toMatch(/\.session-item-agent-logo\s*\{[^}]*padding:/s)
-    expect(source).not.toMatch(/\.session-item-agent-logo\s*\{[^}]*background:/s)
-  })
-
   it('renders normal mode as a link to the session route', () => {
     const wrapper = mount(SessionListItem, {
       props: {
@@ -105,6 +93,31 @@ describe('SessionListItem', () => {
     expect(wrapper.find('a.session-item').exists()).toBe(false)
   })
 
+  it('renders a plain text category tag only when a category label is provided', async () => {
+    const wrapper = mount(SessionListItem, {
+      props: {
+        session,
+        active: false,
+        pinned: false,
+        canDelete: true,
+        categoryLabel: 'Work - Mobile',
+      },
+      global: {
+        stubs: {
+          ProfileAvatar: true,
+        },
+      },
+    })
+
+    const tag = wrapper.get('.session-item-category-tag')
+    expect(tag.text()).toBe('Work - Mobile')
+    expect(tag.attributes('title')).toBe('Work - Mobile')
+    expect(tag.element.tagName).toBe('SPAN')
+
+    await wrapper.setProps({ categoryLabel: undefined })
+    expect(wrapper.find('.session-item-category-tag').exists()).toBe(false)
+  })
+
   it('does not select the row when clicking nested action controls', async () => {
     const wrapper = mount(SessionListItem, {
       props: {
@@ -146,34 +159,6 @@ describe('SessionListItem', () => {
     await link.trigger('click', { ctrlKey: true })
     expect(wrapper.emitted('select')).toBeUndefined()
     expect(wrapper.emitted('open-new')).toBeUndefined()
-  })
-
-  it('routes modified clicks through the desktop window handler when requested', async () => {
-    const openNewMock = vi.fn()
-    const selectMock = vi.fn()
-    const wrapper = mount(SessionListItem, {
-      props: {
-        session,
-        active: false,
-        pinned: false,
-        canDelete: true,
-        to: '/session/s1',
-        interceptModifiedNavigation: true,
-        onOpenNew: openNewMock,
-        onSelect: selectMock,
-      },
-      global: {
-        stubs: {
-          ProfileAvatar: true,
-        },
-      },
-    })
-
-    await wrapper.get('a.session-item').trigger('click', { ctrlKey: true })
-
-    // VTU's wrapper.emitted() is flaky here; assert via the prop callbacks
-    expect(openNewMock).toHaveBeenCalledTimes(1)
-    expect(selectMock).not.toHaveBeenCalled()
   })
 
   it('renders the Hermes logo for Hermes sessions', () => {

@@ -48,8 +48,8 @@ vi.mock('vue-router', async (importOriginal) => ({
   useRoute: () => routeState,
   useRouter: () => ({ push: routerPush }),
 }))
-vi.mock('@/api/hermes/workflows', () => ({ approveWorkflowNode: workflowMock.approveWorkflowNode }))
-vi.mock('@/api/hermes/workflow-socket', () => ({
+vi.mock('@/api/studio/workflows', () => ({ approveWorkflowNode: workflowMock.approveWorkflowNode }))
+vi.mock('@/api/studio/workflow-socket', () => ({
   listWorkflowsSocket: workflowMock.listWorkflowsSocket,
   subscribeWorkflowStatuses: workflowMock.subscribeWorkflowStatuses,
   disconnectWorkflowSocket: vi.fn(),

@@ -65,7 +65,7 @@ sys.modules["bridge_runtime"] = bridge_runtime
 
 spec = importlib.util.spec_from_file_location(
     "bridge_pool",
-    "packages/server/src/services/hermes/agent-bridge/python/bridge_pool.py",
+    "packages/server/src/modules/hermes/services/bridge/python/bridge_pool.py",
 )
 bridge_pool = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -99,13 +99,32 @@ print(json.dumps(pool.dispatch_command("session-1", "/learn from docs", "default
 
   it('returns a clear unsupported-runtime message when agent.learn_prompt is missing', () => {
     const result = runPython(`${harness}
-agent_pkg = types.ModuleType("agent")
-agent_pkg.__path__ = []
-sys.modules["agent"] = agent_pkg
-sys.modules.pop("agent.learn_prompt", None)
+import importlib.abc as _abc
+import importlib.machinery as _mach
+class _BlockLearnPromptFinder(_abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "agent.learn_prompt":
+            raise ImportError("No module named 'agent.learn_prompt' (mocked missing for test)")
+        return None
+_blocker = _BlockLearnPromptFinder()
+sys.meta_path.insert(0, _blocker)
+try:
+    for _k in list(sys.modules.keys()):
+        if _k == "agent.learn_prompt":
+            sys.modules.pop(_k, None)
+    # Ensure agent package exists but without learn_prompt submodule
+    if "agent" not in sys.modules:
+        agent_pkg = types.ModuleType("agent")
+        agent_pkg.__path__ = []
+        sys.modules["agent"] = agent_pkg
 
-pool = bridge_pool.AgentPool()
-print(json.dumps(pool.dispatch_command("session-1", "/learn from docs", "default")))
+    pool = bridge_pool.AgentPool()
+    print(json.dumps(pool.dispatch_command("session-1", "/learn from docs", "default")))
+finally:
+    sys.meta_path.remove(_blocker)
+    for _k in list(sys.modules.keys()):
+        if _k == "agent.learn_prompt":
+            sys.modules.pop(_k, None)
 `)
 
     expect(result).toEqual({

@@ -15,14 +15,14 @@ const { getSessionDetailPaginatedFromDbWithProfileMock, listProfileNamesFromDisk
   listProfileNamesFromDiskMock: vi.fn(() => ['default']),
 }))
 
-vi.mock('../../packages/server/src/db/index', () => ({
+vi.mock('../../packages/server/src/modules/studio/infrastructure/database/index', () => ({
   getDb: () => dbRef.current,
 }))
-vi.mock('../../packages/server/src/db/hermes/sessions-db', () => ({
+vi.mock('../../packages/server/src/modules/hermes/services/history/sessions-db', () => ({
   getSessionDetailPaginatedFromDbWithProfile: (...args: unknown[]) => getSessionDetailPaginatedFromDbWithProfileMock(...args),
   getExactSessionDetailFromDbWithProfile: vi.fn().mockResolvedValue(null),
 }))
-vi.mock('../../packages/server/src/services/hermes/hermes-profile', () => ({
+vi.mock('../../packages/server/src/modules/hermes/services/profiles/profile', () => ({
   listProfileNamesFromDisk: () => listProfileNamesFromDiskMock(),
 }))
 
@@ -62,7 +62,7 @@ function makeStateMsg(role: string, content: string, timestamp: number): Record<
 }
 
 async function loadSyncClass() {
-  const mod = await import('../../packages/server/src/services/hermes/session-message-sync')
+  const mod = await import('../../packages/server/src/modules/studio/services/session-message-sync')
   return mod.SessionMessageSync
 }
 

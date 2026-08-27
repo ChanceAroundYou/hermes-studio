@@ -29,7 +29,7 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }))
 
-vi.mock('@/api/hermes/chat', () => ({
+vi.mock('@/api/studio/chat', () => ({
   startRunViaSocket: vi.fn(),
   resumeSession: vi.fn(),
   registerSessionHandlers: vi.fn(),
@@ -41,9 +41,10 @@ vi.mock('@/api/hermes/chat', () => ({
   onSessionCommand: vi.fn(() => vi.fn()),
   onSessionTitleUpdated: vi.fn(() => vi.fn()),
   onSessionWorkspaceUpdated: vi.fn(() => vi.fn()),
+  onSessionSettingsUpdated: vi.fn(() => vi.fn()),
 }))
 
-vi.mock('@/api/hermes/sessions', () => ({
+vi.mock('@/api/studio/sessions', () => ({
   archiveSession: vi.fn(),
   fetchSessions: vi.fn(),
   fetchSessionMessagesPage: vi.fn(),
@@ -60,7 +61,7 @@ vi.mock('@/api/client', () => ({
   wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
-vi.mock('@/api/hermes/download', () => ({
+vi.mock('@/api/studio/download', () => ({
   getDownloadUrl: (_path: string, name: string) => `/download/${name}`,
 }))
 

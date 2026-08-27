@@ -9,7 +9,7 @@ vi.mock('@/api/client', () => ({
   wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
 }))
 
-import { fetchConversationDetail, fetchConversationSummaries } from '@/api/hermes/conversations'
+import { fetchConversationDetail, fetchConversationSummaries } from '@/api/studio/conversations'
 
 describe('conversations api', () => {
   beforeEach(() => {
@@ -22,8 +22,8 @@ describe('conversations api', () => {
     await fetchConversationSummaries()
     await fetchConversationSummaries({ humanOnly: false, source: 'cli', limit: 25 })
 
-    expect(mockRequest).toHaveBeenNthCalledWith(1, '/api/hermes/sessions/conversations')
-    expect(mockRequest).toHaveBeenNthCalledWith(2, '/api/hermes/sessions/conversations?humanOnly=false&source=cli&limit=25')
+    expect(mockRequest).toHaveBeenNthCalledWith(1, '/api/studio/sessions/conversations')
+    expect(mockRequest).toHaveBeenNthCalledWith(2, '/api/studio/sessions/conversations?humanOnly=false&source=cli&limit=25')
   })
 
   it('encodes detail URLs and forwards optional params', async () => {
@@ -31,7 +31,7 @@ describe('conversations api', () => {
 
     await fetchConversationDetail('folder/with spaces', { humanOnly: false, source: 'discord' })
 
-    expect(mockRequest).toHaveBeenCalledWith('/api/hermes/sessions/conversations/folder%2Fwith%20spaces/messages?humanOnly=false&source=discord')
+    expect(mockRequest).toHaveBeenCalledWith('/api/studio/sessions/conversations/folder%2Fwith%20spaces/messages?humanOnly=false&source=discord')
   })
 
   it('propagates conversation detail errors so the monitor can render an error state', async () => {
