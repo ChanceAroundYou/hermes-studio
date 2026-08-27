@@ -5221,7 +5221,7 @@ export const useChatStore = defineStore('chat', () => {
             })
             if (!deduped.length) return
             target.messages.push(...deduped)
-            target.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+            target.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0) || Number(a.id) - Number(b.id))
             target.messageTotal = page.total
             target.messageCount = page.total
             target.hasMoreBefore = (page as any).hasMore ?? (target.loadedMessageCount || 0) < target.messageTotal

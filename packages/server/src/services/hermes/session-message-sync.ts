@@ -33,7 +33,7 @@ const DEBOUNCE_MS = 15_000
 // old message with a new autoincrement id, which then pollutes the paginated
 // newest page (ORDER BY id DESC LIMIT 150). Mid-history gaps are covered by
 // the on-session-open debounced sync.
-const SYNC_TAIL_READ_LIMIT = 500
+const SYNC_TAIL_READ_LIMIT = 2000
 // Keep old name as alias for any external import (no behavior change).
 const SYNC_TAIL_LIMIT = SYNC_TAIL_READ_LIMIT
 
