@@ -1,43 +1,44 @@
 import type { Message } from '@/stores/hermes/chat'
 
+/**
+ * Chronological, consecutive-block grouping.
+ * - Only consecutive `role:'tool' && toolStatus!=='running' && same runMarker` are merged into one ToolRunCard.
+ * - Encountering `assistant`/`user`/`command` breaks the chunk, so a new assistant segment gets its own card below it.
+ * - Preserves original timestamp order; no global jump to first occurrence.
+ * - Insertion point = chunk[0]'s original index, so refresh (timestamp-sorted) stays stable.
+ * - Every card default is collapsed (`ToolRunCard expanded=false`), regardless of chunk size.
+ */
 export function groupCompletedToolsByRun(messages: Message[]): Message[] {
-  const toolsByRun = new Map<string, Message[]>()
-  for (const message of messages) {
-    const runId = message.runMarker?.trim()
-    if (message.role !== 'tool' || message.toolStatus === 'running' || !runId) continue
-    const tools = toolsByRun.get(runId) || []
-    tools.push(message)
-    toolsByRun.set(runId, tools)
-  }
-  if (toolsByRun.size === 0) return messages
-
-  const emittedRuns = new Set<string>()
-  const grouped: Message[] = []
-  for (const message of messages) {
-    const runId = message.role === 'tool' && message.toolStatus !== 'running'
-      ? message.runMarker?.trim()
-      : undefined
+  const out: Message[] = []
+  let i = 0
+  while (i < messages.length) {
+    const m = messages[i]
+    const runId = m.role === 'tool' && m.toolStatus !== 'running' ? m.runMarker?.trim() : undefined
     if (!runId) {
-      grouped.push(message)
+      out.push(m)
+      i += 1
       continue
     }
-    if (emittedRuns.has(runId)) continue
-    emittedRuns.add(runId)
-    const tools = toolsByRun.get(runId)
-    if (!tools?.length) {
-      grouped.push(message)
-      continue
+    const chunk: Message[] = []
+    let j = i
+    while (j < messages.length) {
+      const cur = messages[j]
+      const curRun = cur.role === 'tool' && cur.toolStatus !== 'running' ? cur.runMarker?.trim() : undefined
+      if (curRun !== runId) break
+      chunk.push(cur)
+      j += 1
     }
-    grouped.push({
-      id: `tool-run:${runId}`,
+    out.push({
+      id: `tool-run:${runId}:${chunk[0].id}`,
       role: 'system',
       content: '',
-      timestamp: tools[0].timestamp,
+      timestamp: chunk[0].timestamp,
       systemType: 'tool-run',
       runMarker: runId,
       toolRunId: runId,
-      toolMessages: tools,
-    })
+      toolMessages: chunk,
+    } as Message)
+    i = j
   }
-  return grouped
+  return out
 }

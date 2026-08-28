@@ -702,98 +702,100 @@ defineExpose({
       </template>
       <template #after>
         <Transition name="fade">
-        <div v-if="isRunIndicatorActive" class="streaming-indicator">
-          <LiveReasoningStatus
-            :reasoning="liveReasoningDetail?.reasoning"
-            :reasoning-id="liveReasoningDetail?.messageId"
-            :elapsed="formattedThinkingElapsed"
-          />
-          <div v-if="chatStore.compressionState || chatStore.abortState" class="tool-calls-panel">
-            <!-- Abort indicator -->
-            <div v-if="chatStore.abortState" class="tool-call-item compression-item">
-              <svg
-                v-if="chatStore.abortState.aborting"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                class="tool-call-icon"
-              >
-                <path d="M10 9v6m4-6v6M5 5h14v14H5z" />
-              </svg>
-              <svg
-                v-else
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                class="tool-call-icon"
-              >
-                <path d="M5 13l4 4L19 7" />
-              </svg>
-              <span class="tool-call-name">
-                {{
-                  chatStore.abortState.aborting
-                    ? chatStore.abortState.timedOut
-                      ? (chatStore.abortState.message || 'Still stopping... new messages will be queued')
-                      : 'Pausing... waiting for the run to stop and sync'
-                    : chatStore.abortState.synced
-                      ? 'Paused and synced'
-                      : 'Paused'
-                }}
-              </span>
-              <span
-                v-if="chatStore.abortState.aborting"
-                class="tool-call-spinner"
-              ></span>
-            </div>
-            <!-- Compression indicator -->
-            <div v-if="chatStore.compressionState" class="tool-call-item compression-item">
-              <svg
-                v-if="chatStore.compressionState.compressing"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                class="tool-call-icon"
-              >
-                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              <svg
-                v-else-if="chatStore.compressionState.compressed"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                class="tool-call-icon"
-              >
-                <path d="M5 13l4 4L19 7" />
-              </svg>
-              <span class="tool-call-name">
-                {{
-                  chatStore.compressionState.compressing
-                    ? `Compressing... (${chatStore.compressionState.messageCount} msgs, ~${formatTokens(chatStore.compressionState.beforeTokens)} tokens)`
-                    : chatStore.compressionState.compressed
-                      ? `Compressed ${chatStore.compressionState.messageCount} msgs: ~${formatTokens(chatStore.compressionState.beforeTokens)} → ~${formatTokens(chatStore.compressionState.afterTokens)} tokens`
-                      : `Compression skipped`
-                }}
-              </span>
-              <span
-                v-if="chatStore.compressionState.compressing"
-                class="tool-call-spinner"
-              ></span>
-            </div>
-        </div>
-        </div>
+          <div v-if="isRunIndicatorActive" class="streaming-indicator">
+            <LiveReasoningStatus
+              :reasoning="liveReasoningDetail?.reasoning"
+              :reasoning-id="liveReasoningDetail?.messageId"
+              :elapsed="formattedThinkingElapsed"
+            />
+          </div>
         </Transition>
+        <div v-if="chatStore.compressionState" class="compression-inline-card" role="status">
+          <svg
+            v-if="chatStore.compressionState.compressing"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            class="compression-inline-icon"
+            aria-hidden="true"
+          >
+            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <svg
+            v-else-if="chatStore.compressionState.compressed"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            class="compression-inline-icon"
+            aria-hidden="true"
+          >
+            <path d="M5 13l4 4L19 7" />
+          </svg>
+          <span class="compression-inline-text">
+            {{
+              chatStore.compressionState.compressing
+                ? `Compressing... (${chatStore.compressionState.messageCount} msgs, ~${formatTokens(chatStore.compressionState.beforeTokens)} tokens)`
+                : chatStore.compressionState.compressed
+                  ? `Compressed ${chatStore.compressionState.messageCount} msgs: ~${formatTokens(chatStore.compressionState.beforeTokens)} → ~${formatTokens(chatStore.compressionState.afterTokens)} tokens`
+                  : `Compression skipped`
+            }}
+          </span>
+          <span
+            v-if="chatStore.compressionState.compressing"
+            class="tool-call-spinner"
+            aria-hidden="true"
+          ></span>
+        </div>
+        <div v-if="chatStore.abortState" class="compression-inline-card abort-inline-card" role="status">
+          <svg
+            v-if="chatStore.abortState.aborting"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            class="compression-inline-icon"
+            aria-hidden="true"
+          >
+            <path d="M10 9v6m4-6v6M5 5h14v14H5z" />
+          </svg>
+          <svg
+            v-else
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            class="compression-inline-icon"
+            aria-hidden="true"
+          >
+            <path d="M5 13l4 4L19 7" />
+          </svg>
+          <span class="compression-inline-text">
+            {{
+              chatStore.abortState.aborting
+                ? chatStore.abortState.timedOut
+                  ? (chatStore.abortState.message || 'Still stopping... new messages will be queued')
+                  : 'Pausing... waiting for the run to stop and sync'
+                : chatStore.abortState.synced
+                  ? 'Paused and synced'
+                  : 'Paused'
+            }}
+          </span>
+          <span
+            v-if="chatStore.abortState.aborting"
+            class="tool-call-spinner"
+            aria-hidden="true"
+          ></span>
+        </div>
       </template>
     </VirtualMessageList>
     <button
@@ -1675,6 +1677,45 @@ defineExpose({
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
   flex-shrink: 0;
+}
+
+.compression-inline-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 520px;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  margin: 8px 4px 0;
+  border-radius: $radius-sm;
+  background: rgba(0, 0, 0, 0.03);
+  font-size: 10px;
+  color: $text-muted;
+  overflow: hidden;
+
+  .dark & {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+.compression-inline-icon {
+  flex-shrink: 0;
+  color: $text-muted;
+}
+
+.compression-inline-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: $font-code;
+}
+
+.abort-inline-card {
+  // same layout, visual distinction left to status text
 }
 
 .tool-call-error-icon {

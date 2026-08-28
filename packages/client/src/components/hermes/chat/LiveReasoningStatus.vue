@@ -21,8 +21,8 @@ const reasoningBody = ref<HTMLElement | null>(null)
 let scrollFrame = 0
 let visibleReasoningId = props.reasoningId
 
-const reasoningLine = computed(() => {
-  return (props.reasoning || '').replace(/\s+/g, ' ').trim()
+const reasoningText = computed(() => {
+  return (props.reasoning || '').trim()
 })
 
 function scrollReasoningToLatest(reset = false) {
@@ -30,34 +30,34 @@ function scrollReasoningToLatest(reset = false) {
   if (!element) return
 
   cancelAnimationFrame(scrollFrame)
-  if (reset) element.scrollLeft = 0
+  if (reset) element.scrollTop = 0
 
-  const start = element.scrollLeft
-  const target = Math.max(0, element.scrollWidth - element.clientWidth)
+  const start = element.scrollTop
+  const target = Math.max(0, element.scrollHeight - element.clientHeight)
   const distance = target - start
   if (distance <= 0) {
-    element.scrollLeft = target
+    element.scrollTop = target
     return
   }
 
   if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-    element.scrollLeft = target
+    element.scrollTop = target
     return
   }
 
-  const duration = Math.min(120, Math.max(45, distance * 2.5))
+  const duration = Math.min(160, Math.max(60, distance * 1.2))
   const startedAt = performance.now()
   const advance = (now: number) => {
     const progress = Math.min(1, (now - startedAt) / duration)
     const eased = 1 - (1 - progress) ** 3
-    element.scrollLeft = start + distance * eased
+    element.scrollTop = start + distance * eased
     if (progress < 1) scrollFrame = requestAnimationFrame(advance)
   }
   scrollFrame = requestAnimationFrame(advance)
 }
 
 watch(
-  [reasoningLine, () => props.reasoningId],
+  [reasoningText, () => props.reasoningId],
   async () => {
     const reset = visibleReasoningId !== props.reasoningId
     visibleReasoningId = props.reasoningId
@@ -84,7 +84,7 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
         <span class="thinking-status-time">{{ elapsed }}</span>
       </div>
       <button
-        v-if="reasoningLine"
+        v-if="reasoningText"
         type="button"
         class="live-reasoning-toggle"
         :aria-expanded="expanded"
@@ -106,7 +106,7 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
       </button>
     </div>
     <div
-      v-if="expanded && reasoningLine"
+      v-if="expanded && reasoningText"
       class="live-reasoning-detail"
       :data-reasoning-id="reasoningId"
     >
@@ -114,7 +114,7 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
         <span aria-hidden="true">💭</span>
         <span>{{ t('chat.thinkingLabel') }}</span>
       </div>
-      <div ref="reasoningBody" class="live-reasoning-body">{{ reasoningLine }}</div>
+      <div ref="reasoningBody" class="live-reasoning-body">{{ reasoningText }}</div>
     </div>
   </div>
 </template>
@@ -255,22 +255,23 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
 
 .live-reasoning-detail {
   display: flex;
-  align-items: center;
-  flex: 0 0 30px;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 0 0 auto;
+  gap: 6px;
   width: 520px;
   max-width: 100%;
-  height: 30px;
-  min-height: 30px;
-  max-height: 30px;
+  height: auto;
+  min-height: 0;
+  max-height: calc(3 * 20px + 42px);
   min-width: 0;
   box-sizing: border-box;
-  padding: 5px 10px;
+  padding: 8px 10px;
   border-radius: $radius-sm;
   background: rgba(0, 0, 0, 0.025);
   color: $text-secondary;
   contain: layout paint;
-  transition: opacity 80ms linear;
+  overflow: hidden;
 
   .dark & {
     background: rgba(255, 255, 255, 0.045);
@@ -289,18 +290,29 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
 
 .live-reasoning-body {
   flex: 1 1 auto;
+  min-height: 0;
   min-width: 0;
   overflow-x: hidden;
-  overflow-y: hidden;
-  white-space: nowrap;
-  text-overflow: clip;
+  overflow-y: auto;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 20px;
   opacity: 0.9;
-  scrollbar-width: none;
+  scrollbar-width: thin;
 
   &::-webkit-scrollbar {
-    display: none;
+    width: 6px;
+    height: 6px;
+    display: block;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 999px;
+  }
+  .dark &::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
   }
 }
 
