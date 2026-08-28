@@ -1558,15 +1558,15 @@ defineExpose({
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  flex: 0 0 120px;
-  gap: 8px;
+  flex: 0 0 auto;
+  gap: 0;
   width: 100%;
   max-width: 100%;
-  height: 120px;
-  min-height: 120px;
-  max-height: 120px;
+  height: auto;
+  min-height: 0;
+  max-height: none;
   min-width: 0;
-  padding: 4px;
+  padding: 4px 4px 0 4px;
   box-sizing: border-box;
   overflow: hidden;
 }
