@@ -12,11 +12,15 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const expanded = ref(settingsStore.display.show_reasoning !== false)
+const expandedOverride = ref<boolean | null>(null)
+const expanded = computed(() => expandedOverride.value !== null ? expandedOverride.value : settingsStore.display.show_reasoning !== false)
 watch(
   () => settingsStore.display.show_reasoning,
-  (v) => { expanded.value = v !== false },
+  () => { expandedOverride.value = null },
 )
+function toggleExpanded() {
+  expandedOverride.value = !expanded.value
+}
 const reasoningBody = ref<HTMLElement | null>(null)
 let scrollFrame = 0
 let visibleReasoningId = props.reasoningId
@@ -88,7 +92,7 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
         type="button"
         class="live-reasoning-toggle"
         :aria-expanded="expanded"
-        @click="expanded = !expanded"
+        @click="toggleExpanded"
       >
         <svg
           width="10"
@@ -106,15 +110,16 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
       </button>
     </div>
     <div
-      v-if="expanded && reasoningText"
+      v-if="reasoningText"
       class="live-reasoning-detail"
+      :class="{ collapsed: !expanded }"
       :data-reasoning-id="reasoningId"
     >
       <div class="live-reasoning-label">
         <span aria-hidden="true">💭</span>
         <span>{{ t('chat.thinkingLabel') }}</span>
       </div>
-      <div ref="reasoningBody" class="live-reasoning-body">{{ reasoningText }}</div>
+      <div v-show="expanded" ref="reasoningBody" class="live-reasoning-body">{{ reasoningText }}</div>
     </div>
   </div>
 </template>
