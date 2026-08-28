@@ -12,7 +12,7 @@ vi.mock('@/api/client', () => ({
 import {
   clearThemeBackgroundCache,
   fetchThemeBackgroundBlob,
-} from '@/api/theme'
+} from '@/api/studio/theme'
 
 describe('theme background cache', () => {
   const entries = new Map<string, Response>()

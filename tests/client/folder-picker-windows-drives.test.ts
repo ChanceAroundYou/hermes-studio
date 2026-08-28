@@ -84,7 +84,7 @@ describe('FolderPicker Windows drives', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     requestMock.mockImplementation(async (url: string) => {
-      if (url === '/api/hermes/workspace/folders') {
+      if (url === '/api/studio/workspace/folders') {
         return {
           base: '',
           current: '',
@@ -94,7 +94,7 @@ describe('FolderPicker Windows drives', () => {
           ],
         }
       }
-      if (url === '/api/hermes/workspace/folders?path=D%3A%5C') {
+      if (url === '/api/studio/workspace/folders?path=D%3A%5C') {
         return {
           base: 'D:\\',
           current: 'D:\\',
@@ -121,7 +121,7 @@ describe('FolderPicker Windows drives', () => {
     await drive!.find('.folder-expand').trigger('click')
     await flushPromises()
 
-    expect(requestMock).toHaveBeenCalledWith('/api/hermes/workspace/folders?path=D%3A%5C')
+    expect(requestMock).toHaveBeenCalledWith('/api/studio/workspace/folders?path=D%3A%5C')
     expect(wrapper.text()).toContain('Projects')
   })
 })

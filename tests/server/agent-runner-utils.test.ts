@@ -2,28 +2,28 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import '../../packages/server/src/bootstrap/coding-agent-adapters'
 import {
   anthropicMessagesUrl,
   chatCompletionsUrl,
   providerEndpointUrl,
   responsesUrl,
-} from '../../packages/server/src/services/coding-agents/shared/endpoint-resolver'
-import { parseSseFrame, readSseFrames, readSseFrameTexts, sseEvent } from '../../packages/server/src/services/coding-agents/shared/sse'
-import { AgentTargetRegistry, type AgentTargetInput } from '../../packages/server/src/services/coding-agents/shared/target-registry'
-import { teeAsyncIterable } from '../../packages/server/src/services/coding-agents/shared/stream-tee'
+} from '../../packages/server/src/modules/coding-agents/protocol/endpoint-resolver'
+import { parseSseFrame, readSseFrames, readSseFrameTexts, sseEvent } from '../../packages/server/src/modules/coding-agents/protocol/sse'
+import { AgentTargetRegistry, type AgentTargetInput } from '../../packages/server/src/modules/coding-agents/protocol/target-registry'
+import { teeAsyncIterable } from '../../packages/server/src/modules/coding-agents/protocol/stream-tee'
 import {
   buildClaudeStreamJsonInput,
   codexImageArgs,
   CodingAgentRunManager,
   codingAgentGatewayErrorMessage,
   sanitizeCodingAgentTerminalOutput,
-} from '../../packages/server/src/services/coding-agents/runtime/run-manager'
-import { mapCodingAgentResponseEvent } from '../../packages/server/src/services/coding-agents/runtime/event-mapper'
-import { applyResponseStreamEvent } from '../../packages/server/src/services/hermes/run-chat/response-stream'
-import { initAllHermesTables } from '../../packages/server/src/db/hermes/schemas'
-import { addMessage, getSession, getSessionDetail, listSessions } from '../../packages/server/src/db/hermes/session-store'
-import { getRecordedUsageTotals, getUsage } from '../../packages/server/src/db/hermes/usage-store'
-import { getChatRunServer, setChatRunServer } from '../../packages/server/src/services/hermes/run-chat/server-registry'
+} from '../../packages/server/src/modules/coding-agents/services/runtime/run-manager'
+import { applyResponseStreamEvent } from '../../packages/server/src/modules/studio/services/chat-run/response-stream'
+import { initAllHermesTables } from '../../packages/server/src/modules/studio/infrastructure/database/schemas'
+import { addMessage, getSession, getSessionDetail, listSessions } from '../../packages/server/src/modules/studio/repositories/session-store'
+import { getRecordedUsageTotals, getUsage } from '../../packages/server/src/modules/studio/repositories/usage-store'
+import { getChatRunServer, setChatRunServer } from '../../packages/server/src/modules/studio/services/chat-run/server-registry'
 
 describe('agent runner endpoint resolver', () => {
   it('adds v1 for provider hosts without an API root path', () => {
@@ -1543,6 +1543,13 @@ describe('coding agent run state', () => {
       params: { delta: ' Extra.' },
     }))
     ;(manager as any).handleCodexExecLine(run, JSON.stringify({
+      type: 'item.completed',
+      item: {
+        type: 'reasoning',
+        summary: [{ text: 'Need inspect. Then answer. From response item. Extra.' }],
+      },
+    }))
+    ;(manager as any).handleCodexExecLine(run, JSON.stringify({
       method: 'item/agentMessage/delta',
       params: { delta: 'Done.' },
     }))
@@ -1872,12 +1879,16 @@ describe('coding agent run state', () => {
     expect(textMessages.map((message: any) => message.content)).toEqual([openingText, finalText])
     expect(textMessages.at(-1)).toEqual(expect.objectContaining({ finish_reason: 'stop' }))
     const dbMessages = getSessionDetail(chatSessionId)?.messages || []
-    expect(dbMessages.filter(message => message.role === 'assistant' && message.tool_calls?.length)).toHaveLength(1)
-    expect(dbMessages).toContainEqual(expect.objectContaining({
+    const dbToolCallMessages = dbMessages.filter(message => message.role === 'assistant' && message.tool_calls?.length)
+    const dbToolMessage = dbMessages.find(message => message.role === 'tool' && message.tool_call_id === 'cmd-1')
+    expect(dbToolCallMessages).toHaveLength(1)
+    expect(dbToolMessage).toEqual(expect.objectContaining({
       role: 'tool',
       content: 'ai素材\ncache\ngit',
       tool_call_id: 'cmd-1',
+      run_marker: expect.any(String),
     }))
+    expect(dbToolMessage?.run_marker).toBe(dbToolCallMessages[0].run_marker)
     expect(dbMessages).toContainEqual(expect.objectContaining({
       role: 'assistant',
       content: finalText,
@@ -2161,27 +2172,32 @@ describe('coding agent run state', () => {
   })
 })
 
-describe('coding agent chat event mapper', () => {
+describe('response stream chat event mapper', () => {
   it('does not surface raw provider stream events as chat agent events', () => {
-    const mapped = mapCodingAgentResponseEvent({
-      type: 'response.output_text.delta',
-      data: { type: 'response.output_text.delta', delta: 'hello' },
+    const state: any = { messages: [], isWorking: false, events: [], queue: [] }
+    const mapped = applyResponseStreamEvent(state, 'session-1', 'run-1', 'response.output_item.added', {
+      item: { type: 'message', content: [] },
     })
 
-    expect(mapped).toEqual([])
+    expect(mapped).toBeNull()
   })
 
   it('maps reasoning deltas to chat reasoning deltas', () => {
-    expect(mapCodingAgentResponseEvent({
-      type: 'response.reasoning.delta',
-      data: { type: 'response.reasoning.delta', delta: 'thinking' },
-    })).toEqual([{
+    const state: any = { messages: [], isWorking: false, events: [], queue: [] }
+    applyResponseStreamEvent(state, 'session-1', 'run-1', 'response.created', {
+      response: { id: 'resp-1', status: 'in_progress' },
+    })
+
+    expect(applyResponseStreamEvent(state, 'session-1', 'run-1', 'response.reasoning.delta', {
+      delta: 'thinking',
+    })).toEqual({
       event: 'reasoning.delta',
       payload: expect.objectContaining({
         event: 'reasoning.delta',
         delta: 'thinking',
       }),
-    }])
+      runId: 'resp-1',
+    })
   })
 })
 

@@ -10,9 +10,10 @@ import {
   setSessionCategory,
   setSessionWorkspace,
   type SessionCategory,
-} from "@/api/hermes/sessions";
+} from "@/api/studio/sessions";
 import type { AvailableModelGroup } from "@/api/hermes/system";
 import { fetchCodingAgentsStatus, inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId, type CodingAgentApiMode, type CodingAgentId } from "@/api/coding-agents";
+import { fetchRuntimeVersionStatus } from "@/api/hermes/runtime-versions";
 import { useChatStore, type Session } from "@/stores/hermes/chat";
 import { useAppStore } from "@/stores/hermes/app";
 import { useProfilesStore } from "@/stores/hermes/profiles";
@@ -50,6 +51,7 @@ import OutlinePanel from "./OutlinePanel.vue";
 import TerminalPanel from "./TerminalPanel.vue";
 import SubagentStreamPanel from "./SubagentStreamPanel.vue";
 import { buildVisibleSessionCategoryGroups, partitionRecentSessions } from "./session-category-groups";
+import { buildSessionCategoryMenuChildren, resolveRecentSessionCategoryLabel } from "./session-category-menu";
 import PageSidebarNav from "@/components/layout/PageSidebarNav.vue";
 import { isStoredSuperAdmin } from "@/api/client";
 import { useDefaultWorkspace } from "@/composables/useDefaultWorkspace";
@@ -58,10 +60,14 @@ import { canScopedCodingAgentUseProvider, usesServerManagedProviderAuth } from "
 import { OPEN_SUBAGENT_STREAM_EVENT, type OpenSubagentStreamDetail } from "@/utils/hermes/subagent-stream";
 import { desktopBridge, hasDesktopBrowserBridge } from "@/utils/desktop-bridge";
 import { OPEN_DESKTOP_BROWSER_PANEL_EVENT } from "@/utils/desktop-browser";
+import {
+  createBrowserAnnotationAttachment,
+  type BrowserAnnotationSubmission,
+} from "@/utils/browser-annotation-submit";
 
 const props = withDefaults(defineProps<{
   standalone?: boolean;
-  contentMode?: "chat" | "connections";
+  contentMode?: "chat" | "connections" | "agents" | "models";
 }>(), {
   standalone: false,
   contentMode: "chat",
@@ -69,7 +75,8 @@ const props = withDefaults(defineProps<{
 
 const FilesPanel = defineAsyncComponent(async () => (await import('./FilesPanel.vue')).default);
 const ConnectionsPanel = defineAsyncComponent(async () => (await import('@/components/hermes/connections/ConnectionsPanel.vue')).default);
-const FilePreview = defineAsyncComponent(async () => (await import('@/components/hermes/files/FilePreview.vue')).default);
+const AgentManagerPanel = defineAsyncComponent(async () => (await import('@/views/hermes/AgentManagerView.vue')).default);
+const ModelsPanel = defineAsyncComponent(async () => (await import('@/views/hermes/ModelsView.vue')).default);
 const WorkspaceDiffPreview = defineAsyncComponent(async () => (await import('@/components/hermes/files/WorkspaceDiffPreview.vue')).default);
 const DesktopBrowserPanel = defineAsyncComponent(async () => (await import('./DesktopBrowserPanel.vue')).default);
 
@@ -89,7 +96,7 @@ const showRealtimeVoice = ref(false);
 const messageListRef = ref<InstanceType<typeof MessageList> | null>(null);
 const chatInputRef = ref<(InstanceType<typeof ChatInput> & {
   addFiles?: (files: File[]) => void;
-  addBrowserAttachment?: (file: File, context: string) => void;
+
   focusComposer?: () => void;
 }) | null>(null);
 const chatContentWrapperRef = ref<HTMLElement | null>(null);
@@ -319,11 +326,19 @@ function handleWorkspaceFileAttach(file: File) {
   chatInputRef.value?.addFiles?.([file]);
 }
 
-function handleBrowserAttachment(payload: { file: File; context: string }) {
-  chatInputRef.value?.addBrowserAttachment?.(payload.file, payload.context);
+async function submitBrowserAnnotations(payload: BrowserAnnotationSubmission): Promise<boolean> {
+  const attachment = createBrowserAnnotationAttachment(payload);
+  await chatStore.sendMessage("", [attachment]);
+  return true;
 }
 
-async function handleSessionClick(sessionId: string) {
+async function handleSessionClick(
+  sessionId: string,
+  options: { preserveCategoryCollapse?: boolean } = {},
+) {
+  if (!options.preserveCategoryCollapse) {
+    setCategoryRevealSuppressedSessionId(null);
+  }
   chatStore.clearSessionCompletedUnread(sessionId);
   await router.push({
     name: chatStore.runtimeMode === "global_agent" ? "hermes.globalAgentSession" : "hermes.session",
@@ -333,6 +348,12 @@ async function handleSessionClick(sessionId: string) {
     await chatStore.switchSession(sessionId);
   }
   if (mobileQuery?.matches) showSessions.value = false;
+}
+
+async function handleRecentSessionClick(sessionId: string) {
+  // Recent is a shortcut; selecting it must not overwrite the real category's saved collapse state.
+  setCategoryRevealSuppressedSessionId(sessionId);
+  await handleSessionClick(sessionId, { preserveCategoryCollapse: true });
 }
 
 function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
@@ -499,6 +520,7 @@ watch(
   (previewFile) => {
     if (previewFile) {
       selectedSubagent.value = null;
+      activeToolPanel.value = "files";
       showToolPanel.value = true;
     }
   },
@@ -512,8 +534,10 @@ const sessionProfileFilter = computed(() => chatStore.sessionProfileFilter);
 const sessionCategories = ref<SessionCategory[]>([]);
 const sessionCategoriesLoading = ref(false);
 const sessionCategoriesLoaded = ref(false);
+const sessionCategoriesLoadFailed = ref(false);
 let sessionCategoriesLoadPromise: Promise<void> | null = null;
 const COLLAPSED_CATEGORIES_STORAGE_KEY = "hermes_chat_collapsed_categories";
+const RECENT_CATEGORY_REVEAL_SUPPRESSION_STORAGE_KEY = "hermes_chat_recent_category_reveal_suppression";
 const showRecentCountModal = ref(false);
 const recentCountDraft = ref(sessionBrowserPrefsStore.recentCount);
 
@@ -527,6 +551,31 @@ function loadCollapsedCategories(): Set<string> {
 }
 
 const collapsedCategories = ref<Set<string>>(loadCollapsedCategories());
+
+function loadCategoryRevealSuppressedSessionId(): string | null {
+  try {
+    return sessionStorage.getItem(RECENT_CATEGORY_REVEAL_SUPPRESSION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+const categoryRevealSuppressedSessionId = ref<string | null>(
+  loadCategoryRevealSuppressedSessionId(),
+);
+
+function setCategoryRevealSuppressedSessionId(sessionId: string | null) {
+  categoryRevealSuppressedSessionId.value = sessionId;
+  try {
+    if (sessionId) {
+      sessionStorage.setItem(RECENT_CATEGORY_REVEAL_SUPPRESSION_STORAGE_KEY, sessionId);
+    } else {
+      sessionStorage.removeItem(RECENT_CATEGORY_REVEAL_SUPPRESSION_STORAGE_KEY);
+    }
+  } catch {
+    // Keep the in-memory behavior when session storage is unavailable.
+  }
+}
 
 function persistCollapsedCategories() {
   localStorage.setItem(
@@ -571,6 +620,23 @@ const recentSessionPartition = computed(() => partitionRecentSessions(
 ));
 const recentSessions = computed(() => recentSessionPartition.value.group);
 const nonRecentSessions = computed(() => recentSessionPartition.value.remaining);
+const sessionCategoryNames = computed(() => new Map(
+  sessionCategories.value.map(category => [category.id, category.name]),
+));
+
+function recentCategoryLabel(session: Session): string | undefined {
+  return resolveRecentSessionCategoryLabel(
+    session.categoryId,
+    sessionCategoryNames.value,
+    sessionCategoriesLoaded.value,
+    sessionCategoriesLoadFailed.value,
+    t("chat.uncategorized"),
+  );
+}
+
+function toggleRecentGroup() {
+  sessionBrowserPrefsStore.setRecentCollapsed(!sessionBrowserPrefsStore.recentCollapsed);
+}
 
 const pinnedSessions = computed(() =>
   sortSessionsForSidebar(
@@ -614,6 +680,8 @@ watch(
   () => {
     if (!sessionCategoriesLoaded.value || categorizedSessions.value.length === 0) return;
     const activeSession = chatStore.sessions.find((session) => session.id === chatStore.activeSessionId);
+    if (categoryRevealSuppressedSessionId.value === activeSession?.id) return;
+    setCategoryRevealSuppressedSessionId(null);
     const activeKey = activeSession?.categoryId == null
       ? "category-none"
       : `category-${activeSession.categoryId}`;
@@ -641,7 +709,9 @@ async function loadSessionCategories() {
   sessionCategoriesLoadPromise = (async () => {
     try {
       sessionCategories.value = await fetchSessionCategories();
+      sessionCategoriesLoadFailed.value = false;
     } catch {
+      sessionCategoriesLoadFailed.value = true;
       message.error(t("chat.categoryLoadFailed"));
     } finally {
       sessionCategoriesLoaded.value = true;
@@ -650,6 +720,11 @@ async function loadSessionCategories() {
     }
   })();
   return sessionCategoriesLoadPromise;
+}
+
+async function retrySessionCategories() {
+  showContextMenu.value = false;
+  await loadSessionCategories();
 }
 
 watch(
@@ -669,8 +744,14 @@ const activeSessionTitle = computed(
   () => chatStore.activeSession?.title || t("chat.newChat"),
 );
 
+const activeSessionUsesGlobalCodingAgentConfig = computed(() => {
+  const session = chatStore.activeSession;
+  return session?.codingAgentMode === "global" && Boolean(session.codingAgentId || session.source === "coding_agent");
+});
+
 const activeSessionModelLabel = computed(() => {
   const session = chatStore.activeSession;
+  if (activeSessionUsesGlobalCodingAgentConfig.value) return t("codingAgents.launchModeGlobal");
   if (!session?.model) return t("models.selectModel");
   if (session.provider === "moa") return `MoA · ${session.model}`;
   return appStore.displayModelName(session.model, session.provider);
@@ -1117,6 +1198,25 @@ function handleNewChatProviderChange(value: string) {
 }
 
 async function confirmNewChat() {
+  if (newChatAgent.value === "hermes") {
+    newChatLoading.value = true;
+    try {
+      const status = await fetchRuntimeVersionStatus({ probeRuntime: false, includeRemote: false });
+      const selectedCli = status.hermes.cliInstallations.find((item) => item.selected);
+      if (!status.hermes.agentVersion && !selectedCli?.version) {
+        showNewChatModal.value = false;
+        await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
+        return;
+      }
+    } catch {
+      showNewChatModal.value = false;
+      await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
+      return;
+    } finally {
+      newChatLoading.value = false;
+    }
+  }
+
   if (isNewChatExternalCodingAgent.value) {
     newChatLoading.value = true;
     try {
@@ -1127,7 +1227,7 @@ async function confirmNewChat() {
         const fallbackName = agentId === "codex" ? "Codex" : agentId === "pi" ? "Pi" : "Claude";
         message.warning(t("codingAgents.installRequired", { agent: tool?.name || fallbackName }));
         showNewChatModal.value = false;
-        await router.push({ name: "hermes.codingAgents" });
+        await router.push({ name: "hermes.agentManager" });
         return;
       }
     } catch {
@@ -1416,20 +1516,25 @@ const contextMenuOptions = computed(() => {
 
   options.push({ label: t("chat.setWorkspace"), key: "workspace" })
 
-  if (contextSession.value?.source === "cli" || contextSession.value?.source === "coding_agent") {
+  if (
+    contextSession.value?.source === "cli" ||
+    (contextSession.value?.source === "coding_agent" && contextSession.value?.codingAgentMode !== "global")
+  ) {
     options.push({ label: t("chat.setModel"), key: "model" })
   }
 
   options.push({
     label: t("chat.moveToCategory"),
     key: "category",
-    children: [
-      { label: t("chat.uncategorized"), key: "category:none" },
-      ...sessionCategories.value.map((category) => ({
-        label: category.name,
-        key: `category:${category.id}`,
-      })),
-    ],
+    children: buildSessionCategoryMenuChildren({
+      categories: sessionCategories.value,
+      currentCategoryId: contextSession.value?.categoryId,
+      uncategorizedLabel: t("chat.uncategorized"),
+      loadFailedLabel: t("chat.categoryLoadFailed"),
+      retryLabel: t("common.retry"),
+      loadFailed: sessionCategoriesLoadFailed.value,
+      loading: sessionCategoriesLoading.value,
+    }),
   })
 
   options.push({
@@ -1464,6 +1569,11 @@ const contextMenuOptions = computed(() => {
   options.push({ label: t("chat.copySessionId"), key: "copy-id" })
   return options
 });
+const contextMenuCategoriesKey = computed(() => [
+  sessionCategoriesLoadFailed.value ? "failed" : "ready",
+  sessionCategoriesLoading.value ? "loading" : "idle",
+  ...sessionCategories.value.map(category => `${category.id}:${category.name}`),
+].join("|"));
 
 function openSettingsPage() {
   router.push({ name: "hermes.settings" });
@@ -1493,6 +1603,10 @@ function parseExportKey(key: string): { mode: 'full' | 'compressed'; ext: 'json'
 async function handleContextMenuSelect(key: string) {
   showContextMenu.value = false;
   if (!contextSessionId.value) return;
+  if (key === "category:retry") {
+    await retrySessionCategories();
+    return;
+  }
   if (key === "pin") {
     sessionBrowserPrefsStore.togglePinned(contextSessionId.value);
     return;
@@ -1503,6 +1617,7 @@ async function handleContextMenuSelect(key: string) {
     const rawCategoryId = key.slice("category:".length);
     const categoryId = rawCategoryId === "none" ? null : Number(rawCategoryId);
     if (categoryId !== null && !Number.isSafeInteger(categoryId)) return;
+    if ((session.categoryId ?? null) === categoryId) return;
     try {
       if (!session.isLocalOnly) await setSessionCategory(session.id, categoryId);
     } catch (error: any) {
@@ -1729,6 +1844,13 @@ const filteredSessionMoaModels = computed(() => {
 });
 
 async function openSessionModelModal(sessionId: string) {
+  const requestedSession =
+    chatStore.sessions.find((s) => s.id === sessionId) ||
+    (chatStore.activeSession?.id === sessionId ? chatStore.activeSession : undefined);
+  if (
+    requestedSession?.codingAgentMode === "global" &&
+    Boolean(requestedSession.codingAgentId || requestedSession.source === "coding_agent")
+  ) return;
   if (appStore.modelGroups.length === 0 && appStore.profileModelGroups.length === 0) {
     await appStore.loadModels();
   }
@@ -1776,6 +1898,7 @@ function handleSessionModelKindChange(value: "model" | "moa") {
 }
 
 function handleHeaderModelClick() {
+  if (activeSessionUsesGlobalCodingAgentConfig.value) return;
   const sessionId = chatStore.activeSession?.id;
   if (!sessionId) {
     openNewChatModal();
@@ -1886,7 +2009,7 @@ async function handleSessionModelCustomSubmit() {
     >
       <div v-if="showSessions" class="page-sidebar-top">
         <PageSidebarNav
-          :active="contentMode === 'connections' ? 'connections' : chatStore.runtimeMode === 'global_agent' ? 'global' : 'chat'"
+          :active="contentMode === 'connections' ? 'connections' : contentMode === 'agents' ? 'agents' : contentMode === 'models' ? 'models' : chatStore.runtimeMode === 'global_agent' ? 'global' : 'chat'"
           :primary-label="t('chat.newChat')"
           @primary="openNewChatModal"
         />
@@ -2017,33 +2140,76 @@ async function handleSessionModelCustomSubmit() {
           {{ t("chat.noSessions") }}
         </div>
 
-        <template v-if="recentSessions.sessions.length > 0">
-          <div class="session-group-header session-group-header--static">
-            <span class="session-group-label">{{ recentSessions.label }}</span>
-            <span class="session-group-count">{{ recentSessions.sessions.length }}</span>
+        <template
+          v-if="
+            sessionBrowserPrefsStore.showRecentSessions &&
+            recentSessions.sessions.length > 0
+          "
+        >
+          <div class="session-group-header session-group-header--recent">
+            <button
+              class="session-group-toggle"
+              type="button"
+              :aria-expanded="!sessionBrowserPrefsStore.recentCollapsed"
+              @click="toggleRecentGroup"
+            >
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                class="group-chevron"
+                :class="{ collapsed: sessionBrowserPrefsStore.recentCollapsed }"
+                aria-hidden="true"
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+              <span class="session-group-label">{{ recentSessions.label }}</span>
+              <span class="session-group-count">{{ recentSessions.sessions.length }}</span>
+            </button>
             <button class="session-group-config" type="button" :title="t('chat.recentCount')" @click="openRecentCountModal">⚙</button>
           </div>
-          <SessionListItem
-            v-for="s in recentSessions.sessions"
-            :key="`recent-${s.id}`"
-            :session="s"
-            :active="s.id === chatStore.activeSessionId"
-            :pinned="sessionBrowserPrefsStore.isPinned(s.id)"
-            :can-delete="s.id !== chatStore.activeSessionId || chatStore.sessions.length > 1"
-            :streaming="chatStore.isSessionLive(s.id)"
-            :completed-unread="chatStore.isSessionCompletedUnread(s.id)"
-            :selectable="isBatchMode"
-            :selected="isSessionSelected(s)"
-            :show-profile="true"
-            :to="sessionHref(s.id)"
-            :intercept-modified-navigation="desktopChatWindowAvailable"
-            @select="handleSessionClick(s.id)"
-            @open-new="openSessionInNewTab(s.id)"
-            @contextmenu="handleContextMenu($event, s.id)"
-            @delete="handleDeleteSession(s.id)"
-            @toggle-select="toggleSessionSelection(s)"
-          />
+          <template v-if="!sessionBrowserPrefsStore.recentCollapsed">
+            <SessionListItem
+              v-for="s in recentSessions.sessions"
+              :key="`recent-${s.id}`"
+              :session="s"
+              :active="s.id === chatStore.activeSessionId"
+              :pinned="sessionBrowserPrefsStore.isPinned(s.id)"
+              :can-delete="s.id !== chatStore.activeSessionId || chatStore.sessions.length > 1"
+              :streaming="chatStore.isSessionLive(s.id)"
+              :completed-unread="chatStore.isSessionCompletedUnread(s.id)"
+              :selectable="isBatchMode"
+              :selected="isSessionSelected(s)"
+              :show-profile="true"
+              :category-label="recentCategoryLabel(s)"
+              :to="sessionHref(s.id)"
+              :intercept-modified-navigation="desktopChatWindowAvailable"
+              @select="handleRecentSessionClick(s.id)"
+              @open-new="openSessionInNewTab(s.id)"
+              @contextmenu="handleContextMenu($event, s.id)"
+              @delete="handleDeleteSession(s.id)"
+              @toggle-select="toggleSessionSelection(s)"
+            />
+          </template>
         </template>
+
+        <div
+          v-if="sessionCategoriesLoadFailed"
+          class="session-category-load-error"
+          role="alert"
+        >
+          <span>{{ t("chat.categoryLoadFailed") }}</span>
+          <button
+            type="button"
+            :disabled="sessionCategoriesLoading"
+            @click="retrySessionCategories"
+          >
+            {{ t("common.retry") }}
+          </button>
+        </div>
 
         <template v-if="pinnedSessions.length > 0">
           <div class="session-group-header session-group-header--static">
@@ -2144,6 +2310,7 @@ async function handleSessionModelCustomSubmit() {
     </aside>
 
     <NDropdown
+      :key="contextMenuCategoriesKey"
       placement="bottom-start"
       trigger="manual"
       :x="contextMenuX"
@@ -2623,6 +2790,16 @@ async function handleSessionModelCustomSubmit() {
         :sidebar-collapsed="!showSessions"
         @toggle-sidebar="showSessions = !showSessions"
       />
+      <AgentManagerPanel
+        v-else-if="contentMode === 'agents'"
+        :sidebar-collapsed="!showSessions"
+        @toggle-sidebar="showSessions = !showSessions"
+      />
+      <ModelsPanel
+        v-else-if="contentMode === 'models'"
+        :sidebar-collapsed="!showSessions"
+        @toggle-sidebar="showSessions = !showSessions"
+      />
       <template v-else>
       <header v-if="!standalone" class="chat-header">
         <div class="header-left">
@@ -2776,6 +2953,7 @@ async function handleSessionModelCustomSubmit() {
             <ChatInput
               ref="chatInputRef"
               :model-label="activeSessionModelLabel"
+              :model-disabled="activeSessionUsesGlobalCodingAgentConfig"
               @model-click="handleHeaderModelClick"
               @voice-click="openRealtimeVoice"
             />
@@ -2804,10 +2982,6 @@ async function handleSessionModelCustomSubmit() {
               <div class="chat-tool-panel-inner">
                 <WorkspaceDiffPreview
                   v-if="toolPanelStore.workspaceDiff"
-                  :custom-close="closeToolPanelOverlay"
-                />
-                <FilePreview
-                  v-else-if="filesStore.previewFile"
                   :custom-close="closeToolPanelOverlay"
                 />
                 <SubagentStreamPanel
@@ -2879,7 +3053,7 @@ async function handleSessionModelCustomSubmit() {
                     <DesktopBrowserPanel
                       v-if="desktopBrowserAvailable && activeToolPanel === 'browser'"
                       :visible="toolPanelTransitionReady"
-                      @attach="handleBrowserAttachment"
+                      :submit="submitBrowserAnnotations"
                     />
                   </div>
                 </template>
@@ -3408,8 +3582,22 @@ async function handleSessionModelCustomSubmit() {
   user-select: none;
 }
 
-.session-group-header--static {
+.session-group-header--static,
+.session-group-header--recent {
   cursor: default;
+}
+
+.session-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
 }
 
 .group-chevron {
@@ -3443,6 +3631,35 @@ async function handleSessionModelCustomSubmit() {
   font-size: 10px;
   color: $text-muted;
   font-weight: 400;
+}
+
+.session-category-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 10px 8px;
+  padding: 7px 8px;
+  border: 1px solid rgba(var(--error-rgb), 0.25);
+  border-radius: 6px;
+  background: rgba(var(--error-rgb), 0.06);
+  color: var(--error);
+  font-size: 11px;
+
+  button {
+    flex: 0 0 auto;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+  }
+
+  button:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
 }
 
 .session-items {
