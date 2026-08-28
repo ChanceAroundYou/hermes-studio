@@ -97,8 +97,6 @@ const isRunning = computed(() => props.tools.some(tool => tool.toolStatus === 'r
   width: 520px;
   max-width: 100%;
   min-width: 0;
-  margin-top: 2px;
-  margin-left: 30px;
 }
 
 .tool-run-header {

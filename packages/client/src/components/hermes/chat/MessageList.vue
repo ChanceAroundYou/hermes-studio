@@ -260,7 +260,29 @@ const displayMessages = computed(() => {
   if (compressionMessage.value) {
     out = [compressionMessage.value, ...out]
   }
-  return out;
+  // Embed consecutive tool cards into the preceding assistant's bubble,
+  // so the tool sits directly under the bubble and above message-meta
+  // (tight visual attachment, not separated by the button row gap).
+  const embedded: Message[] = []
+  for (const m of out) {
+    if (m.systemType === 'tool-run' && m.toolMessages?.length) {
+      let attachIdx = -1
+      for (let i = embedded.length - 1; i >= 0; i--) {
+        const cand = embedded[i]
+        if (cand.role === 'user' || cand.role === 'command' || cand.systemType === 'command' || cand.systemType === 'fork-divider') break
+        if (cand.role === 'assistant') { attachIdx = i; break }
+      }
+      if (attachIdx >= 0) {
+        const prev = embedded[attachIdx]
+        embedded[attachIdx] = { ...prev, attachedToolMessages: [...(prev.attachedToolMessages || []), ...m.toolMessages!] } as Message
+        continue
+      }
+      embedded.push(m)
+      continue
+    }
+    embedded.push(m)
+  }
+  return embedded;
 });
 
 function forkDividerId(sessionId: string): string {

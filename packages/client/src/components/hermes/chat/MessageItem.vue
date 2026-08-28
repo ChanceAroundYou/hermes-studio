@@ -17,6 +17,7 @@ import { useToolPanelStore } from "@/stores/hermes/tool-panel";
 import { useSettingsStore } from "@/stores/hermes/settings";
 import { chatSessionAgentAvatar, type ChatAgentAvatar } from "@/utils/chat-agent-avatar";
 import ToolChangeCard from "./ToolChangeCard.vue";
+import ToolRunCard from "./ToolRunCard.vue";
 import {
   copyTextToClipboard,
   extractUnifiedDiffPayload,
@@ -1256,7 +1257,10 @@ onBeforeUnmount(() => {
               <span></span><span></span><span></span>
             </span>
           </div>
-          <div class="message-meta">
+          <div v-if="message.attachedToolMessages?.length" class="attached-tool-run">
+            <ToolRunCard :run-id="`${message.id}-attached`" :tools="message.attachedToolMessages" />
+          </div>
+          <div class="message-meta" :class="{ 'attached-after-tools': !!message.attachedToolMessages?.length }">
             <button
               v-if="canPlaySpeech"
               class="speech-bubble-btn"
@@ -1815,6 +1819,10 @@ onBeforeUnmount(() => {
   opacity: 0;
   transition: opacity 0.15s ease;
 
+  &.attached-after-tools {
+    margin-top: 6px;
+  }
+
   .message:hover & {
     opacity: 1;
   }
@@ -1822,6 +1830,16 @@ onBeforeUnmount(() => {
   // 移动端一直显示按钮
   @media (max-width: 768px) {
     opacity: 1;
+  }
+}
+
+.attached-tool-run {
+  width: 100%;
+  margin-top: 6px;
+
+  :deep(.tool-run-card) {
+    width: 100%;
+    max-width: 100%;
   }
 }
 

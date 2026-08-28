@@ -90,6 +90,7 @@ export interface Message {
   runMarker?: string | null
   toolRunId?: string
   toolMessages?: Message[]
+  attachedToolMessages?: Message[]
 }
 
 export type SubagentStreamStatus =
