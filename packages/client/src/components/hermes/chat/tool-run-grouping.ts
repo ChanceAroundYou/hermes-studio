@@ -1,20 +1,24 @@
 import type { Message } from '@/stores/hermes/chat'
 
 /**
- * Chronological, consecutive-block grouping.
- * - Only consecutive `role:'tool' && toolStatus!=='running' && same runMarker` are merged into one ToolRunCard.
- * - Encountering `assistant`/`user`/`command` breaks the chunk, so a new assistant segment gets its own card below it.
- * - Preserves original timestamp order; no global jump to first occurrence.
- * - Insertion point = chunk[0]'s original index, so refresh (timestamp-sorted) stays stable.
- * - Every card default is collapsed (`ToolRunCard expanded=false`), regardless of chunk size.
+ * Chronological, consecutive-block grouping — always collapsed.
+ * - Merges ANY consecutive `role:'tool'` messages (running/done/error) into one ToolRunCard.
+ * - Running is NOT excluded — it is grouped together with done so the spinner
+ *   lives inside the same card with identical style, no jump on settle.
+ * - Merge ignores runMarker gaps: consecutive tools are merged regardless of
+ *   runMarker value, so "two calls not merged" due to differing markers is fixed.
+ *   A new assistant/user/command message breaks the chunk, so tools after a new
+ *   assistant appear below that text — exactly "same assistant merges, new assistant separates".
+ * - Insertion point = chunk[0]'s original index, stable across reload (timestamp-persisted).
+ * - Every card default collapsed (ToolRunCard expanded=false).
  */
 export function groupCompletedToolsByRun(messages: Message[]): Message[] {
   const out: Message[] = []
   let i = 0
   while (i < messages.length) {
     const m = messages[i]
-    const runId = m.role === 'tool' && m.toolStatus !== 'running' ? m.runMarker?.trim() : undefined
-    if (!runId) {
+    const isTool = m.role === 'tool' && !!m.toolName
+    if (!isTool) {
       out.push(m)
       i += 1
       continue
@@ -23,16 +27,17 @@ export function groupCompletedToolsByRun(messages: Message[]): Message[] {
     let j = i
     while (j < messages.length) {
       const cur = messages[j]
-      const curRun = cur.role === 'tool' && cur.toolStatus !== 'running' ? cur.runMarker?.trim() : undefined
-      if (curRun !== runId) break
+      if (cur.role !== 'tool' || !cur.toolName) break
       chunk.push(cur)
       j += 1
     }
+    const first = chunk[0]
+    const runId = first.runMarker?.trim() || `chunk:${first.id}`
     out.push({
-      id: `tool-run:${runId}:${chunk[0].id}`,
+      id: `tool-run:${runId}:${first.id}`,
       role: 'system',
       content: '',
-      timestamp: chunk[0].timestamp,
+      timestamp: first.timestamp,
       systemType: 'tool-run',
       runMarker: runId,
       toolRunId: runId,

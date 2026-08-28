@@ -213,10 +213,32 @@ function hasRenderableAssistantContent(message: Message): boolean {
   );
 }
 
+const compressionMessage = computed<Message | null>(() => {
+  const s = chatStore.compressionState
+  if (!s) return null
+  const sid = chatStore.activeSessionId || 'unknown'
+  const text = s.compressing
+    ? `Compressing... (${s.messageCount} msgs, ~${formatTokens(s.beforeTokens)} tokens)`
+    : s.error
+      ? `Compression failed: ${s.error}`
+      : s.compressed === false
+        ? `Compression skipped`
+        : `Compression completed: ${s.messageCount} msgs, ${formatTokens(s.beforeTokens)} → ${formatTokens(s.afterTokens)} tokens.`
+  return {
+    id: `compression:${sid}`,
+    role: 'command',
+    content: text,
+    timestamp: 0,
+    systemType: 'command',
+  } as Message
+})
+
 const displayMessages = computed(() => {
   const messages = chatStore.messages;
+  const hasCompression = !!compressionMessage.value
   const renderedMessages = messages
     .filter((m) => {
+      if (hasCompression && m.role === 'command' && /Compression (completed|failed)|Compressing\.\.\.|Compression skipped/.test(m.content || '')) return false
       if (m.role === "tool") {
         return toolTraceVisible.value && !!m.toolName;
       }
@@ -234,7 +256,11 @@ const displayMessages = computed(() => {
       }
       return message;
     });
-  return groupCompletedToolsByRun(renderedMessages);
+  let out = groupCompletedToolsByRun(renderedMessages);
+  if (compressionMessage.value) {
+    out = [compressionMessage.value, ...out]
+  }
+  return out;
 });
 
 function forkDividerId(sessionId: string): string {
@@ -642,6 +668,7 @@ defineExpose({
       ref="listRef"
       :messages="displayMessagesWithForkDivider"
       :virtualized="false"
+      :row-gap="8"
       :padding="virtualListPadding"
       @scroll="handleListScroll"
       @top-reach="handleTopReach"
@@ -710,48 +737,6 @@ defineExpose({
             />
           </div>
         </Transition>
-        <div v-if="chatStore.compressionState" class="compression-inline-card" role="status">
-          <svg
-            v-if="chatStore.compressionState.compressing"
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            class="compression-inline-icon"
-            aria-hidden="true"
-          >
-            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          <svg
-            v-else-if="chatStore.compressionState.compressed"
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            class="compression-inline-icon"
-            aria-hidden="true"
-          >
-            <path d="M5 13l4 4L19 7" />
-          </svg>
-          <span class="compression-inline-text">
-            {{
-              chatStore.compressionState.compressing
-                ? `Compressing... (${chatStore.compressionState.messageCount} msgs, ~${formatTokens(chatStore.compressionState.beforeTokens)} tokens)`
-                : chatStore.compressionState.compressed
-                  ? `Compressed ${chatStore.compressionState.messageCount} msgs: ~${formatTokens(chatStore.compressionState.beforeTokens)} → ~${formatTokens(chatStore.compressionState.afterTokens)} tokens`
-                  : `Compression skipped`
-            }}
-          </span>
-          <span
-            v-if="chatStore.compressionState.compressing"
-            class="tool-call-spinner"
-            aria-hidden="true"
-          ></span>
-        </div>
         <div v-if="chatStore.abortState" class="compression-inline-card abort-inline-card" role="status">
           <svg
             v-if="chatStore.abortState.aborting"

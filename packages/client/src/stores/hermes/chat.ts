@@ -4180,13 +4180,6 @@ export const useChatStore = defineStore('chat', () => {
                 const target = sessions.value.find(s => s.id === sid)
                 if (target) target.contextTokens = (evt as any).contextTokens
               }
-              // Auto-clear after 5s
-              setTimeout(() => {
-                const state = compressionStates.value.get(sid)
-                if (state && !state.compressing) {
-                  setCompressionState(sid, null)
-                }
-              }, 5000)
               break
             }
 
@@ -4799,12 +4792,6 @@ export const useChatStore = defineStore('chat', () => {
             const target = sessions.value.find(s => s.id === sid)
             if (target) target.contextTokens = (evt as any).contextTokens
           }
-          setTimeout(() => {
-            const state = compressionStates.value.get(sid)
-            if (state && !state.compressing) {
-              setCompressionState(sid, null)
-            }
-          }, 5000)
           break
         }
 

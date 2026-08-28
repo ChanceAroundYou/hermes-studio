@@ -19,6 +19,7 @@ const toolNames = computed(() => {
 })
 
 const hasError = computed(() => props.tools.some(tool => tool.toolStatus === 'error'))
+const isRunning = computed(() => props.tools.some(tool => tool.toolStatus === 'running'))
 </script>
 
 <template>
@@ -57,6 +58,7 @@ const hasError = computed(() => props.tools.some(tool => tool.toolStatus === 'er
       <span class="tool-run-count">{{ t('subagent.tools', { count: tools.length }) }}</span>
       <span v-if="toolNames" class="tool-run-names">{{ toolNames }}</span>
       <span v-if="hasError" class="tool-run-error">{{ t('chat.error') }}</span>
+      <span v-else-if="isRunning" class="tool-run-spinner" aria-hidden="true"></span>
       <svg
         v-else
         class="tool-run-success"
@@ -95,6 +97,8 @@ const hasError = computed(() => props.tools.some(tool => tool.toolStatus === 'er
   width: 520px;
   max-width: 100%;
   min-width: 0;
+  margin-top: 2px;
+  margin-left: 30px;
 }
 
 .tool-run-header {
@@ -161,6 +165,21 @@ const hasError = computed(() => props.tools.some(tool => tool.toolStatus === 'er
   flex: 0 0 auto;
   margin-inline-start: auto;
   color: rgba(var(--accent-primary-rgb), 0.78);
+}
+
+.tool-run-spinner {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid $text-muted;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .tool-run-expand {
