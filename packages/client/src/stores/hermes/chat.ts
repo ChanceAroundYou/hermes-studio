@@ -2232,7 +2232,7 @@ export const useChatStore = defineStore('chat', () => {
           } else if (!data.isWorking) {
             setAbortState(sessionId, null)
           }
-          if (!data.isWorking) setCompressionState(sessionId, null)
+          // keep compression visible (no auto-clear on !isWorking)
           if (data.inputTokens != null) target.inputTokens = data.inputTokens
           if (data.outputTokens != null) target.outputTokens = data.outputTokens
           if ((data as any).contextTokens != null) target.contextTokens = (data as any).contextTokens
@@ -3975,7 +3975,7 @@ export const useChatStore = defineStore('chat', () => {
         } else if (!data.isWorking) {
           setAbortState(sid, null)
         }
-        if (!data.isWorking) setCompressionState(sid, null)
+        // keep compression visible (no auto-clear on !isWorking)
 
         if (data.inputTokens != null) target.inputTokens = data.inputTokens
         if (data.outputTokens != null) target.outputTokens = data.outputTokens
@@ -4108,7 +4108,7 @@ export const useChatStore = defineStore('chat', () => {
               setRunStartedAt(sid, Date.now())
               clearAgentEventMessages(sid)
               setAbortState(sid, null)
-              setCompressionState(sid, null)
+              // keep compression completed visible across runs (cleared only by next compression.started)
               runProducedAssistantText = false
               runProducedAssistantContent = false
               runHadToolActivity = false
@@ -4755,7 +4755,7 @@ export const useChatStore = defineStore('chat', () => {
           ensureAbortHandle()
           clearAgentEventMessages(sid)
           setAbortState(sid, null)
-          setCompressionState(sid, null)
+          // keep compression completed visible across runs
           runProducedAssistantText = false
           runProducedAssistantContent = false
           runHadToolActivity = false
@@ -5364,7 +5364,7 @@ export const useChatStore = defineStore('chat', () => {
                 }
               })
               setAbortState(sid, null)
-              setCompressionState(sid, null)
+              // keep compression completed visible
             }
             applyResumedRunStartedAt(sid, data as any)
             if (data.isAborting) {
@@ -5372,7 +5372,7 @@ export const useChatStore = defineStore('chat', () => {
             } else if (!data.isWorking) {
               setAbortState(sid, null)
             }
-            if (!data.isWorking) setCompressionState(sid, null)
+            // keep compression completed visible on resume
             applyResumedSessionSettings(data)
             if (data.messages?.length && activeSession.value) {
               if (typeof data.workspace === 'string') {

@@ -228,7 +228,7 @@ const compressionMessage = computed<Message | null>(() => {
     id: `compression:${sid}`,
     role: 'command',
     content: text,
-    timestamp: 0,
+    timestamp: Date.now(),
     systemType: 'command',
   } as Message
 })
@@ -258,7 +258,7 @@ const displayMessages = computed(() => {
     });
   let out = groupCompletedToolsByRun(renderedMessages);
   if (compressionMessage.value) {
-    out = [compressionMessage.value, ...out]
+    out = [...out, compressionMessage.value]
   }
   // Embed consecutive tool cards into the preceding assistant's bubble,
   // so the tool sits directly under the bubble and above message-meta
