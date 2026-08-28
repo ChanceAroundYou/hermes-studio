@@ -4714,7 +4714,8 @@ export const useChatStore = defineStore('chat', () => {
 
     // Shared event handler — filters by session_id tag
     function handleEvent(evt: RunEvent) {
-      if (closed) return
+      const isCompressionEvt = evt.event === 'compression.started' || evt.event === 'compression.completed'
+      if (!isCompressionEvt && closed) return
       // Filter events for this session (server tags all events with session_id)
       if (evt.session_id && evt.session_id !== sid) return
       const eventRunMarker = readRunMarker(evt)
