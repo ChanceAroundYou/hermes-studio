@@ -266,7 +266,7 @@ const displayMessages = computed(() => {
     let anchorIdx = -1
     for (let i = out.length - 1; i >= 0; i--) {
       const m = out[i]
-      if (m.role === 'command' && typeof m.content === 'string' && m.content.trim().toLowerCase().startsWith('/compress')) {
+      if (m.role === 'command' && typeof m.content === 'string' && /^\/(compress|compact)(\s|$)/i.test(m.content.trim())) {
         // Prefer the most recent /compress; if we have startedAt, ensure it's
         // the one that triggered this compression (within 60s window).
         if (s?.startedAt) {
