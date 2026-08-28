@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useSettingsStore } from '@/stores/hermes/settings'
 import thinkingImage from '@/assets/thinking.gif'
 
+const settingsStore = useSettingsStore()
 const props = defineProps<{
   reasoning?: string | null
   reasoningId?: string | number | null
@@ -10,6 +12,11 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const expanded = ref(settingsStore.display.show_reasoning !== false)
+watch(
+  () => settingsStore.display.show_reasoning,
+  (v) => { expanded.value = v !== false },
+)
 const reasoningBody = ref<HTMLElement | null>(null)
 let scrollFrame = 0
 let visibleReasoningId = props.reasoningId
@@ -76,10 +83,31 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
         <span class="thinking-status-label">{{ t('chat.thinkingInProgress') }}</span>
         <span class="thinking-status-time">{{ elapsed }}</span>
       </div>
+      <button
+        v-if="reasoningLine"
+        type="button"
+        class="live-reasoning-toggle"
+        :aria-expanded="expanded"
+        @click="expanded = !expanded"
+      >
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          class="thinking-chevron"
+          :class="{ rotated: expanded }"
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+        <span>{{ expanded ? t('common.collapse') : t('common.expand') }}</span>
+      </button>
     </div>
     <div
+      v-if="expanded && reasoningLine"
       class="live-reasoning-detail"
-      :class="{ 'is-empty': !reasoningLine }"
       :data-reasoning-id="reasoningId"
     >
       <div class="live-reasoning-label">
@@ -98,13 +126,13 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  flex: 0 0 78px;
+  flex: 0 0 auto;
   gap: 8px;
   width: 100%;
   max-width: 100%;
-  height: 78px;
-  min-height: 78px;
-  max-height: 78px;
+  height: auto;
+  min-height: 40px;
+  max-height: none;
   min-width: 0;
   overflow: hidden;
 }
@@ -186,6 +214,45 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
   min-width: 44px;
 }
 
+.thinking-chevron {
+  transition: transform 0.18s ease;
+  flex-shrink: 0;
+}
+
+.thinking-chevron.rotated {
+  transform: rotate(90deg);
+}
+
+.live-reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: transparent;
+  color: $text-muted;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: $text-secondary;
+  }
+
+  .dark & {
+    border-color: rgba(255, 255, 255, 0.12);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: $text-primary;
+    }
+  }
+}
+
 .live-reasoning-detail {
   display: flex;
   align-items: center;
@@ -204,11 +271,6 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
   color: $text-secondary;
   contain: layout paint;
   transition: opacity 80ms linear;
-
-  &.is-empty {
-    opacity: 0;
-    pointer-events: none;
-  }
 
   .dark & {
     background: rgba(255, 255, 255, 0.045);

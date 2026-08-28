@@ -82,6 +82,7 @@ function handleToolCallClick(message: Message) {
   if (!isSubagentToolCall(message)) return
   openSubagentStream(chatStore.activeSessionId, message.toolCallId)
 }
+void formatToolDuration; void formatToolTime; void toolPreviewText; void handleToolCallClick; void isSubagentToolCall;
 
 function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -122,10 +123,6 @@ const currentToolCalls = computed(() => {
   ));
   return [...tools].reverse();
 });
-
-const visibleToolCalls = computed(() =>
-  currentToolCalls.value.filter((tool) => !!tool.toolName),
-);
 
 const liveReasoningDetail = computed<{
   messageId: Message["id"]
@@ -218,11 +215,10 @@ function hasRenderableAssistantContent(message: Message): boolean {
 
 const displayMessages = computed(() => {
   const messages = chatStore.messages;
-  const currentToolIds = new Set(currentToolCalls.value.map((tool) => tool.id));
   const renderedMessages = messages
     .filter((m) => {
       if (m.role === "tool") {
-        return toolTraceVisible.value && !!m.toolName && !(isRunIndicatorActive.value && currentToolIds.has(m.id));
+        return toolTraceVisible.value && !!m.toolName;
       }
       if (m.role === "assistant" && !hasRenderableAssistantContent(m)) return false;
       return true;
@@ -712,7 +708,7 @@ defineExpose({
             :reasoning-id="liveReasoningDetail?.messageId"
             :elapsed="formattedThinkingElapsed"
           />
-          <div v-if="visibleToolCalls.length > 0 || chatStore.compressionState || chatStore.abortState" class="tool-calls-panel">
+          <div v-if="chatStore.compressionState || chatStore.abortState" class="tool-calls-panel">
             <!-- Abort indicator -->
             <div v-if="chatStore.abortState" class="tool-call-item compression-item">
               <svg
@@ -795,93 +791,7 @@ defineExpose({
                 class="tool-call-spinner"
               ></span>
             </div>
-            <!-- Tool calls -->
-            <div
-              v-for="tc in visibleToolCalls"
-              :key="tc.id"
-              class="tool-call-row"
-              :role="isSubagentToolCall(tc) ? 'button' : undefined"
-              :tabindex="isSubagentToolCall(tc) ? 0 : undefined"
-              :title="isSubagentToolCall(tc) ? t('subagent.open') : undefined"
-              @click="handleToolCallClick(tc)"
-              @keydown.enter.prevent="handleToolCallClick(tc)"
-              @keydown.space.prevent="handleToolCallClick(tc)"
-            >
-              <div
-                class="tool-call-item"
-                :class="{ 'subagent-entry': isSubagentToolCall(tc) }"
-              >
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                class="tool-call-icon"
-              >
-                <path
-                  d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
-                />
-              </svg>
-              <span class="tool-call-name">{{ tc.toolName }}</span>
-              <span
-                v-if="tc.toolPreview"
-                class="tool-call-preview"
-                :title="tc.toolPreview"
-              >{{ toolPreviewText(tc.toolPreview) }}</span>
-              <span
-                v-if="tc.toolDuration !== undefined && tc.toolStatus !== 'running'"
-                class="tool-call-duration"
-                :title="$t('chat.executionDuration')"
-              >{{ formatToolDuration(tc.toolDuration) }}</span
-              >
-              <svg
-                v-if="tc.toolStatus === 'done'"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                class="tool-call-success-icon"
-              >
-                <circle cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.15"/>
-                <path
-                  d="M8 12L11 15L16 9"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  fill="none"
-                />
-              </svg>
-              <span
-                v-if="tc.toolStatus === 'running'"
-                class="tool-call-spinner"
-              ></span>
-              <svg
-                v-if="tc.toolStatus === 'error'"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                class="tool-call-error-icon"
-              >
-                <circle cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.15"/>
-                <path
-                  d="M15 9L9 15M9 9L15 15"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  fill="none"
-                />
-              </svg>
-              </div>
-              <span v-if="tc.timestamp" class="tool-call-time">
-                {{ formatToolTime(tc.timestamp) }}
-              </span>
-            </div>
-          </div>
+        </div>
         </div>
         </Transition>
       </template>
