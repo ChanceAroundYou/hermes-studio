@@ -258,7 +258,35 @@ const displayMessages = computed(() => {
     });
   let out = groupCompletedToolsByRun(renderedMessages);
   if (compressionMessage.value) {
-    out = [...out, compressionMessage.value]
+    const s = chatStore.compressionState
+    // Sticky fix: anchor the synthetic compress card right after the triggering
+    // `/compress` command instead of tailing the list. This keeps it inline in
+    // the conversation flow and prevents it from drifting behind later user
+    // messages (e.g. "压缩完成后..." complaint) at the bottom.
+    let anchorIdx = -1
+    for (let i = out.length - 1; i >= 0; i--) {
+      const m = out[i]
+      if (m.role === 'command' && typeof m.content === 'string' && m.content.trim().toLowerCase().startsWith('/compress')) {
+        // Prefer the most recent /compress; if we have startedAt, ensure it's
+        // the one that triggered this compression (within 60s window).
+        if (s?.startedAt) {
+          if (m.timestamp <= s.startedAt + 60_000 && m.timestamp >= s.startedAt - 300_000) { anchorIdx = i; break }
+          // Fallback: if timestamp mismatch (clock skew), still take the last
+          // /compress as anchor rather than leaving it at tail.
+          anchorIdx = i; break
+        } else {
+          anchorIdx = i; break
+        }
+      }
+    }
+    // Also consider the synthetic hiding the real persisted
+    // "Compression completed: ..." command duplicate — the last /compress is
+    // still visible (filter only hides Compression...), so anchor will be found.
+    if (anchorIdx >= 0) {
+      out = [...out.slice(0, anchorIdx + 1), compressionMessage.value, ...out.slice(anchorIdx + 1)]
+    } else {
+      out = [...out, compressionMessage.value]
+    }
   }
   // Embed consecutive tool cards into the preceding assistant's bubble,
   // so the tool sits directly under the bubble and above message-meta

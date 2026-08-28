@@ -1105,11 +1105,9 @@ export function startRunViaSocket(
       onDone()
     },
     onCompressionStarted: (evt: RunEvent) => {
-      if (closed) return
       onEvent(evt)
     },
     onCompressionCompleted: (evt: RunEvent) => {
-      if (closed) return
       onEvent(evt)
     },
     onAbortStarted: (evt: RunEvent) => {

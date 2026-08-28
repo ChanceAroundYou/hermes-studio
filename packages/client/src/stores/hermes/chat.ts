@@ -482,6 +482,7 @@ interface CompressionState {
   afterTokens: number
   compressed: boolean | null
   error?: string
+  startedAt?: number
 }
 
 interface AbortState {
@@ -2279,6 +2280,7 @@ export const useChatStore = defineStore('chat', () => {
                   beforeTokens: e.token_count || 0,
                   afterTokens: 0,
                   compressed: null,
+                  startedAt: Date.now(),
                 })
               } else if (e.event === 'compression.completed') {
                 const afterTokens = e.contextTokens || e.afterTokens || 0
@@ -2289,6 +2291,7 @@ export const useChatStore = defineStore('chat', () => {
                   afterTokens,
                   compressed: e.compressed ?? false,
                   error: e.error,
+                  startedAt: compressionStates.value.get(sessionId)?.startedAt || Date.now(),
                 })
                 if (e.contextTokens != null) target.contextTokens = e.contextTokens
               } else if (e.event === 'abort.started') {
@@ -4037,6 +4040,7 @@ export const useChatStore = defineStore('chat', () => {
                   beforeTokens: (e as any).token_count || 0,
                   afterTokens: 0,
                   compressed: null,
+                  startedAt: Date.now(),
                 })
                 break
               case 'compression.completed': {
@@ -4048,6 +4052,7 @@ export const useChatStore = defineStore('chat', () => {
                   afterTokens,
                   compressed: (e as any).compressed ?? false,
                   error: (e as any).error,
+                  startedAt: compressionStates.value.get(sid)?.startedAt || Date.now(),
                 })
                 if ((e as any).contextTokens != null) target.contextTokens = (e as any).contextTokens
                 break
@@ -4163,6 +4168,7 @@ export const useChatStore = defineStore('chat', () => {
                 beforeTokens: (evt as any).token_count || 0,
                 afterTokens: 0,
                 compressed: null,
+                startedAt: Date.now(),
               })
               break
             }
@@ -4176,6 +4182,7 @@ export const useChatStore = defineStore('chat', () => {
                 afterTokens,
                 compressed: (evt as any).compressed ?? false,
                 error: (evt as any).error,
+                startedAt: compressionStates.value.get(sid)?.startedAt || Date.now(),
               })
               if ((evt as any).contextTokens != null) {
                 const target = sessions.value.find(s => s.id === sid)
@@ -4775,6 +4782,7 @@ export const useChatStore = defineStore('chat', () => {
             beforeTokens: (evt as any).token_count || 0,
             afterTokens: 0,
             compressed: null,
+            startedAt: Date.now(),
           })
           break
         }
@@ -4788,6 +4796,7 @@ export const useChatStore = defineStore('chat', () => {
             afterTokens,
             compressed: (evt as any).compressed ?? false,
             error: (evt as any).error,
+            startedAt: compressionStates.value.get(sid)?.startedAt || Date.now(),
           })
           if ((evt as any).contextTokens != null) {
             const target = sessions.value.find(s => s.id === sid)
