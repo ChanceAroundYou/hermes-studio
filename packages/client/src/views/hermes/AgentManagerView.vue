@@ -16,6 +16,9 @@ import { fetchAgentStatusSnapshot, type AgentStatusSnapshot } from '@/api/agent-
 import { fetchRuntimeVersionStatus } from '@/api/hermes/runtime-versions'
 import VersionManagementModal from '@/components/layout/VersionManagementModal.vue'
 import { useAppStore } from '@/stores/hermes/app'
+import { getBaseUrlValue } from '@/api/client'
+
+const base = getBaseUrlValue()
 
 interface CodingAgentCard {
   id: CodingAgentId
@@ -39,7 +42,7 @@ const codingAgents: CodingAgentCard[] = [
     id: 'claude-code',
     name: 'Claude',
     provider: 'Anthropic',
-    logo: '/coding-agents/claude-code.svg',
+    logo: `${base}/coding-agents/claude-code.svg`,
     command: 'claude',
     packageName: '@anthropic-ai/claude-code',
   },
@@ -47,7 +50,7 @@ const codingAgents: CodingAgentCard[] = [
     id: 'codex',
     name: 'Codex',
     provider: 'OpenAI',
-    logo: '/coding-agents/codex-openai.png',
+    logo: `${base}/coding-agents/codex-openai.png`,
     command: 'codex',
     packageName: '@openai/codex',
   },
@@ -55,7 +58,7 @@ const codingAgents: CodingAgentCard[] = [
     id: 'pi',
     name: 'Pi',
     provider: 'Pi',
-    logo: '/coding-agents/pi.svg',
+    logo: `${base}/coding-agents/pi.svg`,
     command: 'pi',
     packageName: '@earendil-works/pi-coding-agent',
   },
@@ -275,7 +278,7 @@ onMounted(() => {
             <section class="agent-card coding-agent-card" data-testid="agent-card-ekko">
               <header class="agent-card-header compact">
                 <div class="agent-identity">
-                  <img :src="'/coding-agents/ekko-agent.png'" alt="" class="agent-logo" />
+                  <img :src="`${base}/coding-agents/ekko-agent.png`" alt="" class="agent-logo" />
                   <div>
                     <div class="agent-name-row">
                       <h3>Ekko</h3>
@@ -290,7 +293,7 @@ onMounted(() => {
           <section class="agent-card coding-agent-card hermes-card" data-testid="agent-card-hermes">
             <header class="agent-card-header compact">
               <div class="agent-identity">
-                <img :src="'/coding-agents/hermes.png'" alt="" class="agent-logo" />
+                <img :src="`${base}/coding-agents/hermes.png`" alt="" class="agent-logo" />
                 <div>
                   <div class="agent-name-row">
                     <h3>Hermes</h3>
