@@ -47,6 +47,7 @@ import { buildOutboundRunEvent } from './resume-payload'
 import { estimateUsageTokensFromMessages } from './usage'
 import type { BackgroundContinuationContext, ChatCodingAgentId, ContentBlock, QueuedRun, SessionState } from './types'
 import { completeWorkspaceRunCheckpoint, startWorkspaceRunCheckpoint } from './workspace-diff-tracker'
+import { selectWorkspace } from '../workspace/manager'
 
 export interface EkkoAgentRunSocketData {
   input: string | ContentBlock[]
@@ -66,6 +67,31 @@ export interface EkkoAgentRunSocketData {
   category_id?: number | null
   source?: string
   session_source?: 'global_agent' | 'workflow' | 'group_chat'
+  group_room_id?: string
+  memory_input?: string | ContentBlock[]
+  memory_messages?: Array<{
+    id?: string
+    role: 'user' | 'assistant'
+    content: string
+    metadata?: Record<string, unknown>
+    createdAt?: string
+  }>
+  memory_write_policy?: 'automatic' | 'explicit-only'
+  memory_origin?: { host?: string; namespace?: string; contextId?: string }
+  memory_recall_scopes?: Array<
+    | { type: 'profile' }
+    | { type: 'context'; namespace: string; id: string }
+    | { type: 'session'; id: string }
+  >
+  memory_write_scopes?: Array<
+    | { type: 'profile' }
+    | { type: 'context'; namespace: string; id: string }
+    | { type: 'session'; id: string }
+  >
+  memory_default_write_scope?:
+    | { type: 'profile' }
+    | { type: 'context'; namespace: string; id: string }
+    | { type: 'session'; id: string }
   context_compression_enabled?: boolean
   baseUrl?: string
   base_url?: string
@@ -449,7 +475,11 @@ export async function handleEkkoAgentRun(
   const persistedReasoningEffort = normalizeReasoningEffort(data.reasoning_effort ?? storedSession?.reasoning_effort)
   const reasoningEffort = resolveReasoningEffort(persistedReasoningEffort)
   const agent = getGlobalEkkoAgent(profile)
-  const workspace = data.workspace || storedSession?.workspace || agent.sessionWorkspaceDirectory(sessionId)
+  const workspace = selectWorkspace(
+    data.workspace,
+    storedSession?.workspace,
+    () => agent.sessionWorkspaceDirectory(sessionId),
+  )
   const shouldEmitWorkspaceUpdate = Boolean(workspace && !storedSession?.workspace)
   if (storedSession && !storedSession.workspace) updateSession(sessionId, { workspace })
   const displayInput = data.display_input === undefined ? data.input : data.display_input
@@ -598,7 +628,6 @@ export async function handleEkkoAgentRun(
         }
       : undefined,
   })
-  const memoryUsageBatchId = randomUUID()
   const skillReviewUsageBatchId = randomUUID()
   const turnId = randomUUID()
   const currentInputTokens = estimateUsageTokensFromMessages([
@@ -1190,6 +1219,7 @@ export async function handleEkkoAgentRun(
         sessionId,
         signal: abortController.signal,
         onRequested: (pending: any) => {
+          const requestedAt = Date.now()
           emit('approval.requested', {
             event: 'approval.requested',
             run_id: runId || turnId,
@@ -1199,6 +1229,8 @@ export async function handleEkkoAgentRun(
             choices: pending.choices,
             allow_permanent: pending.allowPermanent,
             timeout_ms: pending.timeoutMs,
+            remaining_timeout_ms: pending.timeoutMs,
+            requested_at: requestedAt,
             tool: pending.toolName,
             permission_key: pending.key,
           })
@@ -1218,6 +1250,7 @@ export async function handleEkkoAgentRun(
         runId: runId || turnId,
         signal: abortController.signal,
         onRequested: (pending: any) => {
+          const requestedAt = Date.now()
           emit('clarify.requested', {
             event: 'clarify.requested',
             run_id: runId || turnId,
@@ -1225,6 +1258,8 @@ export async function handleEkkoAgentRun(
             question: pending.question,
             choices: pending.choices || null,
             timeout_ms: pending.timeoutMs,
+            remaining_timeout_ms: pending.timeoutMs,
+            requested_at: requestedAt,
           })
         },
         onResolved: (resolution: any) => {
@@ -1277,6 +1312,9 @@ export async function handleEkkoAgentRun(
             messages: instructionMessages,
             signal: abortController.signal,
             memoryEnabled: false,
+            memoryInput: {
+              messages: [{ role: 'user', content: inputText }],
+            },
             toolContext,
             metadata,
             backgroundDelegationEnabled: data.background_delegation_enabled !== false,
@@ -1290,6 +1328,33 @@ export async function handleEkkoAgentRun(
       role: 'user',
       ...await toUserAgentContent(data.input),
     }
+    const isGroupMemory = data.session_source === 'group_chat' || data.source === 'group_chat'
+    const contextScope = {
+      type: 'context' as const,
+      namespace: isGroupMemory ? 'studio.group-chat' : 'studio.single-chat',
+      id: String(isGroupMemory ? data.group_room_id || sessionId : sessionId),
+    }
+    const sessionScope = { type: 'session' as const, id: sessionId }
+    const profileScope = { type: 'profile' as const }
+    const memoryInput = callbackContext
+      ? undefined
+      : {
+          messages: data.memory_messages?.length
+            ? data.memory_messages
+            : [{
+                role: 'user' as const,
+                ...await toUserAgentContent(data.memory_input ?? data.input),
+              }],
+          writePolicy: data.memory_write_policy ?? 'automatic',
+          origin: data.memory_origin ?? {
+            host: 'hermes-studio',
+            namespace: isGroupMemory ? 'group-chat' : 'single-chat',
+            contextId: contextScope.id,
+          },
+          recallScopes: data.memory_recall_scopes ?? [profileScope, contextScope, sessionScope],
+          writeScopes: data.memory_write_scopes ?? [profileScope, contextScope, sessionScope],
+          defaultWriteScope: data.memory_default_write_scope ?? (isGroupMemory ? contextScope : profileScope),
+        }
     const result = await agent.run({
       modelClient,
       model: modelConfig.model,
@@ -1307,6 +1372,7 @@ export async function handleEkkoAgentRun(
           : await toAgentMessages(compressedHistory)),
         currentMessage,
       ],
+      ...(memoryInput ? { memoryInput } : {}),
       signal: abortController.signal,
       logContext: {
         profile,
@@ -1314,22 +1380,6 @@ export async function handleEkkoAgentRun(
         turnId,
       },
       onEvent: handleRuntimeEvent,
-      onMemoryUsage: (event: any) => {
-        recordSessionUsage({
-          sessionId,
-          runId: `memory-summary:${memoryUsageBatchId}:call:${event.callIndex}`,
-          source: 'ekko_agent',
-          agent: 'ekko_agent',
-          usageScope: 'model_call',
-          purpose: event.purpose,
-          apiCalls: 1,
-          usage: event.usage,
-          profile,
-          model: event.model || modelConfig.model,
-          provider: modelConfig.provider,
-          isEstimated: false,
-        })
-      },
       onSkillReviewUsage: (event: any) => {
         recordSessionUsage({
           sessionId,

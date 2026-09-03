@@ -8,6 +8,7 @@ const DEFAULT_AGENT_ICONS: Record<RoomAgent['agent'], string> = {
     codex: `${getBaseUrlValue()}/coding-agents/codex-openai.png`,
     claude: `${getBaseUrlValue()}/coding-agents/claude-code.svg`,
     pi: `${getBaseUrlValue()}/coding-agents/pi.svg`,
+    grok: `${getBaseUrlValue()}/coding-agents/grok.svg`,
 }
 
 export function parseStoredAvatar(raw: unknown): ProfileAvatar | null {
@@ -55,6 +56,7 @@ export function groupMessageAgent(message: ChatMessage, agents: RoomAgent[]): Ro
         roomId: message.roomId,
         agentId: message.senderId,
         agent: agentType,
+        agentMode: 'scoped',
         profile: message.senderAgentProfile || '',
         provider: message.senderAgentProvider || '',
         model: message.senderAgentModel || '',

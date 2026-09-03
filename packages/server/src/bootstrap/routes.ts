@@ -59,8 +59,13 @@ import { performanceMonitorRoutes } from '../modules/studio/routes/performance-m
 import { journeyRoutes } from '../modules/hermes/routes/journey'
 import { mcpRoutes } from '../modules/hermes/routes/mcp'
 import { runtimeVersionRoutes } from '../modules/hermes/routes/runtime-versions'
+import { legacyDataMigrationRoutes } from '../modules/hermes/routes/legacy-data-migration'
 import { agentStatusRoutes } from '../modules/studio/routes/agent-status'
 import { writeGateRoutes } from '../modules/hermes/routes/write-gate'
+import { ekkoMemoryRoutes } from '../modules/ekko/routes/memory'
+import { ekkoSkillRoutes } from '../modules/ekko/routes/skills'
+import { ekkoMcpRoutes } from '../modules/ekko/routes/mcp'
+import { ekkoConfigRoutes } from '../modules/ekko/routes/config'
 import { petdexPublicRoutes, petdexRoutes } from '../modules/studio/routes/petdex'
 import { petRoutes } from '../modules/studio/routes/pets'
 import { legacyAppApiCompatibility } from '../modules/studio/middleware/legacy-app-api'
@@ -103,6 +108,10 @@ export function registerRoutes(app: any, authMiddleware: Array<(ctx: Context, ne
   app.use(socialMessageRoutes.routes())
   app.use(sessionRoutes.routes())
   app.use(profileRoutes.routes())
+  app.use(ekkoMemoryRoutes.routes())
+  app.use(ekkoSkillRoutes.routes())
+  app.use(ekkoMcpRoutes.routes())
+  app.use(ekkoConfigRoutes.routes())
   app.use(skillRoutes.routes())
   app.use(skillBundleRoutes.routes())
   app.use(pluginRoutes.routes())
@@ -135,6 +144,7 @@ export function registerRoutes(app: any, authMiddleware: Array<(ctx: Context, ne
   app.use(journeyRoutes.routes())
   app.use(mcpRoutes.routes())                   // MCP management
   app.use(runtimeVersionRoutes.routes())         // Runtime and version management
+  app.use(legacyDataMigrationRoutes.routes())    // One-time legacy Windows Hermes data migration
   app.use(writeGateRoutes.routes())              // Hermes Agent write approval review
   app.use(petdexRoutes.routes())
   app.use(petRoutes.routes())

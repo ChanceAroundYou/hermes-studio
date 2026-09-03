@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_EKKO_CONFIG,
+  EKKO_CONFIG_SCHEMA_VERSION,
   EkkoAgent,
   EkkoConfigError,
   EkkoConfigStore,
@@ -18,10 +19,54 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await rm(baseDirectory, { recursive: true, force: true })
 })
 
+async function configBackups(configPath: string): Promise<string[]> {
+  return (await readdir(dirname(configPath)))
+    .filter(name => name.startsWith('config.invalid-') && name.endsWith('.json'))
+    .sort()
+}
+
 describe('EkkoConfigStore', () => {
+  it('applies constructor config before creating global Profile agents', async () => {
+    const agent = new EkkoAgent({
+      baseDirectory,
+      env: { NODE_ENV: 'test' },
+      config: {
+        runtime: { maxSteps: 42 },
+        compression: {
+          enabled: true,
+          threshold: 0.7,
+          targetRatio: 0.3,
+          protectLastN: 16,
+          protectFirstN: 4,
+        },
+        prompt: { instructions: ['Keep responses concise.'] },
+      },
+    })
+    try {
+      expect(agent.readConfig()).toMatchObject({
+        runtime: { maxSteps: 42 },
+        compression: {
+          enabled: true,
+          threshold: 0.7,
+          targetRatio: 0.3,
+          protectLastN: 16,
+          protectFirstN: 4,
+        },
+        prompt: { instructions: ['Keep responses concise.'] },
+      })
+      expect(JSON.parse(await readFile(agent.layout.configPath, 'utf8'))).toMatchObject({
+        runtime: { maxSteps: 42 },
+        compression: { threshold: 0.7 },
+      })
+    } finally {
+      agent.close()
+    }
+  })
+
   it('collects model and authorization management on new EkkoAgent()', () => {
     const agent = new EkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
     try {
@@ -83,6 +128,127 @@ describe('EkkoConfigStore', () => {
     expect(persisted.futureModule).toEqual({ userOwned: true })
   })
 
+  it('upgrades schema version 6 in place without creating a recovery backup', async () => {
+    const initial = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    const configPath = initial.layout.configPath
+    initial.close()
+    await writeFile(configPath, JSON.stringify({
+      ...DEFAULT_EKKO_CONFIG,
+      schemaVersion: 6,
+      runtime: { ...DEFAULT_EKKO_CONFIG.runtime, maxSteps: 61 },
+      futureModule: { userOwned: true },
+    }, null, 2))
+
+    const upgraded = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    try {
+      expect(upgraded.config.read()).toMatchObject({
+        schemaVersion: EKKO_CONFIG_SCHEMA_VERSION,
+        runtime: { maxSteps: 61 },
+        futureModule: { userOwned: true },
+      })
+      expect(await configBackups(configPath)).toEqual([])
+    } finally {
+      upgraded.close()
+    }
+  })
+
+  it('backs up a future schema and restores defaults during the same startup', async () => {
+    const initial = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    const configPath = initial.layout.configPath
+    initial.close()
+    const futureConfig = {
+      ...structuredClone(DEFAULT_EKKO_CONFIG),
+      schemaVersion: EKKO_CONFIG_SCHEMA_VERSION + 1,
+      runtime: { ...DEFAULT_EKKO_CONFIG.runtime, maxSteps: 99 },
+      futureModule: { userOwned: true },
+    }
+    await writeFile(configPath, JSON.stringify(futureConfig, null, 2))
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const recovered = setupEkkoAgent({
+      baseDirectory,
+      env: { NODE_ENV: 'test' },
+      config: { runtime: { maxSteps: 42 } },
+    })
+    try {
+      expect(recovered.config.read()).toMatchObject({
+        schemaVersion: EKKO_CONFIG_SCHEMA_VERSION,
+        runtime: { maxSteps: 42 },
+      })
+      expect(recovered.config.read()).not.toHaveProperty('futureModule')
+      const backups = await configBackups(configPath)
+      expect(backups).toHaveLength(1)
+      await expect(readFile(join(dirname(configPath), backups[0]), 'utf8'))
+        .resolves.toBe(JSON.stringify(futureConfig, null, 2))
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('defaults restored'))
+    } finally {
+      recovered.close()
+    }
+  })
+
+  it('backs up malformed JSON and continues startup with current defaults', async () => {
+    const initial = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    const configPath = initial.layout.configPath
+    initial.close()
+    const malformed = '{"schemaVersion": 7, "runtime":'
+    await writeFile(configPath, malformed)
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const recovered = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    try {
+      expect(recovered.config.read()).toEqual(DEFAULT_EKKO_CONFIG)
+      const backups = await configBackups(configPath)
+      expect(backups).toHaveLength(1)
+      await expect(readFile(join(dirname(configPath), backups[0]), 'utf8')).resolves.toBe(malformed)
+    } finally {
+      recovered.close()
+    }
+  })
+
+  it('does not replace the config when the filesystem read fails', async () => {
+    const initial = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    const configPath = initial.layout.configPath
+    initial.close()
+    await rm(configPath)
+    await mkdir(configPath)
+
+    expect(() => setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })).toThrow()
+    expect(await configBackups(configPath)).toEqual([])
+  })
+
+  it('removes obsolete memory review and session-summary intervals', async () => {
+    const setup = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    const configPath = setup.layout.configPath
+    setup.close()
+    await writeFile(configPath, JSON.stringify({
+      ...DEFAULT_EKKO_CONFIG,
+      schemaVersion: 4,
+      memory: {
+        ...DEFAULT_EKKO_CONFIG.memory,
+        reviewEveryUserMessages: 1,
+        summaryEveryUserMessages: 8,
+      },
+    }, null, 2))
+
+    const config = new EkkoConfigStore({ configPath }).ensureDefaults()
+
+    expect(config.schemaVersion).toBe(9)
+    expect(config.memory).not.toHaveProperty('reviewEveryUserMessages')
+    expect(config.memory).not.toHaveProperty('summaryEveryUserMessages')
+  })
+
+  it('validates context compression policy bounds', () => {
+    const setup = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    try {
+      expect(() => setup.config.update({ compression: { threshold: 1 } }))
+        .toThrow('compression.threshold: must be a number between 0.05 and 0.95')
+      expect(() => setup.config.update({ compression: { protectLastN: -1 } }))
+        .toThrow('compression.protectLastN: must be an integer between 0 and 500')
+    } finally {
+      setup.close()
+    }
+  })
+
   it('patches nested leaves without replacing their sibling settings', () => {
     const setup = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
     try {
@@ -97,6 +263,93 @@ describe('EkkoConfigStore', () => {
 
       expect(updated.runtime).toMatchObject({ maxSteps: 12, maxModelRetries: 8 })
       expect(updated.model).toMatchObject({ temperature: 0.4, reasoningEffort: 'low' })
+    } finally {
+      setup.close()
+    }
+  })
+
+  it('persists profile-scoped MCP servers in the canonical config', async () => {
+    const setup = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    try {
+      setup.config.setMcpServer('local-tools', {
+        command: process.execPath,
+        args: ['server.cjs', '--stdio'],
+        env: { LOCAL_MODE: '1' },
+        enabled: true,
+      }, 'work')
+
+      expect(setup.config.listMcpServers()).toEqual({})
+      expect(setup.config.getMcpServer('local-tools', 'work')).toEqual({
+        command: process.execPath,
+        args: ['server.cjs', '--stdio'],
+        env: { LOCAL_MODE: '1' },
+        enabled: true,
+      })
+
+      setup.config.setMcpServer('remote-tools', {
+        type: 'streamable_http',
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer test' },
+        enabled: true,
+      }, 'work')
+      expect(setup.config.getMcpServer('remote-tools', 'work')).toEqual({
+        type: 'streamable_http',
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer test' },
+        enabled: true,
+      })
+
+      setup.config.setMcpServer('local-tools', {
+        command: process.execPath,
+        args: ['server.cjs', '--stdio'],
+        env: { LOCAL_MODE: '1' },
+        enabled: false,
+      }, 'work')
+      expect(setup.config.getMcpServer('local-tools', 'work')?.enabled).toBe(false)
+
+      const persisted = JSON.parse(await readFile(setup.layout.configPath, 'utf8'))
+      expect(persisted.mcp.profiles.work.servers['local-tools'].enabled).toBe(false)
+      expect(setup.config.deleteMcpServer('local-tools', 'work')).toBe(true)
+      expect(setup.config.deleteMcpServer('local-tools', 'work')).toBe(false)
+      expect(setup.config.deleteMcpServer('remote-tools', 'work')).toBe(true)
+    } finally {
+      setup.close()
+    }
+  })
+
+  it('loads configured profile MCP servers into newly created runtimes', async () => {
+    const setup = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    try {
+      setup.config.setMcpServer('fake', {
+        command: process.execPath,
+        args: [join(process.cwd(), 'tests/fixtures/fake-mcp-server.cjs')],
+        enabled: true,
+      })
+      const create = vi.fn(async () => ({ content: 'done' }))
+      const runtime = setup.createRuntime({
+        modelClient: {
+          provider: 'test',
+          requestStyle: 'custom-runtime',
+          capabilities: {
+            streaming: false,
+            tools: true,
+            vision: false,
+            jsonMode: false,
+            systemPrompt: true,
+          },
+          create,
+          stream: vi.fn(),
+        },
+        memory: false,
+      })
+
+      await runtime.run({ messages: ['hello'] })
+
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: 'fake_echo' }),
+        ]),
+      }))
     } finally {
       setup.close()
     }
@@ -332,6 +585,25 @@ describe('EkkoConfigStore', () => {
         defaultModel: 'unsafe-model',
         headers: { Authorization: 'Bearer must-not-persist' },
       })).toThrow(/credential headers/)
+    } finally {
+      setup.close()
+    }
+  })
+
+  it('persists Profile-scoped external Skill directories and disabled names', () => {
+    const setup = setupEkkoAgent({ baseDirectory, env: { NODE_ENV: 'test' } })
+    try {
+      setup.config.setSkillExternalDirectories(['~/shared-skills', '$TEAM_SKILLS'], 'work')
+      setup.config.setSkillEnabled('weather', false, 'work')
+
+      expect(setup.config.getSkillProfile()).toEqual({ disabled: [], externalDirectories: [] })
+      expect(setup.config.getSkillProfile('work')).toEqual({
+        disabled: ['weather'],
+        externalDirectories: ['~/shared-skills', '$TEAM_SKILLS'],
+      })
+
+      setup.config.setSkillEnabled('weather', true, 'work')
+      expect(setup.config.getSkillProfile('work').disabled).toEqual([])
     } finally {
       setup.close()
     }

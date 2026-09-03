@@ -792,12 +792,89 @@ describe('group chat agent workspace bridge runs', () => {
     expect(runData.group_system_prompt).toBe(runData.instructions)
     expect(runData.group_room_id).toBe('room-runtime')
     expect(runData.group_agent_id).toBe(`agent-${agent}`)
+    if (agent === 'ekko') {
+      expect(runData.memory_messages).toEqual([
+        expect.objectContaining({
+          role: 'user',
+          content: 'Human：reply',
+          metadata: expect.objectContaining({ senderName: 'Human' }),
+        }),
+      ])
+      expect(runData.memory_write_policy).toBe('automatic')
+      expect(runData.memory_origin).toEqual({
+        host: 'hermes-studio',
+        namespace: 'group-chat',
+        contextId: 'room-runtime',
+      })
+      expect(runData.memory_recall_scopes).toEqual([
+        { type: 'profile' },
+        { type: 'context', namespace: 'studio.group-chat', id: 'room-runtime' },
+        { type: 'session', id: expect.any(String) },
+      ])
+      expect(runData.memory_default_write_scope).toEqual({
+        type: 'context',
+        namespace: 'studio.group-chat',
+        id: 'room-runtime',
+      })
+    } else {
+      expect(runData).not.toHaveProperty('memory_messages')
+      expect(runData).not.toHaveProperty('memory_write_policy')
+    }
     expect(mockSocket.emit).toHaveBeenCalledWith('clarify.requested', expect.objectContaining({
       roomId: 'room-runtime', clarify_id: `clarify-${agent}`, question: 'Continue?',
     }))
     expect(mockSocket.emit).toHaveBeenCalledWith('clarify.resolved', expect.objectContaining({
       roomId: 'room-runtime', clarify_id: `clarify-${agent}`, resolved: true,
     }))
+  })
+
+  it('runs a global Codex group Agent without scoped provider, model, protocol, or reasoning overrides', async () => {
+    const { AgentClients } = await import('../../packages/server/src/modules/studio/services/group-chat/agent-clients')
+    const runAndWait = vi.fn(async () => ({ ok: true, output: 'done' }))
+    const clients = new AgentClients()
+    clients.setChatRunService({ runAndWait, abortSession: vi.fn(async () => {}) })
+    const client = await clients.createAgent({
+      agentId: 'agent-global-codex',
+      agent: 'codex',
+      agentMode: 'global',
+      profile: 'default',
+      provider: 'must-not-leak',
+      model: 'must-not-leak',
+      apiMode: 'chat_completions',
+      reasoningEffort: 'high',
+      name: 'Global Codex',
+      description: 'Uses the user CLI configuration',
+      invited: 0,
+    } as any) as any
+    client.setStorage({
+      getRoom: vi.fn(() => ({ name: 'Global Room', workspace: '' })),
+      getRoomMembers: vi.fn(() => []),
+      getRoomAgents: vi.fn(() => []),
+    })
+
+    await client.replyToMention('room-global', {
+      messageId: 'msg-global',
+      content: '@Global Codex work',
+      senderName: 'Human',
+      senderId: 'human-1',
+      timestamp: 1,
+      role: 'user',
+    })
+
+    const runInput = runAndWait.mock.calls[0][0]
+    expect(runInput).toMatchObject({
+      coding_agent_id: 'codex',
+      mode: 'global',
+      profile: 'default',
+      group_room_id: 'room-global',
+      group_agent_id: 'agent-global-codex',
+    })
+    expect(runInput.instructions).toContain('You are "Global Codex", an AI assistant in the group chat room "Global Room"')
+    expect(runInput.group_system_prompt).toBe(runInput.instructions)
+    expect(runInput).not.toHaveProperty('provider')
+    expect(runInput).not.toHaveProperty('model')
+    expect(runInput).not.toHaveProperty('apiMode')
+    expect(runInput).not.toHaveProperty('reasoning_effort')
   })
 
   it('keeps Pi group turns temporary while reinjecting the room history', async () => {

@@ -13,7 +13,7 @@ import {
 } from "@/api/studio/sessions";
 import type { AvailableModelGroup } from "@/api/hermes/system";
 import { fetchCodingAgentsStatus, inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId, type CodingAgentApiMode, type CodingAgentId } from "@/api/coding-agents";
-import { fetchRuntimeVersionStatus } from "@/api/hermes/runtime-versions";
+import { agentInstallationState, fetchAgentAvailabilitySnapshot } from "@/api/agent-status";
 import { useChatStore, type Session } from "@/stores/hermes/chat";
 import { useAppStore } from "@/stores/hermes/app";
 import { useProfilesStore } from "@/stores/hermes/profiles";
@@ -68,9 +68,13 @@ import {
 const props = withDefaults(defineProps<{
   standalone?: boolean;
   contentMode?: "chat" | "connections" | "agents" | "models";
+  initialComposerText?: string;
+  composerPersistDraft?: boolean;
 }>(), {
   standalone: false,
   contentMode: "chat",
+  initialComposerText: "",
+  composerPersistDraft: true,
 });
 
 const FilesPanel = defineAsyncComponent(async () => (await import('./FilesPanel.vue')).default);
@@ -922,6 +926,7 @@ const newChatAgentOptions = computed(() => [
   { label: "Claude", value: "claude-code" },
   { label: "Codex", value: "codex" },
   { label: "Pi", value: "pi" },
+  { label: "Grok", value: "grok" },
 ]);
 
 const newChatApiModeOptions = computed(() => [
@@ -1053,7 +1058,7 @@ const selectedNewChatProviderGroup = computed(() =>
 );
 
 const isNewChatCodingAgent = computed(() => newChatAgent.value !== "hermes");
-const isNewChatExternalCodingAgent = computed(() => newChatAgent.value === "claude-code" || newChatAgent.value === "codex" || newChatAgent.value === "pi");
+const isNewChatExternalCodingAgent = computed(() => newChatAgent.value === "claude-code" || newChatAgent.value === "codex" || newChatAgent.value === "pi" || newChatAgent.value === "grok");
 const effectiveNewChatAgentMode = computed(() =>
   effectiveNewChatMode(newChatAgent.value, newChatAgentMode.value),
 );
@@ -1201,17 +1206,18 @@ async function confirmNewChat() {
   if (newChatAgent.value === "hermes") {
     newChatLoading.value = true;
     try {
-      const status = await fetchRuntimeVersionStatus({ probeRuntime: false, includeRemote: false });
-      const selectedCli = status.hermes.cliInstallations.find((item) => item.selected);
-      if (!status.hermes.agentVersion && !selectedCli?.version) {
+      const status = await fetchAgentAvailabilitySnapshot();
+      if (agentInstallationState(status, "hermes") === "not-installed") {
         showNewChatModal.value = false;
-        await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
+        if (isSuperAdmin.value) {
+          await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
+        } else {
+          message.warning(t("codingAgents.installRequired", { agent: "Hermes" }));
+        }
         return;
       }
-    } catch {
-      showNewChatModal.value = false;
-      await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
-      return;
+    } catch (error) {
+      console.warn("Failed to read Hermes Agent availability before creating a chat:", error);
     } finally {
       newChatLoading.value = false;
     }
@@ -1224,7 +1230,7 @@ async function confirmNewChat() {
       const status = await fetchCodingAgentsStatus();
       const tool = status.tools.find((item) => item.id === agentId);
       if (!tool?.installed) {
-        const fallbackName = agentId === "codex" ? "Codex" : agentId === "pi" ? "Pi" : "Claude";
+        const fallbackName = agentId === "codex" ? "Codex" : agentId === "pi" ? "Pi" : agentId === "grok" ? "Grok" : "Claude";
         message.warning(t("codingAgents.installRequired", { agent: tool?.name || fallbackName }));
         showNewChatModal.value = false;
         await router.push({ name: "hermes.agentManager" });
@@ -1248,6 +1254,8 @@ async function confirmNewChat() {
       ? "claude"
       : newChatAgent.value === "pi"
         ? "pi"
+      : newChatAgent.value === "grok"
+        ? "grok"
       : newChatAgent.value === "ekko-agent"
         ? "ekko-agent"
       : "hermes";
@@ -2954,6 +2962,8 @@ async function handleSessionModelCustomSubmit() {
               ref="chatInputRef"
               :model-label="activeSessionModelLabel"
               :model-disabled="activeSessionUsesGlobalCodingAgentConfig"
+              :initial-text="initialComposerText"
+              :persist-draft="composerPersistDraft"
               @model-click="handleHeaderModelClick"
               @voice-click="openRealtimeVoice"
             />

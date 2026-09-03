@@ -43,24 +43,37 @@ import {
 } from '../modules/studio/repositories/app-connections-store'
 import { ensureAppRelayHostClient } from '../modules/studio/services/app-relay/connection'
 import { setupGlobalEkkoAgent } from './ekko'
+import { injectManagedEkkoMcpServers } from '../modules/ekko/services/mcp'
 import { WorkflowSocketServer } from '../modules/studio/sockets/workflow'
 import { PetStateSocketServer } from '../modules/studio/sockets/pet-state'
 import { logger } from '../modules/studio/public/logging'
 import { createStaticCompressionMiddleware } from '../modules/studio/middleware/static-compression'
 import { getStaticCacheControl, SPA_ENTRY_CACHE_CONTROL } from '../modules/studio/middleware/static-cache'
 import { requireUserJwt, resolveUserProfile } from '../modules/studio/middleware/auth'
-import { createCorsOriginResolver, securityHeaders } from '../modules/studio/middleware/security'
+import {
+  createCorsOriginResolver,
+  parseUpgradeRequestUrl,
+  securityHeaders,
+  writeBadUpgradeRequest,
+} from '../modules/studio/middleware/security'
 import type { AdditionalShutdownStep, ShutdownHandler } from './lifecycle'
-import { createRequestBodyParser } from '../modules/studio/middleware/request-body-parser'
+import { createCodexProxyRequestBodyParser, createRequestBodyParser } from '../modules/studio/middleware/request-body-parser'
 import {
   getCodingAgentsStatus,
   migratePersistedPiRuntimeMcpConfigs,
   restorePersistedPiProxyTargets,
 } from './coding-agents'
-import { configurePreferredHermesRuntime } from '../modules/hermes/services/runtime/selection'
-import { configureRuntimeInstallCompletedHandler, getRuntimeVersionStatus } from '../modules/hermes/services/runtime/version-manager'
+import { isAuthorizedCodexProxyRequest } from '../modules/coding-agents/services/codex/proxy'
+import {
+  configurePreferredHermesRuntime,
+  readLockedDesktopHermesSelection,
+  type HermesRuntimeSelection,
+} from '../modules/hermes/services/runtime/selection'
+import {
+  getRuntimeVersionStatus,
+  readActiveVersionManifest,
+} from '../modules/hermes/services/runtime/version-manager'
 import { isHermesAgentAvailable, updateAgentStatus } from '../modules/studio/public/agent-status-registry'
-import { scheduleWebUiRestart } from '../modules/studio/public/web-ui-restart'
 
 // Injected by esbuild at build time; fallback to reading package.json in dev mode
 declare const __APP_VERSION__: string
@@ -78,6 +91,7 @@ let groupAgentRelayServer: GroupAgentRelayServer | null = null
 let agentBridgeManager: any = null
 let desktopShutdownHandler: ShutdownHandler | null = null
 let shutdownRequested = false
+let bootstrapReady = false
 const additionalShutdownSteps: AdditionalShutdownStep[] = []
 
 function getShutdownHandler(): ShutdownHandler {
@@ -208,6 +222,25 @@ function registerDesktopShutdownRoute(app: Koa): void {
   })
 }
 
+function registerReadinessRoute(app: Koa): void {
+  app.use(async (ctx, next) => {
+    if ((ctx.method !== 'GET' && ctx.method !== 'HEAD') || ctx.path !== '/health/ready') {
+      await next()
+      return
+    }
+    ctx.status = bootstrapReady ? 200 : 503
+    ctx.body = { status: bootstrapReady ? 'ready' : 'starting' }
+  })
+}
+
+async function ensureStartupDirectory(directory: string, label: string): Promise<void> {
+  try {
+    await mkdir(directory, { recursive: true })
+  } catch (error) {
+    logger.warn(error, '[bootstrap] failed to prepare %s directory; affected operations will report their own errors', label)
+  }
+}
+
 function envFlagEnabled(name: string): boolean {
   const value = String(process.env[name] || '').trim().toLowerCase()
   return ['1', 'true', 'yes', 'on'].includes(value)
@@ -293,18 +326,67 @@ function startLanDiscovery(): void {
   }
 }
 
-export async function bootstrap() {
-  console.log(`hermes-web-ui v${APP_VERSION} starting...`)
-  await mkdir(config.uploadDir, { recursive: true })
-  if (shouldCreateWebUiDataDir()) {
-    await mkdir(config.dataDir, { recursive: true })
+function recordLockedHermesSelection(selection: HermesRuntimeSelection): void {
+  if (selection.source === 'none' || !selection.path) {
+    const activationError = readActiveVersionManifest()?.runtimeActivationError || ''
+    updateAgentStatus('hermes', {
+      name: 'Hermes',
+      provider: 'Nous Research',
+      kind: 'hermes',
+      installed: false,
+      version: '',
+      source: 'not-installed',
+      path: '',
+      error: activationError,
+      installations: [],
+    })
+    return
   }
 
-  const hermesSelection = await configurePreferredHermesRuntime()
-  console.log(`[bootstrap] Hermes source=${hermesSelection.source} version=${hermesSelection.version || '-'} path=${hermesSelection.path || '-'}`)
+  updateAgentStatus('hermes', {
+    name: 'Hermes',
+    provider: 'Nous Research',
+    kind: 'hermes',
+    installed: true,
+    version: selection.version,
+    source: selection.source,
+    path: selection.path,
+    error: '',
+    installations: [{
+      path: selection.path,
+      version: selection.version,
+      source: selection.source,
+      selected: true,
+      ...(selection.managedRuntimeVersion
+        ? { managedRuntimeVersion: selection.managedRuntimeVersion }
+        : {}),
+    }],
+  })
+}
+
+export async function bootstrap() {
+  bootstrapReady = false
+  console.log(`hermes-web-ui v${APP_VERSION} starting...`)
+  await ensureStartupDirectory(config.uploadDir, 'upload')
+  if (shouldCreateWebUiDataDir()) {
+    await ensureStartupDirectory(config.dataDir, 'development data')
+  }
+
+  const lockedDesktopSelection = readLockedDesktopHermesSelection()
+  let hermesSelection: HermesRuntimeSelection = lockedDesktopSelection
+    || { source: 'none', version: '', path: '' }
+  if (!lockedDesktopSelection) {
+    try {
+      hermesSelection = await configurePreferredHermesRuntime()
+    } catch (error) {
+      logger.warn(error, '[bootstrap] failed to inspect Hermes Runtime; continuing without a selected runtime')
+    }
+  }
+  console.log(`[bootstrap] Hermes source=${hermesSelection.source} version=${hermesSelection.version || '-'} path=${hermesSelection.path || '-'} python=${hermesSelection.pythonPath || '-'} root=${hermesSelection.agentRoot || '-'}`)
+  if (lockedDesktopSelection) recordLockedHermesSelection(hermesSelection)
   updateAgentStatus('ekko-agent', { version: APP_VERSION })
   const inventoryResults = await Promise.allSettled([
-    getRuntimeVersionStatus({ includeRemote: false }),
+    ...(!lockedDesktopSelection ? [getRuntimeVersionStatus({ includeRemote: false })] : []),
     getCodingAgentsStatus(),
   ])
   for (const result of inventoryResults) {
@@ -314,16 +396,6 @@ export async function bootstrap() {
   }
   const hermesAgentAvailable = isHermesAgentAvailable()
   console.log(`[bootstrap] Hermes Agent inventory status=${hermesAgentAvailable ? 'available' : 'not-installed'}`)
-  configureRuntimeInstallCompletedHandler(() => {
-    if (isDesktopRuntime()) {
-      setTimeout(() => {
-        void getShutdownHandler()('runtime-installed', 75)
-      }, 250).unref?.()
-      return
-    }
-    scheduleWebUiRestart()
-  })
-
   await initLoginLimiter()
   if (skillInjectionDisabled()) {
     console.log('[bootstrap] bundled skill injection disabled by HERMES_WEB_UI_DISABLE_SKILL_INJECTION')
@@ -374,8 +446,26 @@ export async function bootstrap() {
     logger.warn(err, '[bootstrap] failed to restore persisted Pi proxy targets')
   }
 
-  setupGlobalEkkoAgent()
-  console.log('[bootstrap] ekko-agent setup complete')
+  try {
+    const ekkoSetup = setupGlobalEkkoAgent()
+    try {
+      const injection = injectManagedEkkoMcpServers(ekkoSetup)
+      const changed = injection.targets.filter(target => target.status === 'injected' || target.status === 'updated')
+      if (changed.length > 0) {
+        logger.info({
+          serverNames: injection.serverNames,
+          targets: changed,
+        }, '[bootstrap] Studio MCP servers injected into Ekko config')
+      }
+    } catch (err) {
+      logger.warn(err, '[bootstrap] failed to inject Studio MCP servers into Ekko config')
+      console.warn('[bootstrap] failed to inject Studio MCP servers into Ekko config:', err instanceof Error ? err.message : err)
+    }
+    console.log('[bootstrap] ekko-agent setup complete')
+  } catch (err) {
+    logger.error(err, '[bootstrap] ekko-agent setup failed; continuing with Ekko unavailable')
+    console.error('[bootstrap] ekko-agent setup failed; continuing without Ekko:', err instanceof Error ? err.message : err)
+  }
 
   agentBridgeManager = getAgentBridgeManager()
   if (!isDesktopRuntime()) {
@@ -392,6 +482,10 @@ export async function bootstrap() {
 
   app.use(securityHeaders())
   app.use(cors({ origin: createCorsOriginResolver(config.corsOrigins) }))
+  // Codex can replay inline images from its native thread. Accept a bounded,
+  // authenticated request here so the proxy can remove historical image data
+  // before dispatching to any provider API mode.
+  app.use(createCodexProxyRequestBodyParser(isAuthorizedCodexProxyRequest))
   // Raise body limits above the default 1mb: profile avatars and MiMo voice-clone
   // reference audio are posted as base64 data URLs before reaching handlers.
   app.use(createRequestBodyParser())
@@ -411,6 +505,7 @@ export async function bootstrap() {
     console.log('[bootstrap] base path stripping enabled: %s', basePath)
   }
 
+  registerReadinessRoute(app)
   registerDesktopShutdownRoute(app)
 
   // Register all routes (handles auth internally)
@@ -441,6 +536,11 @@ export async function bootstrap() {
   server = listenResult.primary
   servers.splice(0, servers.length, ...listenResult.servers)
   console.log('[bootstrap] app.listen called')
+  // The Desktop shell only needs registered HTTP routes and static assets before
+  // it can render. Keep slower runtime, socket, and recovery work below in the
+  // background startup path, matching the pre-readiness launch behavior.
+  bootstrapReady = true
+  console.log('[bootstrap] web UI shell ready')
 
   const terminalWebSocket = setupTerminalWebSocket(servers)
   if (terminalWebSocket) {
@@ -545,7 +645,11 @@ export async function bootstrap() {
   const upgradeBases = [socketIoBase, '/socket.io', '/hermes/socket.io'].filter(Boolean)
   servers.forEach((httpServer) => {
     httpServer.on('upgrade', (req: any, socket: any) => {
-      const url = new URL(req.url || '', `http://${req.headers.host}`)
+      const url = parseUpgradeRequestUrl(req)
+      if (!url) {
+        writeBadUpgradeRequest(socket)
+        return
+      }
       const isSocketIo = upgradeBases.some(base => url.pathname === base || url.pathname.startsWith(base + '/') || url.pathname.startsWith(base))
         || url.pathname.startsWith('/socket.io/')
       if (url.pathname !== '/api/hermes/terminal' &&
@@ -592,6 +696,7 @@ export async function bootstrap() {
     additionalShutdownSteps,
   )
   startVersionCheck()
+  console.log('[bootstrap] startup complete')
 }
 
 bootstrap().catch((error) => {

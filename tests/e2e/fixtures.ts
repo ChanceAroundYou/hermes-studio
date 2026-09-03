@@ -79,6 +79,7 @@ interface MockHermesApiOptions {
   socialMessageFeishuRecipients?: Record<string, unknown>
   socialMessageTelegramRecipients?: Record<string, unknown>
   socialMessageWeixinRecipients?: Record<string, unknown>
+  ttsActiveProviders?: Partial<Record<'default' | 'research', string>>
 }
 
 export const TEST_MODEL_GROUP = {
@@ -208,6 +209,79 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
       return
     }
 
+    if (pathname === '/api/agents/status' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({
+        revision: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        agents: [
+          { id: 'hermes', name: 'Hermes', provider: 'Nous Research', kind: 'hermes', installed: true, version: '0.19.1', source: 'user-cli', path: '/usr/local/bin/hermes', error: '', installations: [] },
+          { id: 'ekko-agent', name: 'Ekko', provider: 'Hermes Studio', kind: 'built-in', installed: true, version: '0.7.0', source: 'built-in', path: '', error: '', installations: [] },
+          { id: 'claude-code', name: 'Claude', provider: 'Anthropic', kind: 'coding-agent', installed: true, version: '1.0.0', source: 'user-cli', path: '/usr/local/bin/claude', error: '', installations: [] },
+          { id: 'codex', name: 'Codex', provider: 'OpenAI', kind: 'coding-agent', installed: true, version: '1.0.0', source: 'user-cli', path: '/usr/local/bin/codex', error: '', installations: [] },
+          { id: 'pi', name: 'Pi', provider: 'Pi', kind: 'coding-agent', installed: true, version: '1.0.0', source: 'user-cli', path: '/usr/local/bin/pi', error: '', installations: [] },
+          { id: 'grok', name: 'Grok', provider: 'xAI', kind: 'coding-agent', installed: true, version: '1.0.0', source: 'user-cli', path: '/usr/local/bin/grok', error: '', installations: [] },
+        ],
+      }))
+      return
+    }
+
+    if (pathname === '/api/agents/availability' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({
+        revision: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        agents: [
+          { id: 'hermes', installed: true, source: 'user-cli' },
+          { id: 'ekko-agent', installed: true, source: 'built-in' },
+          { id: 'claude-code', installed: true, source: 'user-cli' },
+          { id: 'codex', installed: true, source: 'user-cli' },
+          { id: 'pi', installed: true, source: 'user-cli' },
+          { id: 'grok', installed: true, source: 'user-cli' },
+        ],
+      }))
+      return
+    }
+
+    if (pathname === '/api/hermes/runtime-versions' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({
+        active: null,
+        platform: 'linux-x64',
+        activeVersionPath: '',
+        remoteManifestUrl: '',
+        remoteError: '',
+        hermes: {
+          activeVersion: '',
+          agentVersion: '0.19.1',
+          activeDirectory: '',
+          storageDirectory: '',
+          defaultStorageDirectory: '',
+          pendingStorageDirectory: '',
+          migrationError: '',
+          activationError: '',
+          cliInstallations: [{
+            path: '/usr/local/bin/hermes',
+            version: '0.19.1',
+            source: 'user-cli',
+            selected: true,
+          }],
+          installed: [],
+          remoteVersions: [],
+        },
+        webui: {
+          currentVersion: '0.7.0',
+          activeVersion: '0.7.0',
+          activeDirectory: '',
+          installed: [],
+          remoteVersions: [],
+        },
+      }))
+      return
+    }
+
+    if (pathname === '/api/hermes/runtime-versions/jobs' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ jobs: [] }))
+      return
+    }
+
     if (pathname === '/api/auth/status') {
       await route.fulfill(jsonResponse({ hasPasswordLogin: true, username: 'playwright' }))
       return
@@ -287,6 +361,15 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
         return
       }
       await route.fulfill(jsonResponse({ error: 'Method not allowed' }, 405))
+      return
+    }
+
+    if (pathname === '/api/studio/tts/settings' && request.method() === 'GET') {
+      const profile = request.headers()['x-hermes-profile'] === 'research' ? 'research' : 'default'
+      await route.fulfill(jsonResponse({
+        settings: [],
+        activeProvider: options.ttsActiveProviders?.[profile] || 'edge',
+      }))
       return
     }
 
@@ -794,9 +877,9 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
         mobile: {
           version: '1.0.0',
           channels: {
-            androidApk: { githubUrl: '', cloudflareUrl: '', online: false },
-            googlePlay: { url: '', online: false },
-            apple: { testFlightUrl: '', appStoreUrl: '', online: false },
+            androidApk: { version: '1.0.0', githubUrl: '', cloudflareUrl: '', online: false },
+            googlePlay: { version: '1.0.1', url: '', online: false },
+            apple: { version: '1.1.0', testFlightUrl: '', appStoreUrl: '', online: false },
             harmony: { url: '', online: false },
           },
         },
@@ -828,7 +911,7 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
 
     if (
       request.method() === 'GET' &&
-      /^\/api\/coding-agents\/(?:claude-code|codex|pi)\/config-files\/[^/]+$/.test(pathname)
+      /^\/api\/coding-agents\/(?:claude-code|codex|pi|grok)\/config-files\/[^/]+$/.test(pathname)
     ) {
       const key = pathname.split('/').at(-1) || 'config'
       await route.fulfill(jsonResponse({
@@ -865,6 +948,9 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
     await route.fulfill(jsonResponse({ error: `Unexpected mocked route: ${request.method()} ${pathname}` }, 404))
   })
 
+  // Register this after the catch-all API route so Socket.IO's optimized
+  // module is intercepted before Vite can proxy a connection to port 8648.
+  await mockChatSocket(page)
   return { requests, unexpectedRequests }
 }
 
@@ -888,7 +974,9 @@ const state = window.__PW_CHAT_SOCKET__ || (window.__PW_CHAT_SOCKET__ = { socket
 function makeSocket(url, options) {
   const listeners = new Map()
   const onceListeners = new Map()
+  const socketNumber = (state.socketCount = (state.socketCount || 0) + 1)
   const socket = {
+    id: 'pw-socket-' + socketNumber,
     connected: true,
     url,
     options,
@@ -904,8 +992,39 @@ function makeSocket(url, options) {
       onceListeners.set(event, handlers)
       return this
     },
-    emit(event, payload) {
+    off(event, handler) {
+      if (!event) return this
+      if (!handler) {
+        listeners.delete(event)
+        onceListeners.delete(event)
+        return this
+      }
+      listeners.set(event, (listeners.get(event) || []).filter(item => item !== handler))
+      onceListeners.set(event, (onceListeners.get(event) || []).filter(item => item !== handler))
+      return this
+    },
+    timeout() {
+      return this
+    },
+    emit(event, payload, ack) {
       state.emitted.push({ event, payload })
+      if (typeof ack === 'function' && String(url).endsWith('/workflow')) {
+        const data = event === 'workflow.status.subscribe'
+          ? { statuses: [] }
+          : event === 'workflows.list'
+            ? { workflows: [] }
+            : { ok: true }
+        setTimeout(() => ack(null, { ok: true, data }), 0)
+      } else if (typeof ack === 'function' && event === 'join') {
+        setTimeout(() => ack({
+          roomId: payload && payload.roomId,
+          messages: [],
+          members: [],
+          pendingApprovals: [],
+          pendingClarifies: [],
+          executionQueue: [],
+        }), 0)
+      }
       if (event === 'resume') {
         const sessionId = payload && payload.session_id
         const resumes = window.__PW_CHAT_SOCKET_RESUMES__ || {}
