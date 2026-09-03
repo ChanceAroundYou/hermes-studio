@@ -14,10 +14,12 @@ import {
   openAiChatToResponses,
   responsesToAnthropicMessages,
   responsesToOpenAiChat,
+  stripHistoricalResponsesInlineImages,
   truncateResponsesToolOutputs,
 } from '../../protocol/adapters/responses'
 import {
   anthropicMessagesSseToResponsesEvents,
+  normalizeResponsesSseEvents,
   openAiChatSseToResponsesEvents,
   openAiResponsesSseToResponsesEvents,
   type CanonicalResponsesEvent,
@@ -78,6 +80,12 @@ function authToken(ctx: Context): string {
   const auth = ctx.get('authorization').trim()
   const match = auth.match(/^Bearer\s+(.+)$/i)
   return match?.[1]?.trim() || ''
+}
+
+export function isAuthorizedCodexProxyRequest(ctx: Context): boolean {
+  const routeKey = /^\/api\/codex-proxy\/([^/]+)\/v1\/responses$/.exec(ctx.path)?.[1] || ''
+  const target = findTarget(routeKey)
+  return Boolean(target && authToken(ctx) === target.token)
 }
 
 function requireTarget(ctx: Context): CodexProxyTarget | null {
@@ -174,7 +182,7 @@ function responseEventForCodexClient(target: CodexProxyTarget, event: CanonicalR
 
 function observableResponsesEvents(target: CodexProxyTarget, events: AsyncIterable<CanonicalResponsesEvent>): AsyncIterable<CanonicalResponsesEvent> {
   async function* observe() {
-    for await (const event of events) {
+    for await (const event of normalizeResponsesSseEvents(events)) {
       codingAgentRunManager.handleProxyUsageEvent(target.agentSessionId, event)
       const clientEvent = responseEventForCodexClient(target, event)
       codingAgentRunManager.handleResponseEvent(target.agentSessionId, clientEvent)
@@ -246,7 +254,9 @@ export async function codexProxyResponses(ctx: Context) {
   const target = requireTarget(ctx)
   if (!target) return
   try {
-    const requestBody = ctx.request.body || {}
+    // Sanitize once before API-mode dispatch so native Responses, Chat
+    // Completions, and Anthropic adapters all receive the same bounded history.
+    const requestBody = stripHistoricalResponsesInlineImages(ctx.request.body || {})
     if ((requestBody as any).stream === true) {
       const stream = target.apiMode === 'anthropic_messages'
         ? await anthropicMessagesToResponsesSseStream(target, requestBody)

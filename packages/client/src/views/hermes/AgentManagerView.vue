@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { NAlert, NButton, NPopconfirm, NSpin, NTag, useMessage } from 'naive-ui'
+import { NAlert, NButton, NDrawer, NDrawerContent, NPopconfirm, NSpin, NTag, useDialog, useMessage } from 'naive-ui'
 import {
   checkCodingAgentUpdate,
   deleteCodingAgent,
@@ -13,12 +13,21 @@ import {
   type CodingAgentUpdateResult,
 } from '@/api/coding-agents'
 import { fetchAgentStatusSnapshot, type AgentStatusSnapshot } from '@/api/agent-status'
-import { fetchRuntimeVersionStatus } from '@/api/hermes/runtime-versions'
+import {
+  decideLegacyWindowsDataMigration,
+  fetchLegacyWindowsDataMigrationStatus,
+} from '@/api/hermes/legacy-data-migration'
+import { fetchRuntimeVersionStatus, type RuntimeVersionStatus } from '@/api/hermes/runtime-versions'
+import HermesDataDirectoryHint from '@/components/hermes/HermesDataDirectoryHint.vue'
 import VersionManagementModal from '@/components/layout/VersionManagementModal.vue'
 import { useAppStore } from '@/stores/hermes/app'
 import { getBaseUrlValue } from '@/api/client'
+import { useChatStore } from '@/stores/hermes/chat'
+import { desktopBridge } from '@/utils/desktop-bridge'
 
 const base = getBaseUrlValue()
+
+const AiHelpChatPanel = defineAsyncComponent(async () => (await import('@/components/hermes/chat/ChatPanel.vue')).default)
 
 interface CodingAgentCard {
   id: CodingAgentId
@@ -62,11 +71,21 @@ const codingAgents: CodingAgentCard[] = [
     command: 'pi',
     packageName: '@earendil-works/pi-coding-agent',
   },
+  {
+    id: 'grok',
+    name: 'Grok',
+    provider: 'xAI',
+    logo: `${base}/coding-agents/grok.svg`,
+    command: 'grok',
+    packageName: '@xai-official/grok',
+  },
 ]
 
 const { t } = useI18n()
 const message = useMessage()
+const dialog = useDialog()
 const appStore = useAppStore()
+const chatStore = useChatStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -75,13 +94,20 @@ const agentStatusSnapshot = ref<AgentStatusSnapshot | null>(null)
 const loading = ref(false)
 const loadError = ref('')
 const runtimeManagerVisible = ref(false)
-const installing = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false })
-const deleting = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false })
-const checkingUpdate = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false })
+const hermesCliDetailsVisible = ref(false)
+const hermesCliDetailsLoading = ref(false)
+const hermesRuntimeStatus = ref<RuntimeVersionStatus | null>(null)
+const aiHelpDrawerVisible = ref(false)
+const aiHelpPrompt = ref('')
+const legacyDataMigrationChecked = ref(false)
+const installing = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
+const deleting = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
+const checkingUpdate = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
 const updateInfo = ref<Record<CodingAgentId, CodingAgentUpdateResult | null>>({
   'claude-code': null,
   codex: null,
   pi: null,
+  grok: null,
 })
 
 const hermesStatus = computed(() => agentStatusSnapshot.value?.agents.find(agent => agent.id === 'hermes'))
@@ -132,6 +158,66 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+type AgentManagementOperation = 'install' | 'delete'
+
+function operationLabel(operation: AgentManagementOperation): string {
+  return t(operation === 'install' ? 'agentManager.installOperation' : 'agentManager.deleteOperation')
+}
+
+function buildAiHelpPrompt(agent: CodingAgentCard, operation: AgentManagementOperation, error: string): string {
+  return t('agentManager.aiHelpPrompt', {
+    name: agent.name,
+    id: agent.id,
+    operation: operationLabel(operation),
+    command: agent.command,
+    package: agent.packageName,
+    error,
+  })
+}
+
+function startAiHelpChat(prompt: string) {
+  chatStore.newChat({
+    source: 'coding_agent',
+    agent: 'ekko-agent',
+    codingAgentId: 'ekko-agent',
+    codingAgentMode: 'scoped',
+  })
+  aiHelpPrompt.value = prompt
+  aiHelpDrawerVisible.value = true
+}
+
+function openAiHelpDrawer(agent: CodingAgentCard, operation: AgentManagementOperation, error: string) {
+  startAiHelpChat(buildAiHelpPrompt(agent, operation, error))
+}
+
+function openGeneralAiHelpDrawer() {
+  startAiHelpChat(t('agentManager.aiHelpGeneralPrompt'))
+}
+
+function offerAiHelp(id: CodingAgentId, operation: AgentManagementOperation, error: string) {
+  const agent = codingAgents.find(item => item.id === id)
+  if (!agent) return
+  dialog.warning({
+    title: t('agentManager.aiHelpDialogTitle', { name: agent.name }),
+    content: () => h('div', { class: 'agent-ai-help-dialog' }, [
+      h('p', t('agentManager.aiHelpDialogQuestion', {
+        name: agent.name,
+        operation: operationLabel(operation),
+      })),
+      h('pre', { class: 'agent-ai-help-error' }, error),
+    ]),
+    positiveText: t('agentManager.aiHelpDialogPositive'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: () => openAiHelpDrawer(agent, operation, error),
+  })
+}
+
+function handleMutationError(id: CodingAgentId, operation: AgentManagementOperation, error: unknown) {
+  const detail = errorMessage(error)
+  message.error(detail)
+  offerAiHelp(id, operation, detail)
+}
+
 function applyAgentStatusSnapshot(snapshot: AgentStatusSnapshot) {
   agentStatusSnapshot.value = snapshot
   const statuses = new Map(snapshot.agents.map(status => [status.id, status]))
@@ -175,6 +261,8 @@ async function refreshAll() {
   const errors = results
     .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     .map(result => errorMessage(result.reason))
+  const runtimeResult = results[1]
+  if (runtimeResult?.status === 'fulfilled') hermesRuntimeStatus.value = runtimeResult.value
   try {
     await syncAgentStatus()
   } catch (error) {
@@ -182,6 +270,68 @@ async function refreshAll() {
   }
   if (errors.length) loadError.value = errors.join('\n')
   loading.value = false
+}
+
+async function openHermesCliDetails() {
+  hermesCliDetailsLoading.value = true
+  try {
+    hermesRuntimeStatus.value = await fetchRuntimeVersionStatus({ includeRemote: false })
+    hermesCliDetailsVisible.value = true
+  } catch (error) {
+    message.error(errorMessage(error))
+  } finally {
+    hermesCliDetailsLoading.value = false
+  }
+}
+
+async function submitLegacyDataMigrationDecision(action: 'migrate' | 'decline'): Promise<boolean> {
+  try {
+    await decideLegacyWindowsDataMigration(action)
+    if (action === 'migrate') {
+      const bridge = desktopBridge()
+      if (!bridge?.restartApp) throw new Error('Desktop restart is unavailable')
+      message.success(t('agentManager.legacyDataMigrationSuccess'))
+      await bridge.restartApp()
+    }
+    return true
+  } catch (error) {
+    message.error(t('agentManager.legacyDataMigrationFailed', { error: errorMessage(error) }))
+    return false
+  }
+}
+
+async function maybePromptLegacyWindowsDataMigration() {
+  const bridge = desktopBridge()
+  if (legacyDataMigrationChecked.value || bridge?.isDesktop !== true || bridge.platform !== 'win32') return
+  legacyDataMigrationChecked.value = true
+
+  try {
+    const status = await fetchLegacyWindowsDataMigrationStatus()
+    if (!status.shouldPrompt) return
+
+    dialog.warning({
+      title: t('agentManager.legacyDataMigrationTitle'),
+      content: () => h('div', { class: 'legacy-data-migration-dialog' }, [
+        h('p', t('agentManager.legacyDataMigrationDescription')),
+        h('dl', [
+          h('dt', t('agentManager.legacyDataMigrationSource')),
+          h('dd', [h('code', status.sourceDirectory)]),
+          h('dt', t('agentManager.legacyDataMigrationTarget')),
+          h('dd', [h('code', status.targetDirectory)]),
+        ]),
+        h('p', { class: 'legacy-data-migration-warning' }, t('agentManager.legacyDataMigrationWarning')),
+      ]),
+      positiveText: t('agentManager.legacyDataMigrationPositive'),
+      negativeText: t('agentManager.legacyDataMigrationNegative'),
+      closable: false,
+      maskClosable: false,
+      closeOnEsc: false,
+      onPositiveClick: () => submitLegacyDataMigrationDecision('migrate'),
+      onNegativeClick: () => submitLegacyDataMigrationDecision('decline'),
+    })
+  } catch (error) {
+    console.warn('[agent-manager] failed to check legacy Windows Hermes data migration', error)
+  }
 }
 
 async function handleInstall(id: CodingAgentId) {
@@ -193,7 +343,7 @@ async function handleInstall(id: CodingAgentId) {
     updateInfo.value[id] = null
     message.success(t('codingAgents.installSuccess'))
   } catch (error) {
-    message.error(errorMessage(error))
+    handleMutationError(id, 'install', error)
   } finally {
     installing.value[id] = false
   }
@@ -208,7 +358,7 @@ async function handleDelete(id: CodingAgentId) {
     updateInfo.value[id] = null
     message.success(t('codingAgents.deleteSuccess'))
   } catch (error) {
-    message.error(errorMessage(error))
+    handleMutationError(id, 'delete', error)
   } finally {
     deleting.value[id] = false
   }
@@ -236,6 +386,7 @@ onMounted(() => {
     void router.replace({ query })
   }
   void loadCachedStatus()
+  void maybePromptLegacyWindowsDataMigration()
 })
 </script>
 
@@ -263,9 +414,14 @@ onMounted(() => {
           </NButton>
           <h2 class="header-title">{{ t('agentManager.title') }}</h2>
         </div>
-        <NButton size="small" secondary :loading="loading" @click="refreshAll()">
-          {{ t('agentManager.refresh') }}
-        </NButton>
+        <div class="agent-manager-header-actions">
+          <NButton size="small" secondary :loading="loading" @click="refreshAll()">
+            {{ t('agentManager.refresh') }}
+          </NButton>
+          <NButton size="small" secondary @click="openGeneralAiHelpDrawer">
+            {{ t('agentManager.aiHelpDialogPositive') }}
+          </NButton>
+        </div>
       </header>
 
       <NSpin :show="loading" class="agent-manager-spin">
@@ -288,6 +444,15 @@ onMounted(() => {
                   </div>
                 </div>
               </header>
+              <div class="agent-actions">
+                <NButton
+                  secondary
+                  size="small"
+                  @click="router.push({ name: 'ekko.settings' })"
+                >
+                  {{ t('sidebar.settings') }}
+                </NButton>
+              </div>
             </section>
 
           <section class="agent-card coding-agent-card hermes-card" data-testid="agent-card-hermes">
@@ -317,6 +482,16 @@ onMounted(() => {
             </header>
 
             <div class="agent-actions">
+              <NButton
+                v-if="hermesDetected && hermesType === 'CLI'"
+                data-testid="view-hermes-cli-details"
+                secondary
+                size="small"
+                :loading="hermesCliDetailsLoading"
+                @click="openHermesCliDetails"
+              >
+                {{ t('runtimeVersions.viewCliDetails') }}
+              </NButton>
               <NButton
                 v-if="!hermesDetected || hermesType === 'Runtime'"
                 type="primary"
@@ -421,6 +596,46 @@ onMounted(() => {
       </NSpin>
 
     <VersionManagementModal v-model:show="runtimeManagerVisible" />
+
+    <NDrawer
+      v-model:show="hermesCliDetailsVisible"
+      placement="right"
+      width="min(620px, 100vw)"
+    >
+      <NDrawerContent :title="t('runtimeVersions.cliDetailsTitle')" closable>
+        <div data-testid="hermes-cli-details" class="hermes-cli-details">
+          <div class="hermes-cli-detail-row">
+            <strong>{{ t('runtimeVersions.activePythonPath') }}</strong>
+            <code>{{ hermesRuntimeStatus?.hermes.pythonPath || '-' }}</code>
+          </div>
+          <div class="hermes-cli-detail-row">
+            <strong>{{ t('runtimeVersions.activeAgentRoot') }}</strong>
+            <code>{{ hermesRuntimeStatus?.hermes.agentRoot || '-' }}</code>
+          </div>
+          <div class="hermes-cli-detail-row">
+            <strong>{{ t('runtimeVersions.activeDataDirectory') }}</strong>
+            <code>{{ hermesRuntimeStatus?.hermes.dataDirectory || '-' }}</code>
+          </div>
+          <HermesDataDirectoryHint />
+        </div>
+      </NDrawerContent>
+    </NDrawer>
+
+    <NDrawer
+      v-model:show="aiHelpDrawerVisible"
+      class="agent-ai-help-drawer"
+      placement="right"
+      width="min(760px, 100vw)"
+    >
+      <NDrawerContent :title="t('agentManager.aiHelpDrawerTitle')" closable body-content-style="padding: 0; overflow: hidden;">
+        <AiHelpChatPanel
+          v-if="aiHelpDrawerVisible"
+          standalone
+          :initial-composer-text="aiHelpPrompt"
+          :composer-persist-draft="false"
+        />
+      </NDrawerContent>
+    </NDrawer>
   </div>
 </template>
 
@@ -436,7 +651,85 @@ onMounted(() => {
   background: $bg-main-surface;
 }
 
+.hermes-cli-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hermes-cli-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+
+  strong {
+    color: var(--text-color-2);
+    font-size: 12px;
+  }
+
+  code {
+    overflow-wrap: anywhere;
+    color: var(--text-color-1);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+  }
+}
+
+:global(.agent-ai-help-dialog p) {
+  margin: 0 0 12px;
+}
+
+:global(.legacy-data-migration-dialog p) {
+  margin: 0 0 12px;
+}
+
+:global(.legacy-data-migration-dialog dl) {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+
+:global(.legacy-data-migration-dialog dt) {
+  color: var(--text-color-2);
+}
+
+:global(.legacy-data-migration-dialog dd) {
+  min-width: 0;
+  margin: 0;
+}
+
+:global(.legacy-data-migration-dialog code) {
+  overflow-wrap: anywhere;
+}
+
+:global(.legacy-data-migration-dialog .legacy-data-migration-warning) {
+  margin-bottom: 0;
+  color: var(--warning-color);
+}
+
+:global(.agent-ai-help-error) {
+  max-height: 180px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+:global(.agent-ai-help-drawer .n-drawer-body-content-wrapper) {
+  height: 100%;
+}
+
 .agent-manager-header-left,
+.agent-manager-header-actions,
 .agent-identity,
 .agent-name-row,
 .agent-actions {
@@ -446,6 +739,11 @@ onMounted(() => {
 
 .agent-manager-header-left {
   min-width: 0;
+  gap: 8px;
+}
+
+.agent-manager-header-actions {
+  flex: 0 0 auto;
   gap: 8px;
 }
 
@@ -555,6 +853,11 @@ onMounted(() => {
 }
 
 @media (max-width: $breakpoint-mobile) {
+  :global(.agent-ai-help-drawer.n-drawer) {
+    width: 100vw !important;
+    max-width: 100vw;
+  }
+
   .agent-manager-sidebar-toggle {
     display: none;
   }

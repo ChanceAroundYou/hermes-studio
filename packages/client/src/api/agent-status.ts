@@ -1,6 +1,6 @@
 import { request } from './client'
 
-export type AgentStatusId = 'hermes' | 'ekko-agent' | 'claude-code' | 'codex' | 'pi'
+export type AgentStatusId = 'hermes' | 'ekko-agent' | 'claude-code' | 'codex' | 'pi' | 'grok'
 export type AgentStatusSource = 'managed-runtime' | 'user-cli' | 'built-in' | 'not-installed'
 
 export interface AgentStatusRecord {
@@ -18,6 +18,20 @@ export interface AgentStatusSnapshot {
   agents: AgentStatusRecord[]
 }
 
+export interface AgentAvailabilityRecord {
+  id: AgentStatusId
+  installed: boolean
+  source: AgentStatusSource
+}
+
+export interface AgentAvailabilitySnapshot {
+  revision: number
+  updatedAt: string
+  agents: AgentAvailabilityRecord[]
+}
+
+export type AgentInstallationState = 'installed' | 'not-installed' | 'unknown'
+
 const AGENT_STATUS_ALIASES: Record<string, AgentStatusId> = {
   hermes: 'hermes',
   ekko: 'ekko-agent',
@@ -26,6 +40,7 @@ const AGENT_STATUS_ALIASES: Record<string, AgentStatusId> = {
   'claude-code': 'claude-code',
   codex: 'codex',
   pi: 'pi',
+  grok: 'grok',
 }
 
 export function resolveAgentStatusId(agent: string): AgentStatusId | null {
@@ -41,6 +56,23 @@ export function isAgentStatusAvailable(
   const status = snapshot?.agents.find(item => item.id === id)
   if (!status?.installed || status.source === 'not-installed') return false
   return id !== 'hermes' || Boolean(status.path)
+}
+
+export function agentInstallationState(
+  snapshot: AgentAvailabilitySnapshot | AgentStatusSnapshot | null | undefined,
+  agent: string,
+): AgentInstallationState {
+  const id = resolveAgentStatusId(agent)
+  if (!id) return 'unknown'
+  const status = snapshot?.agents.find(item => item.id === id)
+  if (!status) return 'unknown'
+  return status.installed && status.source !== 'not-installed'
+    ? 'installed'
+    : 'not-installed'
+}
+
+export async function fetchAgentAvailabilitySnapshot(): Promise<AgentAvailabilitySnapshot> {
+  return request<AgentAvailabilitySnapshot>('/api/agents/availability')
 }
 
 export async function fetchAgentStatusSnapshot(): Promise<AgentStatusSnapshot> {

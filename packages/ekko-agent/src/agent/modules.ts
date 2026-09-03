@@ -18,6 +18,8 @@ import type { MemoryCaptureMessage, MemoryService } from '../memory/service'
 import type {
   MemoryAuditEvent,
   MemoryAuditQuery,
+  MemoryBatchInput,
+  MemoryBatchResult,
   MemoryContext,
   MemoryCreateInput,
   MemoryDeleteInput,
@@ -27,17 +29,16 @@ import type {
   MemoryMessage,
   MemoryMessageListInput,
   MemoryNode,
-  MemoryProposeUpdateInput,
-  MemoryProposeUpdateResult,
+  MemoryWriteInput,
+  MemoryWriteResult,
   MemoryQuery,
   MemoryQueryResult,
   MemoryRuntimeIdentity,
-  MemorySessionState,
-  MemorySummary,
   MemoryUpdateInput,
 } from '../memory/types'
 import type { AgentRuntime } from '../runtime/runtime'
 import type { CreateEkkoRuntimeOptions } from '../setup'
+import type { EkkoProfileDirectoryLayout } from '../setup'
 import type {
   EkkoSkillCreateInput,
   EkkoSkillEditInput,
@@ -71,7 +72,8 @@ export type EkkoProfileMemoryUpdateInput = ProfileMemoryInput<MemoryUpdateInput>
 export type EkkoProfileMemoryExpireInput = ProfileMemoryInput<MemoryExpireInput>
 export type EkkoProfileMemoryDeleteInput = ProfileMemoryInput<MemoryDeleteInput>
 export type EkkoProfileMemoryForgetInput = ProfileMemoryInput<MemoryForgetInput>
-export type EkkoProfileMemoryProposeUpdateInput = ProfileMemoryInput<MemoryProposeUpdateInput>
+export type EkkoProfileMemoryWriteInput = ProfileMemoryInput<MemoryWriteInput>
+export type EkkoProfileMemoryBatchInput = ProfileMemoryInput<MemoryBatchInput>
 
 type ProfileMemoryInput<T extends { identity?: Partial<MemoryRuntimeIdentity> }> =
   Omit<T, 'identity'> & { identity?: Omit<Partial<MemoryRuntimeIdentity>, 'profileId'> }
@@ -85,10 +87,11 @@ export class EkkoProfileDirectoryManager {
   constructor(
     readonly profile: string,
     private readonly directories: EkkoDirectoryManager,
+    layout?: EkkoProfileDirectoryLayout,
   ) {
-    this.skillDirectory = directories.profileSkillsDirectory(profile)
-    this.logDirectory = directories.profileLogsDirectory(profile)
-    this.workspaceDirectory = directories.profileWorkspaceDirectory(profile)
+    this.skillDirectory = layout?.skillDirectory ?? directories.profileSkillsPath(profile)
+    this.logDirectory = layout?.logDirectory ?? directories.profileLogsDirectory(profile)
+    this.workspaceDirectory = layout?.workspaceDirectory ?? directories.profileWorkspaceDirectory(profile)
   }
 
   sessionWorkspaceDirectory(sessionId: string): string {
@@ -285,15 +288,15 @@ export class EkkoProfileMemoryManager {
     return this.memory.list(this.query(query))
   }
 
-  create(input: EkkoProfileMemoryCreateInput): Promise<MemoryProposeUpdateResult> {
+  create(input: EkkoProfileMemoryCreateInput): Promise<MemoryWriteResult> {
     return this.memory.create(this.input(input))
   }
 
-  update(id: string, input: EkkoProfileMemoryUpdateInput): Promise<MemoryProposeUpdateResult> {
+  update(id: string, input: EkkoProfileMemoryUpdateInput): Promise<MemoryWriteResult> {
     return this.memory.update(id, this.input(input))
   }
 
-  expire(id: string, input: EkkoProfileMemoryExpireInput): Promise<MemoryProposeUpdateResult> {
+  expire(id: string, input: EkkoProfileMemoryExpireInput): Promise<MemoryWriteResult> {
     return this.memory.expire(id, this.input(input))
   }
 
@@ -305,35 +308,27 @@ export class EkkoProfileMemoryManager {
     return this.memory.listMessages(input)
   }
 
-  getLatestSummary(sessionId: string): Promise<MemorySummary | undefined> {
-    return this.memory.getLatestSummary(sessionId)
-  }
-
-  getSessionState(sessionId: string): Promise<MemorySessionState | undefined> {
-    return this.memory.getSessionState(sessionId)
-  }
-
   listAuditEvents(query: EkkoProfileMemoryAuditQuery = {}): Promise<MemoryAuditEvent[]> {
     return this.memory.listAuditEvents({ ...query, profileId: this.profile })
   }
 
-  proposeUpdate(input: EkkoProfileMemoryProposeUpdateInput): Promise<MemoryProposeUpdateResult> {
-    return this.memory.proposeUpdate(this.input(input))
+  write(input: EkkoProfileMemoryWriteInput): Promise<MemoryWriteResult> {
+    return this.memory.write(this.input(input))
+  }
+
+  applyBatch(input: EkkoProfileMemoryBatchInput): Promise<MemoryBatchResult> {
+    return this.memory.applyBatch(this.input(input))
   }
 
   forget(input: EkkoProfileMemoryForgetInput): Promise<MemoryForgetResult> {
     return this.memory.forget(this.input(input))
   }
 
-  scheduleExtraction(identity: EkkoProfileMemoryIdentity): void {
-    this.memory.scheduleExtraction(this.identity(identity))
-  }
-
-  scheduleRunCompletion(
+  scheduleCapture(
     identity: EkkoProfileMemoryIdentity,
     messages: MemoryCaptureMessage[],
   ): void {
-    this.memory.scheduleRunCompletion(this.identity(identity), messages)
+    this.memory.scheduleCapture(this.identity(identity), messages)
   }
 
   drain(): Promise<void> {

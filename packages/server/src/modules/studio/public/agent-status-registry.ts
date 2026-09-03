@@ -1,4 +1,4 @@
-export type AgentStatusId = 'hermes' | 'ekko-agent' | 'claude-code' | 'codex' | 'pi'
+export type AgentStatusId = 'hermes' | 'ekko-agent' | 'claude-code' | 'codex' | 'pi' | 'grok'
 
 export type AgentStatusSource =
   | 'managed-runtime'
@@ -34,7 +34,19 @@ export interface AgentStatusSnapshot {
   agents: AgentStatusRecord[]
 }
 
-const AGENT_ORDER: AgentStatusId[] = ['hermes', 'ekko-agent', 'claude-code', 'codex', 'pi']
+export interface AgentAvailabilityRecord {
+  id: AgentStatusId
+  installed: boolean
+  source: AgentStatusSource
+}
+
+export interface AgentAvailabilitySnapshot {
+  revision: number
+  updatedAt: string
+  agents: AgentAvailabilityRecord[]
+}
+
+const AGENT_ORDER: AgentStatusId[] = ['hermes', 'ekko-agent', 'claude-code', 'codex', 'pi', 'grok']
 
 const DEFAULTS: Record<AgentStatusId, Omit<AgentStatusRecord, 'updatedAt'>> = {
   hermes: {
@@ -97,6 +109,18 @@ const DEFAULTS: Record<AgentStatusId, Omit<AgentStatusRecord, 'updatedAt'>> = {
     error: '',
     installations: [],
   },
+  grok: {
+    id: 'grok',
+    name: 'Grok',
+    provider: 'xAI',
+    kind: 'coding-agent',
+    installed: false,
+    version: '',
+    source: 'not-installed',
+    path: '',
+    error: '',
+    installations: [],
+  },
 }
 
 const records = new Map<AgentStatusId, AgentStatusRecord>()
@@ -150,6 +174,21 @@ export function getAgentStatusSnapshot(): AgentStatusSnapshot {
     revision,
     updatedAt,
     agents: AGENT_ORDER.map(id => cloneRecord(records.get(id)!)),
+  }
+}
+
+export function getAgentAvailabilitySnapshot(): AgentAvailabilitySnapshot {
+  return {
+    revision,
+    updatedAt,
+    agents: AGENT_ORDER.map(id => {
+      const record = records.get(id)!
+      return {
+        id,
+        installed: record.installed,
+        source: record.source,
+      }
+    }),
   }
 }
 

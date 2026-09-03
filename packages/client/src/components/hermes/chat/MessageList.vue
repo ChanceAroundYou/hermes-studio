@@ -18,6 +18,7 @@ import MessageItem from "./MessageItem.vue";
 import LiveReasoningStatus from "./LiveReasoningStatus.vue";
 import ToolRunCard from "./ToolRunCard.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
+import PendingInteractionCountdown from "./PendingInteractionCountdown.vue";
 import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message } from "@/stores/hermes/chat";
 import { useProfilesStore } from "@/stores/hermes/profiles";
 import { useToolTraceVisibility } from "@/composables/useToolTraceVisibility";
@@ -377,7 +378,7 @@ const canInsertQueuedMessages = computed(() => {
   if (agent === "ekko-agent") {
     return session.source === "coding_agent" || session.source === "global_agent";
   }
-  if (agent === "codex" || agent === "pi" || agent === "claude" || agent === "claude-code") return true;
+  if (agent === "codex" || agent === "pi" || agent === "grok" || agent === "claude" || agent === "claude-code") return true;
   return !session.source || session.source === "cli" || session.source === "global_agent";
 });
 const visibleApproval = computed(() => chatStore.activePendingApproval);
@@ -883,6 +884,7 @@ defineExpose({
               </svg>
             </span>
             <span>{{ t("chat.approvalKicker") }}</span>
+            <PendingInteractionCountdown :deadline="visibleApproval.countdownDeadline" />
           </div>
           <div class="approval-float-title">{{ t("chat.approvalTitle") }}</div>
           <div class="approval-float-desc">{{ visibleApproval.description }}</div>
@@ -953,6 +955,7 @@ defineExpose({
               </svg>
             </span>
             <span>{{ t("chat.clarifyKicker") }}</span>
+            <PendingInteractionCountdown :deadline="visibleClarify.countdownDeadline" />
           </div>
           <div class="approval-float-title">{{ t("chat.clarifyTitle") }}</div>
           <div class="approval-float-desc">{{ visibleClarify.question }}</div>

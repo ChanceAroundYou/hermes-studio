@@ -111,7 +111,7 @@ describe('ChatContextCompressor', () => {
     global.fetch = originalFetch
   })
 
-  it('uses a fresh one-step tool-free and skill-free Ekko agent for summarization', async () => {
+  it('uses a fresh prompt-isolated, tool-free, skill-free Ekko agent for summarization', async () => {
     const { callSummarizer } = await import('../../packages/server/src/modules/studio/services/context-compressor')
     ekkoRuntimeRunMock.mockResolvedValue({
       output: { role: 'assistant', content: 'ekko summary', finishReason: 'stop' },
@@ -139,6 +139,7 @@ describe('ChatContextCompressor', () => {
       }),
       toolsEnabled: false,
       skillsEnabled: false,
+      runtimeInstructions: [],
       maxSteps: 1,
       maxModelRetries: 0,
       modelDefaults: expect.objectContaining({

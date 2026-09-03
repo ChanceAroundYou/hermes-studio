@@ -35,7 +35,8 @@ export const GROUP_CHAT_AGENT_SOCKET_SECRET = randomBytes(32).toString('hex')
 
 export interface AgentConfig {
     agentId?: string
-    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi'
+    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok'
+    agentMode?: 'scoped' | 'global'
     profile: string
     provider?: string
     model?: string
@@ -101,7 +102,8 @@ export function mentionMessageToStoredContextMessage(roomId: string, msg: Mentio
 type GroupEstimateMessage = { role: 'user' | 'assistant'; content: string }
 export type GroupModelContext = { model: string; provider: string }
 export type GroupAgentSessionConfig = {
-    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi'
+    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok'
+    agentMode?: 'scoped' | 'global'
     provider?: string
     model?: string
     apiMode?: string
@@ -228,7 +230,8 @@ export interface GroupAgentEventSink {
 
 export interface GroupAgentExecutor {
     readonly agentId: string
-    readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi'
+    readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok'
+    readonly agentMode: 'scoped' | 'global'
     readonly profile: string
     readonly provider: string
     readonly model: string
@@ -285,12 +288,25 @@ export interface GroupChatRunService {
             workspace?: string | null
             source?: string
             session_source?: 'group_chat'
-            coding_agent_id?: 'claude-code' | 'codex' | 'pi' | 'ekko-agent'
-            mode?: 'scoped'
+            coding_agent_id?: 'claude-code' | 'codex' | 'pi' | 'grok' | 'ekko-agent'
+            mode?: 'scoped' | 'global'
             profile?: string
             reasoning_effort?: string
             background_delegation_enabled?: boolean
             context_compression_enabled?: boolean
+            memory_input?: string | ContentBlock[]
+            memory_messages?: Array<{
+                id?: string
+                role: 'user' | 'assistant'
+                content: string
+                metadata?: Record<string, unknown>
+                createdAt?: string
+            }>
+            memory_write_policy?: 'automatic' | 'explicit-only'
+            memory_origin?: { host?: string; namespace?: string; contextId?: string }
+            memory_recall_scopes?: Array<Record<string, string>>
+            memory_write_scopes?: Array<Record<string, string>>
+            memory_default_write_scope?: Record<string, string>
         },
         options?: {
             profile?: string
@@ -313,7 +329,8 @@ export interface GroupChatRunService {
 
 export class AgentClient implements GroupAgentExecutor {
     readonly agentId: string
-    readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi'
+    readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok'
+    readonly agentMode: 'scoped' | 'global'
     readonly profile: string
     readonly provider: string
     readonly model: string
@@ -347,6 +364,9 @@ export class AgentClient implements GroupAgentExecutor {
     constructor(config: AgentConfig, handlers: AgentEventHandler = {}, eventSink: GroupAgentEventSink | null = null) {
         this.agentId = config.agentId || Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
         this.agent = config.agent || 'hermes'
+        this.agentMode = config.agentMode === 'global' && (this.agent === 'claude' || this.agent === 'codex' || this.agent === 'pi' || this.agent === 'grok')
+            ? 'global'
+            : 'scoped'
         this.profile = config.profile
         this.provider = String(config.provider || '').trim()
         this.model = String(config.model || '').trim()
@@ -968,6 +988,54 @@ export class AgentClient implements GroupAgentExecutor {
         return `${context}\n\nCurrent message: ${stripMentionRoutingTokens(msg.content, this.name) || msg.content}`
     }
 
+    private groupMemoryMessages(
+        roomId: string,
+        msg: MentionMessage,
+        runtimeContext: GroupRuntimeContext,
+    ): Array<{
+        id: string
+        role: 'user' | 'assistant'
+        content: string
+        metadata: Record<string, unknown>
+        createdAt: string
+    }> {
+        const sessionId = groupRuntimeSessionId(roomId, this.profile, this.name)
+        const evidenceId = (messageId: string) => createHash('sha256')
+            .update(sessionId)
+            .update('\0')
+            .update(messageId)
+            .digest('hex')
+        const messages: Array<{
+            id: string
+            role: 'user' | 'assistant'
+            content: string
+            metadata: Record<string, unknown>
+            createdAt: string
+        }> = runtimeContext.history.map(item => ({
+            id: evidenceId(item.id),
+            role: item.role,
+            content: `${item.senderName}：${item.content}`,
+            metadata: {
+                senderName: item.senderName,
+                groupMessageId: item.id,
+            },
+            createdAt: new Date(item.timestamp).toISOString(),
+        }))
+        const currentText = stripMentionRoutingTokens(msg.content, this.name) || msg.content
+        messages.push({
+            id: evidenceId(msg.messageId || `${msg.senderId}:${msg.timestamp}:${currentText}`),
+            role: msg.role === 'assistant' ? 'assistant' : 'user',
+            content: `${msg.senderName}：${currentText}`,
+            metadata: {
+                senderId: msg.senderId,
+                senderName: msg.senderName,
+                ...(msg.messageId ? { groupMessageId: msg.messageId } : {}),
+            },
+            createdAt: new Date(msg.timestamp).toISOString(),
+        })
+        return messages
+    }
+
     private groupSystemPrompt(roomId: string, msg?: MentionMessage): string {
         const room = this.storage?.getRoom?.(roomId)
         const rawMembers = this.storage?.getRoomMembers?.(roomId)
@@ -1112,14 +1180,19 @@ export class AgentClient implements GroupAgentExecutor {
                     ? 'claude-code'
                     : this.agent === 'pi'
                         ? 'pi'
-                        : 'codex'
+                        : this.agent === 'grok'
+                            ? 'grok'
+                            : 'codex'
+            const usesGlobalCodingAgent = this.agentMode === 'global' && codingAgentId !== 'ekko-agent'
             const groupSystemPrompt = this.groupSystemPrompt(roomId, msg)
             const result = await this.chatRunService.runAndWait({
                 input: this.groupRuntimeInput(msg, runtimeContext),
                 session_id: sessionId,
-                model: this.model || undefined,
-                provider: this.provider || undefined,
-                ...(this.apiMode ? { apiMode: this.apiMode } : {}),
+                ...(usesGlobalCodingAgent ? {} : {
+                    model: this.model || undefined,
+                    provider: this.provider || undefined,
+                }),
+                ...(!usesGlobalCodingAgent && this.apiMode ? { apiMode: this.apiMode } : {}),
                 instructions: groupSystemPrompt,
                 group_system_prompt: groupSystemPrompt,
                 group_room_id: roomId,
@@ -1128,11 +1201,39 @@ export class AgentClient implements GroupAgentExecutor {
                 source: 'group_chat',
                 session_source: 'group_chat',
                 coding_agent_id: codingAgentId,
-                mode: 'scoped',
+                mode: usesGlobalCodingAgent ? 'global' : 'scoped',
                 profile: this.profile,
-                reasoning_effort: this.reasoningEffort || undefined,
+                ...(!usesGlobalCodingAgent && this.reasoningEffort
+                    ? { reasoning_effort: this.reasoningEffort }
+                    : {}),
                 background_delegation_enabled: false,
                 context_compression_enabled: false,
+                ...(codingAgentId === 'ekko-agent'
+                    ? {
+                        memory_messages: this.groupMemoryMessages(roomId, msg, runtimeContext),
+                        memory_write_policy: 'automatic' as const,
+                        memory_origin: {
+                            host: 'hermes-studio',
+                            namespace: 'group-chat',
+                            contextId: roomId,
+                        },
+                        memory_recall_scopes: [
+                            { type: 'profile' },
+                            { type: 'context', namespace: 'studio.group-chat', id: roomId },
+                            { type: 'session', id: sessionId },
+                        ],
+                        memory_write_scopes: [
+                            { type: 'profile' },
+                            { type: 'context', namespace: 'studio.group-chat', id: roomId },
+                            { type: 'session', id: sessionId },
+                        ],
+                        memory_default_write_scope: {
+                            type: 'context',
+                            namespace: 'studio.group-chat',
+                            id: roomId,
+                        },
+                    }
+                    : {}),
             }, {
                 profile: this.profile,
                 onEvent: (event, payload = {}) => {
@@ -1902,12 +2003,14 @@ export function groupBridgeSessionId(
     runtimeConfig: GroupAgentSessionConfig = {},
 ): string {
     const agent = String(runtimeConfig.agent || 'hermes').trim()
+    const agentMode = runtimeConfig.agentMode === 'global' ? 'global' : 'scoped'
     const provider = String(runtimeConfig.provider || '').trim()
     const model = String(runtimeConfig.model || '').trim()
     const apiMode = agent === 'hermes' ? '' : String(runtimeConfig.apiMode || '').trim()
     const reasoningEffort = String(runtimeConfig.reasoningEffort || '').trim()
-    const runtimeKey = agent !== 'hermes' || provider || model || apiMode || reasoningEffort
-        ? `_${agent}_${provider}_${model}_${apiMode}_${reasoningEffort}`
+    const modeKey = agentMode === 'global' ? '_global' : ''
+    const runtimeKey = agent !== 'hermes' || provider || model || apiMode || reasoningEffort || modeKey
+        ? `_${agent}${modeKey}_${provider}_${model}_${apiMode}_${reasoningEffort}`
         : ''
     const rawKey = `gc_${roomId}_${profile}_${name}_${sessionSeed || '0'}${runtimeKey}`
     const safePrefix = rawKey.replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -2475,6 +2578,7 @@ export class AgentClients {
             ...persisted,
             agentId: String(agent.agentId || ''),
             agent: String(agent.agent || ''),
+            agentMode: String(agent.agentMode || 'scoped'),
             profile: String(agent.profile || ''),
             provider: String(agent.provider || ''),
             model: String(agent.model || ''),

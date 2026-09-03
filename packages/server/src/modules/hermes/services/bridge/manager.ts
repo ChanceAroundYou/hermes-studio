@@ -1,14 +1,16 @@
 import { execFileSync, spawn, type ChildProcess } from 'child_process'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync } from 'fs'
 import { createConnection, createServer } from 'net'
-import { dirname, isAbsolute, join, resolve } from 'path'
+import { isAbsolute, join, resolve } from 'path'
 import { logger } from '../../../studio/public/logging'
+import { resolveHermesInstallationEnvironment } from '../runtime/installation'
 import { detectHermesHome, getHermesBin } from '../runtime/path'
 import { AgentBridgeClient, DEFAULT_AGENT_BRIDGE_ENDPOINT } from './client'
 
 const DEFAULT_AGENT_BRIDGE_STARTUP_TIMEOUT_MS = 120000
 const DEFAULT_AGENT_BRIDGE_RESTART_DELAY_MS = 1000
 const MAX_AGENT_BRIDGE_RESTART_DELAY_MS = 30000
+const MAX_AGENT_BRIDGE_STARTUP_RESTART_ATTEMPTS = 3
 const DEFAULT_AGENT_BRIDGE_RECOVERY_EXIT_TIMEOUT_MS = 5000
 const DEFAULT_AGENT_BRIDGE_RECOVERY_SIGKILL_WAIT_MS = 250
 const DEFAULT_AGENT_BRIDGE_SHUTDOWN_TIMEOUT_MS = 10_000
@@ -165,46 +167,13 @@ function resolveExecutable(command: string): string | undefined {
 function agentRootFromHermesBin(): string | undefined {
   const hermesBin = resolveExecutable(getHermesBin())
   if (!hermesBin) return undefined
-
-  const binDir = dirname(hermesBin)
-  const rootCandidates = [
-    resolve(binDir, '..'),
-    resolve(binDir, '..', '..'),
-    resolve(binDir, '..', 'hermes-agent'),
-    resolve(binDir, '..', 'lib', 'hermes-agent'),
-    resolve(binDir, '..', '..', 'hermes-agent'),
-  ]
-  const root = rootCandidates.find(candidate => existsSync(join(candidate, 'run_agent.py')))
-  if (root) return root
-
-  try {
-    const first = readFileSync(hermesBin, 'utf-8').split(/\r?\n/, 1)[0]
-    const match = first.match(/^#!\s*(.+)$/)
-    const python = match?.[1]?.trim().split(/\s+/)[0]
-    if (python) {
-      const pyDir = dirname(python)
-      const shebangRootCandidates = [
-        resolve(pyDir, '..', '..'),
-        resolve(pyDir, '..', '..', 'hermes-agent'),
-        resolve(pyDir, '..', '..', 'lib', 'hermes-agent'),
-      ]
-      return shebangRootCandidates.find(candidate => existsSync(join(candidate, 'run_agent.py')))
-    }
-  } catch {}
-  return undefined
+  return resolveHermesInstallationEnvironment(hermesBin, detectHermesHome()).agentRoot
 }
 
 function hermesBinPython(): string | undefined {
   const hermesBin = resolveExecutable(getHermesBin())
   if (!hermesBin) return undefined
-  try {
-    const first = readFileSync(hermesBin, 'utf-8').split(/\r?\n/, 1)[0]
-    const match = first.match(/^#!\s*(.+)$/)
-    const python = match?.[1]?.trim().split(/\s+/)[0]
-    return python && existsSync(python) ? python : undefined
-  } catch {
-    return undefined
-  }
+  return resolveHermesInstallationEnvironment(hermesBin, detectHermesHome()).python
 }
 
 function firstExistingExecutable(candidates: string[]): string | undefined {
@@ -1049,10 +1018,13 @@ export class AgentBridgeManager {
     })
 
     await new Promise<void>((resolveReady, rejectReady) => {
+      let startupSettled = false
       const startupTimeoutMs = this.options.startupTimeoutMs
         ?? envPositiveInt('HERMES_AGENT_BRIDGE_STARTUP_TIMEOUT_MS')
         ?? DEFAULT_AGENT_BRIDGE_STARTUP_TIMEOUT_MS
       const timeout = setTimeout(() => {
+        if (startupSettled) return
+        startupSettled = true
         cleanup()
         rejectReady(new Error(`agent bridge did not become ready within ${startupTimeoutMs}ms`))
       }, startupTimeoutMs)
@@ -1064,25 +1036,29 @@ export class AgentBridgeManager {
       }
 
       const markReady = () => {
-        if (readyResolved) return
+        if (startupSettled) return
         this.ready = true
         this.restartAttempts = 0
-        readyResolved = true
+        startupSettled = true
         cleanup()
         resolveReady()
       }
 
       const onError = (err: Error) => {
+        if (startupSettled) return
+        startupSettled = true
         cleanup()
+        this.scheduleRestart(null, null, true)
         rejectReady(err)
       }
 
       const onExitBeforeReady = (code: number | null, signal: NodeJS.Signals | null) => {
+        if (startupSettled) return
+        startupSettled = true
         cleanup()
+        this.scheduleRestart(code, signal, true)
         rejectReady(new Error(`agent bridge exited before ready code=${code} signal=${signal}`))
       }
-
-      let readyResolved = false
 
       child.once('error', onError)
       child.once('exit', onExitBeforeReady)
@@ -1093,7 +1069,7 @@ export class AgentBridgeManager {
           timeoutMs: 1000,
           connectRetryMs: 0,
         })
-        while (!readyResolved && !child.killed) {
+        while (!startupSettled && !child.killed) {
           try {
             await client.ping()
             markReady()
@@ -1154,8 +1130,19 @@ export class AgentBridgeManager {
     return !['0', 'false', 'no', 'off'].includes(raw)
   }
 
-  private scheduleRestart(code: number | null, signal: NodeJS.Signals | null): void {
-    if (this.restartTimer || this.stopping) return
+  private scheduleRestart(
+    code: number | null,
+    signal: NodeJS.Signals | null,
+    startupFailure = false,
+  ): void {
+    if (this.restartTimer || this.stopping || !this.autoRestartEnabled()) return
+    if (startupFailure && this.restartAttempts >= MAX_AGENT_BRIDGE_STARTUP_RESTART_ATTEMPTS) {
+      logger.warn(
+        '[agent-bridge] failed to become ready after %d restart attempts; automatic restart stopped',
+        this.restartAttempts,
+      )
+      return
+    }
     this.restartAttempts += 1
     const envDelay = envPositiveInt('HERMES_AGENT_BRIDGE_RESTART_DELAY_MS') ?? DEFAULT_AGENT_BRIDGE_RESTART_DELAY_MS
     const delayMs = Math.min(
@@ -1174,7 +1161,7 @@ export class AgentBridgeManager {
       if (this.stopping) return
       this.start().catch((err) => {
         logger.warn(err, '[agent-bridge] automatic restart failed')
-        if (!this.stopping) this.scheduleRestart(null, null)
+        if (!this.stopping) this.scheduleRestart(null, null, true)
       })
     }, delayMs)
   }

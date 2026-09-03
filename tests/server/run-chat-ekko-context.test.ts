@@ -266,6 +266,9 @@ describe('ekko-agent context usage events', () => {
         command: 'rm -rf build',
         choices: ['once', 'session', 'always', 'deny'],
         allow_permanent: true,
+        timeout_ms: 300_000,
+        remaining_timeout_ms: 300_000,
+        requested_at: expect.any(Number),
         permission_key: 'terminal:delete',
         session_id: 'session-1',
       }),
@@ -324,6 +327,8 @@ describe('ekko-agent context usage events', () => {
         question: 'Which option should I use?',
         choices: ['A', 'B'],
         timeout_ms: 300_000,
+        remaining_timeout_ms: 300_000,
+        requested_at: expect.any(Number),
         session_id: 'session-1',
       }),
     })
@@ -594,6 +599,50 @@ describe('ekko-agent context usage events', () => {
     }))
   })
 
+  it('forwards trusted group-chat memory evidence separately from the model envelope', async () => {
+    agentRunMock.mockResolvedValueOnce({
+      runId: 'run-group-memory',
+      output: { role: 'assistant', content: '好的。' },
+      steps: [],
+      messages: [],
+      events: [],
+      contextEstimate: { contextTokens: 5_000 },
+    })
+    const { handleEkkoAgentRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-ekko-agent-run')
+    const { nsp, socket, sessionMap } = makeHarness()
+
+    await handleEkkoAgentRun(nsp as any, socket as any, {
+      session_id: 'session-1',
+      input: 'Group chat system: reply now.\n<group_chat_summary>Agent roster</group_chat_summary>\nCurrent message: 请记住叫我老爷',
+      memory_input: '请记住叫我老爷',
+      memory_write_policy: 'explicit-only',
+      source: 'group_chat',
+      session_source: 'group_chat',
+      coding_agent_id: 'ekko-agent',
+    }, 'default', sessionMap, vi.fn(() => false))
+
+    expect(agentRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      memoryInput: expect.objectContaining({
+        messages: [{ role: 'user', content: '请记住叫我老爷' }],
+        writePolicy: 'explicit-only',
+        origin: {
+          host: 'hermes-studio',
+          namespace: 'group-chat',
+          contextId: 'session-1',
+        },
+        recallScopes: [
+          { type: 'profile' },
+          { type: 'context', namespace: 'studio.group-chat', id: 'session-1' },
+          { type: 'session', id: 'session-1' },
+        ],
+      }),
+      messages: expect.arrayContaining([expect.objectContaining({
+        role: 'user',
+        content: expect.stringContaining('<group_chat_summary>'),
+      })]),
+    }))
+  })
+
   it('uses the Hermes Responses default reasoning effort when none is selected', async () => {
     agentRunMock.mockResolvedValueOnce({
       runId: 'run-1',
@@ -790,26 +839,6 @@ describe('ekko-agent context usage events', () => {
       usage: { inputTokens: 34, outputTokens: 6, cacheReadTokens: 8 },
       profile: 'default',
       model: 'ekko-review-model',
-      provider: 'test-provider',
-      isEstimated: false,
-    })
-    runInput.onMemoryUsage({
-      purpose: 'ekko-memory-summary',
-      usage: { inputTokens: 21, outputTokens: 4, cacheReadTokens: 7 },
-      model: 'ekko-summary-model',
-      callIndex: 1,
-    })
-    expect(recordSessionUsageMock).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      runId: expect.stringMatching(/^memory-summary:.+:call:1$/),
-      source: 'ekko_agent',
-      agent: 'ekko_agent',
-      usageScope: 'model_call',
-      purpose: 'ekko-memory-summary',
-      apiCalls: 1,
-      usage: { inputTokens: 21, outputTokens: 4, cacheReadTokens: 7 },
-      profile: 'default',
-      model: 'ekko-summary-model',
       provider: 'test-provider',
       isEstimated: false,
     })
@@ -1458,6 +1487,26 @@ describe('ekko-agent context usage events', () => {
         content: 'continue from the checkpoint',
       },
     ])
+    expect(agentRunMock.mock.calls[0][0].memoryInput).toEqual({
+      messages: [{ role: 'user', content: 'continue from the checkpoint' }],
+      writePolicy: 'automatic',
+      origin: {
+        host: 'hermes-studio',
+        namespace: 'single-chat',
+        contextId: 'session-1',
+      },
+      recallScopes: [
+        { type: 'profile' },
+        { type: 'context', namespace: 'studio.single-chat', id: 'session-1' },
+        { type: 'session', id: 'session-1' },
+      ],
+      writeScopes: [
+        { type: 'profile' },
+        { type: 'context', namespace: 'studio.single-chat', id: 'session-1' },
+        { type: 'session', id: 'session-1' },
+      ],
+      defaultWriteScope: { type: 'profile' },
+    })
     expect(buildCompressedHistoryMock).toHaveBeenCalledWith(
       'session-1',
       'default',

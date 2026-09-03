@@ -43,6 +43,7 @@ const agentStatusSnapshot = ref<AgentStatusSnapshot | null>(null)
 type GroupAgentType = RemoteGroupAgentDescriptor['agent']
 const selectedAgentType = ref<GroupAgentType>('hermes')
 const selectedProfile = ref('')
+const selectedAgentMode = ref<'scoped' | 'global'>('scoped')
 const selectedAgentProvider = ref('')
 const selectedAgentModel = ref('')
 const selectedAgentApiMode = ref<CodingAgentApiMode>('codex_responses')
@@ -103,6 +104,7 @@ const groupAgentTypeDefinitions: Array<{ label: string; value: GroupAgentType }>
   { label: 'Claude', value: 'claude' },
   { label: 'Codex', value: 'codex' },
   { label: 'Pi', value: 'pi' },
+  { label: 'Grok', value: 'grok' },
 ]
 const groupAgentTypeOptions = computed(() => groupAgentTypeDefinitions.map((option) => {
   const disabled = !isAgentStatusAvailable(agentStatusSnapshot.value, option.value)
@@ -131,7 +133,9 @@ function getAgentModelGroups(profile: string) {
           ? 'claude-code'
           : selectedAgentType.value === 'pi'
             ? 'pi'
-            : 'codex'
+            : selectedAgentType.value === 'grok'
+              ? 'grok'
+              : 'codex'
       return canScopedCodingAgentUseProvider(codingAgentId, group.provider)
     })
 }
@@ -178,19 +182,26 @@ const agentReasoningEffortOptions = computed(() => [
   { label: t('chat.reasoningEffort.options.xhigh'), value: 'xhigh' },
   { label: t('chat.reasoningEffort.options.max'), value: 'max' },
 ])
+const supportsGlobalAgentMode = computed(() => ['claude', 'codex', 'pi', 'grok'].includes(selectedAgentType.value))
+const usesGlobalAgentMode = computed(() => supportsGlobalAgentMode.value && selectedAgentMode.value === 'global')
+const agentModeOptions = computed(() => [
+  { label: t('codingAgents.launchModeGlobal'), value: 'global' },
+  { label: t('codingAgents.launchModeScoped'), value: 'scoped' },
+])
 const agentAvatarPreview = computed(() => (
   agentAvatar.value || defaultGroupAgentAvatar(selectedAgentType.value)
 ))
 const selectedAgent = computed<RemoteGroupAgentDescriptor | null>(() => {
   if (!isAgentStatusAvailable(agentStatusSnapshot.value, selectedAgentType.value)) return null
-  if (!selectedProfile.value || !selectedAgentProvider.value || !selectedAgentModel.value) return null
+  if (!selectedProfile.value || (!usesGlobalAgentMode.value && (!selectedAgentProvider.value || !selectedAgentModel.value))) return null
   return {
     agent: selectedAgentType.value,
+    agentMode: usesGlobalAgentMode.value ? 'global' : 'scoped',
     profile: selectedProfile.value,
-    provider: selectedAgentProvider.value,
-    model: selectedAgentModel.value,
-    apiMode: selectedAgentType.value === 'hermes' ? '' : selectedAgentApiMode.value,
-    reasoningEffort: selectedAgentReasoningEffort.value,
+    provider: usesGlobalAgentMode.value ? '' : selectedAgentProvider.value,
+    model: usesGlobalAgentMode.value ? '' : selectedAgentModel.value,
+    apiMode: selectedAgentType.value === 'hermes' || usesGlobalAgentMode.value ? '' : selectedAgentApiMode.value,
+    reasoningEffort: usesGlobalAgentMode.value ? '' : selectedAgentReasoningEffort.value,
     name: agentName.value.trim() || selectedProfile.value,
     description: agentDescription.value.trim(),
     avatar: agentAvatar.value ? JSON.stringify(agentAvatar.value) : '',
@@ -277,6 +288,7 @@ function handleAgentTypeChange(agent: GroupAgentType): void {
   }
   error.value = ''
   selectedAgentType.value = agent
+  if (!['claude', 'codex', 'pi', 'grok'].includes(agent)) selectedAgentMode.value = 'scoped'
   syncAgentModelSelection(selectedProfile.value)
 }
 
@@ -299,6 +311,7 @@ function handleAgentModelChange(model: string): void {
 
 function applyAgentConfiguration(agent: RemoteGroupAgentDescriptor): void {
   selectedAgentType.value = agent.agent
+  selectedAgentMode.value = agent.agentMode === 'global' ? 'global' : 'scoped'
   selectedProfile.value = agent.profile
   selectedAgentProvider.value = agent.provider
   selectedAgentModel.value = agent.model
@@ -493,6 +506,7 @@ function sameAgentDescriptor(left: unknown, right: RemoteGroupAgentDescriptor): 
   const candidate = left as Record<string, unknown>
   return (
     candidate.agent === right.agent
+    && (candidate.agentMode === 'global' ? 'global' : 'scoped') === right.agentMode
     && candidate.profile === right.profile
     && candidate.provider === right.provider
     && candidate.model === right.model
@@ -660,7 +674,15 @@ onUnmounted(() => {
               @update:value="handleAgentProfileChange"
             />
           </div>
-          <div class="field">
+          <div v-if="supportsGlobalAgentMode" class="field">
+            <label>{{ t('codingAgents.launchModeScope') }}</label>
+            <NSelect
+              v-model:value="selectedAgentMode"
+              :options="agentModeOptions"
+              :disabled="waitingForApproval"
+            />
+          </div>
+          <div v-if="!usesGlobalAgentMode" class="field">
             <label>{{ t('models.provider') }}</label>
             <NSelect
               :value="selectedAgentProvider"
@@ -671,7 +693,7 @@ onUnmounted(() => {
               @update:value="handleAgentProviderChange"
             />
           </div>
-          <div class="field">
+          <div v-if="!usesGlobalAgentMode" class="field">
             <label>{{ t('models.models') }}</label>
             <NSelect
               :value="selectedAgentModel"
@@ -682,7 +704,7 @@ onUnmounted(() => {
               @update:value="handleAgentModelChange"
             />
           </div>
-          <div v-if="selectedAgentType !== 'hermes'" class="field">
+          <div v-if="selectedAgentType !== 'hermes' && !usesGlobalAgentMode" class="field">
             <label>{{ t('codingAgents.protocolScope') }}</label>
             <NSelect
               v-model:value="selectedAgentApiMode"
@@ -690,7 +712,7 @@ onUnmounted(() => {
               :disabled="waitingForApproval"
             />
           </div>
-          <div class="field">
+          <div v-if="!usesGlobalAgentMode" class="field">
             <label>{{ t('chat.reasoningEffort.tooltip') }}</label>
             <NSelect
               v-model:value="selectedAgentReasoningEffort"
@@ -746,7 +768,10 @@ onUnmounted(() => {
             <div v-if="manualPairingAgent" class="manual-agent-preview">
               <strong>{{ manualPairingAgent.name }}</strong>
               <span>{{ manualPairingAgent.profile }}</span>
-              <span>{{ manualPairingAgent.provider }} / {{ manualPairingAgent.model }}</span>
+              <span v-if="manualPairingAgent.agentMode === 'global'">
+                {{ t('codingAgents.launchModeGlobal') }}
+              </span>
+              <span v-else>{{ manualPairingAgent.provider }} / {{ manualPairingAgent.model }}</span>
             </div>
             <NButton
               secondary
