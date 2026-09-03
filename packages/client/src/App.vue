@@ -40,6 +40,10 @@ const EkkoConfigSidebar = defineAsyncComponent(
   async () =>
     (await import("@/components/layout/EkkoConfigSidebar.vue")).default,
 );
+const CodingAgentConfigSidebar = defineAsyncComponent(
+  async () =>
+    (await import("@/components/layout/CodingAgentConfigSidebar.vue")).default,
+);
 const DesktopTitleBar = defineAsyncComponent(
   async () => (await import("@/components/layout/DesktopTitleBar.vue")).default,
 );
@@ -119,13 +123,17 @@ const usesHermesConfigSidebar = computed(
 const usesEkkoConfigSidebar = computed(
   () => route.meta?.ekkoConfig === true,
 );
+const usesCodingAgentConfigSidebar = computed(
+  () => route.meta?.codingAgentConfig === true,
+);
 const showAppSidebar = computed(
   () =>
     !isLoginPage.value &&
     !isStandaloneChatPage.value &&
     !usesPageSidebar.value &&
     !usesHermesConfigSidebar.value &&
-    !usesEkkoConfigSidebar.value,
+    !usesEkkoConfigSidebar.value &&
+    !usesCodingAgentConfigSidebar.value,
 );
 const showMobileMenuButton = computed(
   () =>
@@ -134,7 +142,8 @@ const showMobileMenuButton = computed(
     (showAppSidebar.value ||
       usesPageSidebar.value ||
       usesHermesConfigSidebar.value ||
-      usesEkkoConfigSidebar.value),
+      usesEkkoConfigSidebar.value ||
+      usesCodingAgentConfigSidebar.value),
 );
 
 const nodeVersionLow = computed(() => {
@@ -161,6 +170,8 @@ const desktopTitleBarLeft = computed(() => {
     return appStore.sidebarCollapsed ? 84 : 260;
   if (usesEkkoConfigSidebar.value)
     return appStore.sidebarCollapsed ? 84 : 260;
+  if (usesCodingAgentConfigSidebar.value)
+    return appStore.sidebarCollapsed ? 84 : 260;
   return appStore.pageSidebarExpanded ? 260 : 10;
 });
 const isDesktopPetRoute = computed(() => route.name === "desktop.pet");
@@ -178,7 +189,7 @@ const isDesktopWindowMaximized = ref(false);
 let stopWindowStateListener: (() => void) | undefined;
 
 function handleMobileMenuClick() {
-  if (usesPageSidebar.value || usesHermesConfigSidebar.value || usesEkkoConfigSidebar.value) {
+  if (usesPageSidebar.value || usesHermesConfigSidebar.value || usesEkkoConfigSidebar.value || usesCodingAgentConfigSidebar.value) {
     window.dispatchEvent(new CustomEvent("hermes:open-page-sidebar"));
     return;
   }
@@ -276,6 +287,7 @@ useKeyboard();
                 'no-sidebar': isLoginPage || !showAppSidebar,
                 'has-hermes-config-sidebar': usesHermesConfigSidebar,
                 'has-ekko-config-sidebar': usesEkkoConfigSidebar,
+                'has-coding-agent-config-sidebar': usesCodingAgentConfigSidebar,
               }"
             >
               <button
@@ -301,10 +313,13 @@ useKeyboard();
               <EkkoConfigSidebar
                 v-if="!isLoginPage && usesEkkoConfigSidebar"
               />
+              <CodingAgentConfigSidebar
+                v-if="!isLoginPage && usesCodingAgentConfigSidebar"
+              />
               <main
                 class="app-main"
                 :class="{
-                  'app-main--card': showAppSidebar || usesHermesConfigSidebar || usesEkkoConfigSidebar,
+                  'app-main--card': showAppSidebar || usesHermesConfigSidebar || usesEkkoConfigSidebar || usesCodingAgentConfigSidebar,
                 }"
               >
                 <router-view />
@@ -388,6 +403,10 @@ useKeyboard();
     &.has-ekko-config-sidebar {
       display: flex;
     }
+
+    &.has-coding-agent-config-sidebar {
+      display: flex;
+    }
   }
 }
 
@@ -437,6 +456,7 @@ useKeyboard();
   :deep(.sidebar),
   :deep(.hermes-config-sidebar),
   :deep(.ekko-config-sidebar),
+  :deep(.coding-agent-config-sidebar),
   :deep(.chat-panel > .session-list),
   :deep(.history-panel > .session-list),
   :deep(.group-chat-panel > .room-sidebar),
@@ -560,9 +580,10 @@ useKeyboard();
 }
 
 .app-shell.desktop-platform-darwin {
-  .app-layout > :deep(.sidebar),
-  .app-layout > :deep(.hermes-config-sidebar),
-  .app-layout > :deep(.ekko-config-sidebar),
+   .app-layout > :deep(.sidebar),
+   .app-layout > :deep(.hermes-config-sidebar),
+   .app-layout > :deep(.ekko-config-sidebar),
+   .app-layout > :deep(.coding-agent-config-sidebar),
   :deep(.chat-panel > .session-list),
   :deep(.history-panel > .session-list),
   :deep(.workflow-view > .workflow-sidebar),
@@ -581,9 +602,10 @@ useKeyboard();
     }
   }
 
-  .app-layout > :deep(.sidebar),
-  .app-layout > :deep(.hermes-config-sidebar),
-  .app-layout > :deep(.ekko-config-sidebar) {
+   .app-layout > :deep(.sidebar),
+   .app-layout > :deep(.hermes-config-sidebar),
+   .app-layout > :deep(.ekko-config-sidebar),
+   .app-layout > :deep(.coding-agent-config-sidebar) {
     padding-top: 40px;
   }
 

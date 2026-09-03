@@ -1,16 +1,23 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { mkdir } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  grokSettingsConfig,
+  grokUserMcpConfig,
+  mergeGrokSettingsConfig,
+  mergeGrokUserMcpConfig,
   prepareGlobalGrokRuntime,
   prepareScopedGrokRuntime,
   stripManagedGrokMcp,
 } from '../../../../packages/server/src/modules/coding-agents/services/grok/config'
 import { applyGrokStreamEvent } from '../../../../packages/server/src/modules/coding-agents/services/grok/event-adapter'
 import { parseGrokStreamingJsonLine } from '../../../../packages/server/src/modules/coding-agents/services/grok/streaming-json'
-import { buildGrokTurnArgs } from '../../../../packages/server/src/modules/coding-agents/services/grok/turn-process'
+import {
+  buildGrokTurnArgs,
+  grokSessionExists,
+} from '../../../../packages/server/src/modules/coding-agents/services/grok/turn-process'
 import { updateManagedPromptFileSync } from '../../../../packages/server/src/modules/coding-agents/services/prompt-file'
 
 const roots: string[] = []
@@ -90,6 +97,34 @@ describe('Grok runtime isolation', () => {
     expect(updatedPrompt).toContain('Updated workflow instructions.')
   })
 
+  it('copies global Grok skills into scoped runtimes', async () => {
+    const root = makeRoot()
+    const sourceHome = join(root, 'user-grok')
+    const rootDir = join(root, 'runtime')
+    await mkdir(join(sourceHome, 'skills', 'review'), { recursive: true })
+    await mkdir(join(root, '.agents', 'skills', 'shared'), { recursive: true })
+    writeFileSync(join(sourceHome, 'skills', 'review', 'SKILL.md'), 'Review skill.\n')
+    writeFileSync(join(root, '.agents', 'skills', 'shared', 'SKILL.md'), 'Shared skill.\n')
+
+    await prepareScopedGrokRuntime({
+      sourceHome,
+      rootDir,
+      provider: 'custom-provider',
+      model: 'custom-model',
+      displayName: 'Custom Model',
+      proxyBaseUrl: 'http://127.0.0.1:8647/v1',
+      contextWindow: 128_000,
+      outputLimit: 8192,
+      reasoningEffort: '',
+      systemPrompt: 'Studio instructions.',
+      userInstructions: 'User instructions.',
+      managedMcpToml: '',
+    })
+
+    expect(readFileSync(join(rootDir, 'skills', 'review', 'SKILL.md'), 'utf-8')).toBe('Review skill.\n')
+    expect(readFileSync(join(rootDir, 'skills', 'shared', 'SKILL.md'), 'utf-8')).toBe('Shared skill.\n')
+  })
+
   it('removes only Studio-managed MCP blocks', () => {
     const config = [
       '[mcp_servers.user-tools]',
@@ -101,6 +136,27 @@ describe('Grok runtime isolation', () => {
 
     expect(stripManagedGrokMcp(config)).toContain('[mcp_servers.user-tools]')
     expect(stripManagedGrokMcp(config)).not.toContain('hermes-studio-api')
+  })
+
+  it('separates Grok settings and user MCP without persisting managed MCP', () => {
+    const config = [
+      '[cli]',
+      'installer = "npm"',
+      '',
+      '[mcp_servers.user-tools]',
+      'command = "user-mcp"',
+      '',
+      '[mcp_servers.hermes-studio-api]',
+      'command = "studio-mcp"',
+    ].join('\n')
+
+    expect(grokSettingsConfig(config)).toContain('[cli]')
+    expect(grokSettingsConfig(config)).not.toContain('mcp_servers')
+    expect(grokUserMcpConfig(config)).toContain('user-tools')
+    expect(grokUserMcpConfig(config)).not.toContain('hermes-studio-api')
+    expect(mergeGrokUserMcpConfig(config, '[mcp_servers.next]\ncommand = "next"')).toContain('[cli]')
+    expect(mergeGrokUserMcpConfig(config, '[mcp_servers.next]\ncommand = "next"')).not.toContain('user-tools')
+    expect(mergeGrokSettingsConfig(config, '[cli]\ninstaller = "brew"')).toContain('user-tools')
   })
 })
 
@@ -118,6 +174,16 @@ describe('Grok streaming JSON adaptation', () => {
     ])
     expect(resumedTurn).toContain('--resume')
     expect(resumedTurn).not.toContain('--session-id')
+  })
+
+  it('detects persisted sessions after a failed first turn', () => {
+    const root = makeRoot()
+    const workspace = join(root, 'workspace with spaces')
+    const sessionId = '9bf2543c-3b57-43de-b5f6-838c2f73a554'
+    mkdirSync(join(root, 'sessions', encodeURIComponent(workspace), sessionId), { recursive: true })
+
+    expect(grokSessionExists(root, workspace, sessionId)).toBe(true)
+    expect(grokSessionExists(root, workspace, '11111111-1111-4111-8111-111111111111')).toBe(false)
   })
 
   it('parses the documented event stream and maps terminal tool updates', () => {
