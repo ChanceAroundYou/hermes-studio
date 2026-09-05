@@ -6,7 +6,7 @@ import { io as createClientSocket, type Socket as ClientSocket } from 'socket.io
 import { logger } from '../public/logging'
 import { authenticateUserToken, type AuthenticatedUser } from '../public/auth'
 import { userCanAccessProfile } from '../public/users'
-import { config } from '../public/config'
+import { config, socketIoClientPath } from '../public/config'
 import { getChatRunServer } from '../public/chat-run'
 import { transcodeToPcmS16le } from '../services/voice/stt/audio-convert'
 import { decodeMcuImaAdpcm, encodeMcuImaAdpcm } from '../services/voice/mcu/adpcm'
@@ -564,6 +564,7 @@ export class GlobalAgentServer {
     const socket: ClientSocket = createClientSocket(`${this.localBaseUrl}/chat-run`, {
       auth: { token: options.userToken },
       query: { profile: options.profile },
+      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: false,
       timeout: 30_000,
@@ -1197,6 +1198,7 @@ export class GlobalAgentServer {
     const localSocket = createClientSocket(`${this.localBaseUrl}${namespace}`, {
       auth,
       query,
+      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: false,
       timeout: 30_000,

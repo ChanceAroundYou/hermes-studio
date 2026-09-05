@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { io, type Socket } from 'socket.io-client'
-import { config } from '../../public/config'
+import { config, socketIoClientPath } from '../../public/config'
 import { clearSessionMessages } from '../../repositories/session-store'
 import { getChatRunServer } from '../../public/chat-run'
 import { logger } from '../../public/logging'
@@ -453,6 +453,7 @@ class McuSocketIoRelayClient {
         role: 'hermes-studio',
         instanceId: this.options.instanceId || this.options.deviceCode || undefined,
       },
+      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -878,6 +879,7 @@ class McuSocketIoRelayClient {
       const socket: Socket = io(`${this.options.localBaseUrl.replace(/\/$/, '')}/chat-run`, {
         auth: this.options.userToken ? { token: this.options.userToken } : {},
         query: { profile: voice.profile },
+        path: socketIoClientPath(),
         transports: ['websocket', 'polling'],
         reconnection: false,
         timeout: 30_000,
@@ -2105,6 +2107,7 @@ export class OutboundRelayClient {
     const localSocket = io(`${this.localBaseUrl}${namespace}`, {
       auth: normalizeSocketAuth(request.auth),
       query: normalizeSocketQuery(request.query),
+      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,

@@ -1,6 +1,7 @@
 import { io, Socket } from 'socket.io-client'
 import { createHash, randomBytes, randomUUID } from 'crypto'
 import { getToken } from '../../public/auth'
+import { socketIoClientPath } from '../../public/config'
 import { logger } from '../../public/logging'
 import { countTokens } from '../context-compressor'
 import {
@@ -420,6 +421,7 @@ export class AgentClient implements GroupAgentExecutor {
                 source: 'agent',
                 agentSocketSecret: GROUP_CHAT_AGENT_SOCKET_SECRET,
             },
+            path: socketIoClientPath(),
             transports: ['websocket'],
             reconnection: true,
             reconnectionAttempts: Infinity,

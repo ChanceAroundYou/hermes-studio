@@ -1,7 +1,7 @@
 import type { Server as SocketIoServer, Socket } from 'socket.io'
 import { io as createClientSocket, type Socket as ClientSocket } from 'socket.io-client'
 import { authenticateUserToken, inspectAppUserToken } from '../../middleware/auth'
-import { config } from '../../public/config'
+import { config, socketIoClientPath } from '../../public/config'
 import { logger } from '../../public/logging'
 import { getDeviceId } from '../../public/system-info'
 import type { AppConnectionType } from '../../repositories/app-connections-store'
@@ -466,6 +466,7 @@ export class LocalAppRelayServer {
         token: socket.data.localUserToken,
       },
       query: normalizeSocketQuery(request.query),
+      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,

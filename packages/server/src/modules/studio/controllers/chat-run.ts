@@ -1,7 +1,7 @@
 import type { Context } from 'koa'
 import { randomUUID } from 'crypto'
 import { io, type Socket } from 'socket.io-client'
-import { config } from '../public/config'
+import { config, socketIoClientPath } from '../public/config'
 import { resolveModelExecutionIdentity } from '../contracts/runs/model-execution-identity'
 
 type ChatRunPayload = Record<string, unknown> & {
@@ -139,6 +139,7 @@ export async function runOnce(ctx: Context) {
     const socket: Socket = io(`${chatRunBaseUrl()}/chat-run`, {
       auth: token ? { token } : {},
       query: { profile },
+      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: false,
       timeout: 30_000,

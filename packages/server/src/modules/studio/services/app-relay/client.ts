@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { io, type Socket } from 'socket.io-client'
-import { config } from '../../public/config'
+import { config, socketIoClientPath } from '../../public/config'
 import {
   assignLegacyCloudAppConnectionUser,
   listAppConnections,
@@ -591,6 +591,7 @@ export class AppRelayClient {
     const localSocket = io(`${this.localBaseUrl}${namespace}`, {
       auth: normalizeSocketAuth(request.auth),
       query: normalizeSocketQuery(request.query),
+      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,
