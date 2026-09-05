@@ -9,6 +9,7 @@ const DEFAULT_AGENT_ICONS: Record<RoomAgent['agent'], string> = {
     claude: `${getBaseUrlValue()}/coding-agents/claude-code.svg`,
     pi: `${getBaseUrlValue()}/coding-agents/pi.svg`,
     grok: `${getBaseUrlValue()}/coding-agents/grok.svg`,
+    opencode: `${getBaseUrlValue()}/coding-agents/opencode.png`,
 }
 
 export function parseStoredAvatar(raw: unknown): ProfileAvatar | null {

@@ -79,6 +79,14 @@ const codingAgents: CodingAgentCard[] = [
     command: 'grok',
     packageName: '@xai-official/grok',
   },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    provider: 'OpenCode',
+    logo: '/coding-agents/opencode.png',
+    command: 'opencode',
+    packageName: 'opencode-ai',
+  },
 ]
 
 const { t } = useI18n()
@@ -100,14 +108,15 @@ const hermesRuntimeStatus = ref<RuntimeVersionStatus | null>(null)
 const aiHelpDrawerVisible = ref(false)
 const aiHelpPrompt = ref('')
 const legacyDataMigrationChecked = ref(false)
-const installing = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
-const deleting = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
-const checkingUpdate = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
+const installing = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false })
+const deleting = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false })
+const checkingUpdate = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false })
 const updateInfo = ref<Record<CodingAgentId, CodingAgentUpdateResult | null>>({
   'claude-code': null,
   codex: null,
   pi: null,
   grok: null,
+  opencode: null,
 })
 
 const hermesStatus = computed(() => agentStatusSnapshot.value?.agents.find(agent => agent.id === 'hermes'))
@@ -483,6 +492,14 @@ onMounted(() => {
 
             <div class="agent-actions">
               <NButton
+                v-if="hermesDetected"
+                secondary
+                size="small"
+                @click="router.push({ name: 'hermes.configSettings' })"
+              >
+                {{ t('sidebar.settings') }}
+              </NButton>
+              <NButton
                 v-if="hermesDetected && hermesType === 'CLI'"
                 data-testid="view-hermes-cli-details"
                 secondary
@@ -500,14 +517,6 @@ onMounted(() => {
                 @click="runtimeManagerVisible = true"
               >
                 {{ hermesDetected ? t('agentManager.manageRuntime') : t('codingAgents.installNow') }}
-              </NButton>
-              <NButton
-                v-if="hermesDetected"
-                secondary
-                size="small"
-                @click="router.push({ name: 'hermes.configSettings' })"
-              >
-                {{ t('sidebar.settings') }}
               </NButton>
             </div>
           </section>
