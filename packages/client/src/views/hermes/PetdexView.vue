@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NInput, NSelect, NSpin, NTag, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { fetchPetdexManifest, type PetdexManifest, type PetdexPet } from '@/api/studio/petdex'
+import { getBaseUrlValue } from '@/api/client'
 import { usePetsStore } from '@/stores/hermes/pets'
 import { desktopBridge } from '@/utils/desktop-bridge'
 
@@ -68,6 +69,14 @@ async function loadManifest(force = false) {
 
 function showMore() {
   visibleLimit.value += 96
+}
+
+function previewImage(pet: PetdexPet): string {
+  const raw = pet.previewUrl || pet.spritesheetUrl
+  if (!raw) return ''
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw
+  if (raw.startsWith('/')) return `${getBaseUrlValue()}${raw}`
+  return raw
 }
 
 function assetLinks(pet: PetdexPet) {
@@ -147,7 +156,7 @@ onMounted(() => {
         <div v-if="visiblePets.length" class="pet-grid">
           <article v-for="pet in visiblePets" :key="pet.slug" class="pet-card">
             <div class="pet-preview">
-              <div class="pet-frame" :style="{ backgroundImage: `url(${pet.previewUrl || pet.spritesheetUrl})` }" />
+              <div class="pet-frame" :style="{ backgroundImage: `url(${previewImage(pet)})` }" />
             </div>
             <div class="pet-body">
               <div class="pet-title-row">
