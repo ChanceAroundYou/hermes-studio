@@ -50,6 +50,8 @@ import type { AuthenticatedUser } from '../../public/auth'
 import { ensureHermesRunWorkspace } from './workspace'
 import { observeRunChatPetEvent } from '../../public/pet-events'
 import { completeWorkspaceRunCheckpoint, startWorkspaceRunCheckpoint } from './workspace-diff-tracker'
+import { resolveAuthorizedProviderRuntimeCredentials } from '../../public/authorized-provider-runtime'
+import { saveEnvValueForProfile } from '../../public/profile-config'
 
 const BRIDGE_USAGE_FLUSH_DELAY_MS = 200
 const BRIDGE_TITLE_EVENT_POLL_INTERVAL_MS = 500
@@ -476,7 +478,7 @@ export async function handleBridgeRun(
   if (sessionRow && !sessionRow.workspace) updateSession(session_id, { workspace })
   const sessionModel = callbackContext?.model || sessionRow?.model || ''
   const sessionProvider = callbackContext?.provider || sessionRow?.provider || ''
-  const { model: resolvedModel, provider: resolvedProvider } = await resolveBridgeRunModelConfig({
+  const selectedModelConfig = await resolveBridgeRunModelConfig({
     profile,
     sessionModel,
     sessionProvider,
@@ -484,11 +486,29 @@ export async function handleBridgeRun(
     requestedProvider: callbackContext?.provider || data.provider,
     modelGroups: data.model_groups,
     preferRequested: Boolean(callbackContext) || data.one_shot_model === true,
+    preserveAuthorizedProvider: true,
   })
+  const resolvedModel = selectedModelConfig.model
+  const selectedProvider = selectedModelConfig.provider
+  if (selectedProvider === 'claude-oauth') {
+    // Studio owns OAuth refresh. Resolving here happens before context
+    // estimation can create a cached Python Agent and synchronizes Claude's
+    // fresh access token into the profile ANTHROPIC_TOKEN environment.
+    const credentials = await resolveAuthorizedProviderRuntimeCredentials({
+      profile,
+      provider: selectedProvider,
+      model: resolvedModel,
+    })
+    // Hermes Agent's native Anthropic bridge reads Claude OAuth only from
+    // ANTHROPIC_TOKEN. This is intentionally Claude-specific: no other
+    // authorized provider or provider environment is touched here.
+    await saveEnvValueForProfile(profile, 'ANTHROPIC_TOKEN', credentials.apiKey)
+  }
+  const resolvedProvider = selectedProvider === 'claude-oauth' ? 'anthropic' : selectedProvider
   if (sessionRow && !callbackContext && data.one_shot_model !== true) {
     const updates: { model?: string; provider?: string } = {}
     if (resolvedModel && sessionRow.model !== resolvedModel) updates.model = resolvedModel
-    if (resolvedProvider && sessionRow.provider !== resolvedProvider) updates.provider = resolvedProvider
+    if (selectedProvider && sessionRow.provider !== selectedProvider) updates.provider = selectedProvider
     if (Object.keys(updates).length > 0) updateSession(session_id, updates)
   }
   await writeModelRunProfileToken(socketUser, profile)
@@ -563,7 +583,7 @@ export async function handleBridgeRun(
     if (!getSession(session_id)) {
       const previewText = extractTextForPreview(displayInput || input)
       const preview = previewText.replace(/[\r\n]/g, ' ').substring(0, 100)
-      createSession({ id: session_id, profile, source: runSource, user_id: socketUser?.id, model: resolvedModel, provider: resolvedProvider, reasoning_effort: reasoningEffort || '', title: preview, workspace, category_id: data.category_id, push_enabled: data.push_enabled })
+      createSession({ id: session_id, profile, source: runSource, user_id: socketUser?.id, model: resolvedModel, provider: selectedProvider, reasoning_effort: reasoningEffort || '', title: preview, workspace, category_id: data.category_id, push_enabled: data.push_enabled })
     }
     messageId = addMessage({
       session_id,
@@ -585,7 +605,7 @@ export async function handleBridgeRun(
   } else if (!getSession(session_id)) {
     const previewText = displayInput === null ? extractTextForPreview(input) : extractTextForPreview(displayInput || input)
     const preview = previewText.replace(/[\r\n]/g, ' ').substring(0, 100)
-    createSession({ id: session_id, profile, source: runSource, user_id: socketUser?.id, model: resolvedModel, provider: resolvedProvider, reasoning_effort: reasoningEffort || '', title: preview, workspace, category_id: data.category_id, push_enabled: data.push_enabled })
+    createSession({ id: session_id, profile, source: runSource, user_id: socketUser?.id, model: resolvedModel, provider: selectedProvider, reasoning_effort: reasoningEffort || '', title: preview, workspace, category_id: data.category_id, push_enabled: data.push_enabled })
   }
 
   socket.join(`session:${session_id}`)
@@ -720,7 +740,7 @@ export async function handleBridgeRun(
           { role: 'user', content: structuredClone(bridgeInput) } as ChatMessage,
         ],
         model: resolvedModel,
-        provider: resolvedProvider,
+        provider: selectedProvider,
         profile,
         instructions: fullInstructions,
         workspace,
