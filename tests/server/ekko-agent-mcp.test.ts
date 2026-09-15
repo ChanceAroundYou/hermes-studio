@@ -38,6 +38,7 @@ describe('Ekko MCP server context', () => {
     const { buildManagedEkkoMcpServers } = await import('../../packages/server/src/modules/ekko/services/mcp')
 
     const servers = buildManagedEkkoMcpServers('work')
+    expect(servers['ekko-studio-plan']).toBeUndefined()
 
     expect(servers['ekko-studio-api']).toEqual({
       command: process.execPath,
@@ -50,6 +51,7 @@ describe('Ekko MCP server context', () => {
         HERMES_WEB_UI_PROFILE: 'work',
         HERMES_MCP_SERVER_NAME: 'ekko-studio-api',
         HERMES_MCP_TOOLSET: 'api',
+        HERMES_MCP_NATIVE_TASK_PLAN: '1',
         HERMES_WEB_UI_MANAGED_MCP: '1',
       },
       enabled: true,
@@ -64,7 +66,7 @@ describe('Ekko MCP server context', () => {
     })
     expect(servers['ekko-studio-use']).toMatchObject({
       args: [join(process.cwd(), 'bin/ekko-studio-mcp.mjs'), 'use'],
-      env: { HERMES_WEB_UI_PROFILE: 'work', HERMES_MCP_TOOLSET: 'use' },
+      env: { HERMES_WEB_UI_PROFILE: 'work', HERMES_MCP_TOOLSET: 'use', HERMES_MCP_NATIVE_TASK_PLAN: '1' },
     })
   })
 
@@ -110,6 +112,19 @@ describe('Ekko MCP server context', () => {
       expect(server.command).toBe(process.execPath)
       expect(server.env?.ELECTRON_RUN_AS_NODE).toBe('1')
     }
+    expect(injectManagedEkkoMcpServers(setup).targets.every(target => target.status === 'unchanged')).toBe(true)
+  })
+
+  it('repairs existing managed definitions to exclude shared planning for Ekko', async () => {
+    const { injectManagedEkkoMcpServers } = await import('../../packages/server/src/modules/ekko/services/mcp')
+    injectManagedEkkoMcpServers(setup)
+    const stale = structuredClone(setup.config.read())
+    for (const profile of Object.values(stale.mcp.profiles)) {
+      for (const server of Object.values(profile.servers)) delete server.env?.HERMES_MCP_NATIVE_TASK_PLAN
+    }
+    setup.config.replace(stale)
+    expect(injectManagedEkkoMcpServers(setup).targets.every(target => target.status === 'updated')).toBe(true)
+    expect(setup.config.getMcpServer('ekko-studio-use', 'work')?.env?.HERMES_MCP_NATIVE_TASK_PLAN).toBe('1')
     expect(injectManagedEkkoMcpServers(setup).targets.every(target => target.status === 'unchanged')).toBe(true)
   })
 

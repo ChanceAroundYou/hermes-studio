@@ -12,7 +12,7 @@ const DEFAULT_PORT = process.env.HERMES_WEB_UI_PORT || process.env.PORT || '8648
 const DEFAULT_BASE_URL = `http://127.0.0.1:${DEFAULT_PORT}`
 const DISPLAY_COMMAND = 'ekko-studio-mcp'
 const SERVER_NAME = process.env.HERMES_MCP_SERVER_NAME || DISPLAY_COMMAND
-const TOOLSETS = new Set(['api', 'browser', 'devices', 'use'])
+const TOOLSETS = new Set(['api', 'browser', 'devices', 'use', 'plan'])
 const ALLOWED_PUBLIC_REQUEST_HEADERS = new Set([
   'accept',
   'accept-language',
@@ -47,7 +47,7 @@ function printHelp() {
 Ekko Studio MCP stdio server.
 
 Usage:
-  ${DISPLAY_COMMAND} [api|browser|devices|use]
+  ${DISPLAY_COMMAND} [api|browser|devices|use|plan]
   ${DISPLAY_COMMAND} --help
   ${DISPLAY_COMMAND} --version
 
@@ -58,7 +58,7 @@ Environment:
   HERMES_WEB_UI_PROFILE   Default Hermes profile when a tool call omits profile.
   HERMES_WEB_UI_TOKEN     Optional explicit API token.
   AUTH_TOKEN              Optional explicit API token fallback.
-  HERMES_MCP_TOOLSET      Tool category to expose: api, browser, devices, or use. Default: api.
+  HERMES_MCP_TOOLSET      Tool category to expose: api, browser, devices, use, or plan. Default: api.
 
 When run without options, this process waits for MCP JSON-RPC messages on stdin.
 `)
@@ -67,6 +67,7 @@ When run without options, this process waits for MCP JSON-RPC messages on stdin.
 const positionalArgs = process.argv.slice(2).filter(arg => !arg.startsWith('-'))
 const requestedToolset = String(positionalArgs[0] || process.env.HERMES_MCP_TOOLSET || 'api').trim().toLowerCase()
 const ACTIVE_TOOLSET = TOOLSETS.has(requestedToolset) ? requestedToolset : 'api'
+const SHARED_TASK_PLAN_ENABLED = process.env.HERMES_MCP_NATIVE_TASK_PLAN !== '1'
 
 if (process.argv.includes('-h') || process.argv.includes('--help')) {
   printHelp()
@@ -1007,6 +1008,26 @@ const tools = [
       }, ['path']),
   },
   {
+    name: 'ekko_studio_update_plan',
+    toolset: 'plan',
+    description: 'Create or update the current turn task plan shown in Studio and App. For multi-step work, send the full ordered plan before starting and whenever progress changes. Keep step ids stable, use at most one in_progress step, and mark completion only after verification. Requires the context_id supplied in the current run instructions; cannot start a run or modify another turn.',
+    inputSchema: inputSchema({
+      context_id: { type: 'string', description: 'Current turn context supplied by Studio. Never reuse a previous turn context.' },
+      explanation: { type: 'string', maxLength: 1000 },
+      plan: {
+        type: 'array', minItems: 1, maxItems: 30,
+        items: {
+          type: 'object', additionalProperties: false, required: ['id', 'step', 'status'],
+          properties: {
+            id: { type: 'string', minLength: 1, maxLength: 100 },
+            step: { type: 'string', minLength: 1, maxLength: 200 },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+          },
+        },
+      },
+    }, ['context_id', 'plan']),
+  },
+  {
     name: 'ekko_studio_use_chat_run',
     toolset: 'use',
     description: 'Start one user-requested Ekko Studio chat or coding-agent run through the HTTP bridge and wait for completion. Do not use this as an internal delegation or subtask mechanism.',
@@ -1769,7 +1790,8 @@ function resolveToolName(name) {
 }
 
 function activeToolsetTools() {
-  return tools.filter(tool => tool.toolset === ACTIVE_TOOLSET)
+  return tools.filter(tool => tool.toolset === ACTIVE_TOOLSET
+    && (SHARED_TASK_PLAN_ENABLED || tool.name !== 'ekko_studio_update_plan'))
 }
 
 function categoryToolCatalog(query = '') {
@@ -1785,6 +1807,9 @@ function categoryToolByName(name) {
 }
 
 function serverInstructions() {
+  if (ACTIVE_TOOLSET === 'plan') return SHARED_TASK_PLAN_ENABLED
+    ? 'Use ekko_studio_update_plan directly to maintain the current Studio task card. Use only the context_id supplied with the latest input; expired contexts cannot update another turn.'
+    : ''
   if (ACTIVE_TOOLSET === 'api') {
     return 'Ekko Studio API operations. Use ekko_studio_api_openapi_get without filters for the compact module index, call it again with tag/path/method filters for endpoint details, then call ekko_studio_api_request with the documented relative path and JSON fields.'
   }
@@ -1917,6 +1942,10 @@ async function callTool(name, args = {}) {
       })
       return jsonText(await requestEnvelope(path, options))
     }
+    case 'ekko_studio_update_plan':
+      return jsonText(await request('/api/studio/task-plans/update', withAuthArgs(args, {
+        method: 'POST', body: pickDefined(args, ['context_id', 'explanation', 'plan']),
+      })))
     case 'ekko_studio_use_chat_run':
       return jsonText(await request('/api/studio/chat-run/runs', withAuthArgs(args, {
         method: 'POST',
