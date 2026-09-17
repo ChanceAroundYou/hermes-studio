@@ -97,6 +97,7 @@ export const SESSIONS_SCHEMA: Record<string, string> = {
   preview: 'TEXT NOT NULL DEFAULT \'\'',
   last_active: 'INTEGER NOT NULL',
   is_archived: 'INTEGER NOT NULL DEFAULT 0',
+  is_pinned: 'INTEGER NOT NULL DEFAULT 0',
   push_enabled: 'INTEGER NOT NULL DEFAULT 0',
   workspace: 'TEXT',
   category_id: 'INTEGER',

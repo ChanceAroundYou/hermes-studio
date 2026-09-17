@@ -22,6 +22,7 @@ const localSearchSessionsMock = vi.fn()
 const localDeleteSessionMock = vi.fn()
 const localRenameSessionMock = vi.fn()
 const localSetSessionArchivedMock = vi.fn()
+const localSetSessionPinnedMock = vi.fn()
 const localSetSessionPushEnabledMock = vi.fn()
 const localCreateSessionMock = vi.fn()
 const localUpdateSessionMock = vi.fn()
@@ -104,6 +105,7 @@ vi.mock('../../packages/server/src/modules/studio/repositories/session-store', (
   renameSession: localRenameSessionMock,
   setSessionArchived: localSetSessionArchivedMock,
   setSessionPushEnabled: localSetSessionPushEnabledMock,
+  setSessionPinned: localSetSessionPinnedMock,
   createSession: localCreateSessionMock,
   addMessages: localAddMessagesMock,
   getSession: getSessionMock,
@@ -268,6 +270,7 @@ describe('session conversations controller', () => {
     localDeleteSessionMock.mockReset()
     localRenameSessionMock.mockReset()
     localSetSessionArchivedMock.mockReset()
+    localSetSessionPinnedMock.mockReset()
     localSetSessionPushEnabledMock.mockReset()
     localCreateSessionMock.mockReset()
     localUpdateSessionMock.mockReset()
@@ -1423,6 +1426,51 @@ describe('session conversations controller', () => {
     expect(ctx.body).toEqual({ ok: true })
   })
 
+  it('updates the database pin flag and validates input and profile access', async () => {
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    getSessionMock.mockReturnValue({ id: 'session-1', profile: 'default' })
+    localSetSessionPinnedMock.mockReturnValue(true)
+    const ctx: any = { params: { id: 'session-1' }, request: { body: { is_pinned: true } }, state: {} }
+    await mod.setPinned(ctx)
+    expect(localSetSessionPinnedMock).toHaveBeenCalledWith('session-1', true)
+    expect(ctx.body).toEqual({ ok: true, is_pinned: true })
+
+    localSetSessionPinnedMock.mockClear()
+    ctx.request.body.is_pinned = 'true'
+    await mod.setPinned(ctx)
+    expect(ctx.status).toBe(400)
+    expect(localSetSessionPinnedMock).not.toHaveBeenCalled()
+
+    ctx.request.body.is_pinned = false
+    ctx.state = { user: { id: 7, role: 'admin' } }
+    listUserProfilesMock.mockReturnValue([{ profile_name: 'other' }])
+    await mod.setPinned(ctx)
+    expect(ctx.status).toBe(403)
+    expect(localSetSessionPinnedMock).not.toHaveBeenCalled()
+
+    getSessionMock.mockReturnValue(null)
+    await mod.setPinned(ctx)
+    expect(ctx.status).toBe(404)
+  })
+
+  it('supports the pinned category without treating it as a numeric category', async () => {
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    localListSessionsMock.mockReturnValue([])
+    const ctx: any = { query: { category: 'pinned' }, state: {} }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenCalledWith(undefined, undefined, 2000, expect.objectContaining({ pinned: true }))
+    expect(ctx.body).toEqual({ sessions: [] })
+  })
+
+  it('excludes database pins from both category pages and their totals', async () => {
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    localListSessionsMock.mockReturnValue([])
+    const ctx: any = { query: { category: '1', pinned: 'false', offset: '0', limit: '10' }, state: {} }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenCalledWith(undefined, undefined, 11, expect.objectContaining({ categoryId: 1, pinned: false, offset: 0 }))
+    expect(localCountSessionsMock).toHaveBeenCalledWith(undefined, undefined, expect.objectContaining({ categoryId: 1, pinned: false }))
+  })
+
   it('updates whether an accessible session should be pushed', async () => {
     getSessionMock.mockReturnValue({ id: 'session-1', profile: 'default', push_enabled: 0 })
     localSetSessionPushEnabledMock.mockReturnValue(true)
@@ -1771,6 +1819,19 @@ describe('session conversations controller', () => {
 
     expect(listSessionSummariesMock).not.toHaveBeenCalled()
     expect(ctx.body.sessions).toEqual([expect.objectContaining({ id: 'local-history' })])
+  })
+
+  it('includes database-pinned history even when it falls outside the source page', async () => {
+    agentStatusMocks.hermesAvailable = false
+    localListSessionsMock.mockReturnValue([
+      { id: 'old-pin', profile: 'default', source: 'api_server', last_active: 1, is_pinned: 1 },
+      { id: 'new', profile: 'default', source: 'api_server', last_active: 100, is_pinned: 0 },
+    ])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { limit: '1' }, state: {} }
+    await mod.listHermesSessionGroups(ctx)
+    expect(ctx.body.groups[0].sessions.map((s: any) => s.id)).toEqual(['new'])
+    expect(ctx.body.included).toEqual([expect.objectContaining({ id: 'old-pin', is_pinned: 1 })])
   })
 
   it('groups only Studio-local history when Hermes is unavailable', async () => {
