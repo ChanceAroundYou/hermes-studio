@@ -1,4 +1,3 @@
-import { authorizeSessionShare } from '../services/session-shares/access'
 import { businessEvents } from '../services/webhooks/business-events'
 import { ensureBusinessConsumers } from '../services/webhooks/business-consumers'
 import { authorizeSessionShare, authorizeShareFile } from '../services/session-shares/access'
