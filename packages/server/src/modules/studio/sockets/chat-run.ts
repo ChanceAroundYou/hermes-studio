@@ -402,12 +402,28 @@ function boundedMobileCalendarTimeout(value: unknown): number {
   if (value == null || !Number.isFinite(numeric) || numeric <= 0) return MOBILE_CALENDAR_DEFAULT_TIMEOUT_MS
   return Math.max(MOBILE_CALENDAR_MIN_TIMEOUT_MS, Math.min(MOBILE_CALENDAR_MAX_TIMEOUT_MS, numeric))
 }
+/**
+ * Minimal run-state view consumed by `TaskPlanRuns.update()`: a plan is only
+ * writable while `isWorking` is true and a run marker exists.
+ */
+interface TaskPlanRunState {
+  isWorking: boolean
+  isAborting: boolean
+  activeRunMarker: string | undefined
+}
+
 export class ChatRunSocket {
   private nsp: ReturnType<Server['of']>
   private bridge = createPrimaryAgentBridge()
   private backgroundBridge = createPrimaryAgentBridge({ timeoutMs: 1000, connectRetryMs: 0 })
   /** sessionId → session state (messages, working status, events, run tracking) */
   private sessionMap = new Map<string, SessionState>()
+  /**
+   * Per-run task-plan state for runs that never populate `sessionMap`
+   * (CLI-bridge runs). Keyed by task-plan contextId; `isWorking` is cleared
+   * when the run reaches a terminal event.
+   */
+  private readonly taskPlanRunStates = new Map<string, TaskPlanRunState>()
   private readonly taskPlanRuns = new TaskPlanRuns(saveTaskPlan, (sessionId, snapshot) => {
     this.emitExternalEvent(sessionId, 'plan.updated', { event: 'plan.updated', ...snapshot })
   })
@@ -450,12 +466,45 @@ export class ChatRunSocket {
   private beginTaskPlanRun(sessionId: string | undefined, profile: string) {
     if (!sessionId) return undefined
     this.clarificationRuns.finishSession(sessionId)
-    return this.taskPlanRuns.begin(sessionId, profile, () => this.sessionMap.get(sessionId))
+    // CLI-bridge runs (`chat-run` over the agent bridge) do not populate
+    // `sessionMap` — that map is only filled by browser-socket resume/load
+    // paths. Binding the plan purely to `sessionMap.get(sessionId)` therefore
+    // left `isWorking` undefined for every bridge run, so `update()` rejected
+    // every task-plan write with "no active turn" (409) even while the run was
+    // genuinely in flight.
+    //
+    // Track the run locally instead: working for the duration of this run,
+    // cleared on the terminal event. Socket state still wins when it exists,
+    // so browser-driven runs keep their previous semantics.
+    const runState: TaskPlanRunState = {
+      isWorking: true,
+      isAborting: false,
+      // `TaskPlanRuns.update()` requires a truthy run marker. Bridge runs start
+      // before the core reports its own run id, so seed one here; if the socket
+      // state later carries a real marker it takes precedence below.
+      activeRunMarker: `bridge:${sessionId}:${randomUUID()}`,
+    }
+    const contextId = this.taskPlanRuns.begin(sessionId, profile, () => {
+      const tracked = this.sessionMap.get(sessionId)
+      if (tracked) return { ...tracked, isWorking: tracked.isWorking && runState.isWorking }
+      return runState
+    })
+    this.taskPlanRunStates.set(contextId, runState)
+    return contextId
+  }
+
+  /** Mark a run's task plan unwritable once its terminal event arrives. */
+  private releaseTaskPlanRunState(contextId?: string) {
+    const state = contextId ? this.taskPlanRunStates.get(contextId) : undefined
+    if (state) state.isWorking = false
+    if (contextId) this.taskPlanRunStates.delete(contextId)
   }
 
   private finishTaskPlanRun(sessionId: string, event: string, payload?: any, contextId?: string) {
     if (!['run.completed', 'run.failed', 'abort.completed'].includes(event)) return
     this.clarificationRuns.finishSession(sessionId, contextId)
+    // Stop accepting plan writes for this run before finalizing the snapshot.
+    this.releaseTaskPlanRunState(contextId)
     const interrupted = event === 'abort.completed' || payload?.interrupted === true || payload?.result?.interrupted === true || this.sessionMap.get(sessionId)?.isAborting
     const executionState = interrupted ? 'interrupted' : event === 'run.failed' ? 'failed' : 'ended'
     try {
