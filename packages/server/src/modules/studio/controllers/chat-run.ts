@@ -1,7 +1,8 @@
 import type { Context } from 'koa'
 import { randomUUID } from 'crypto'
 import { io, type Socket } from 'socket.io-client'
-import { config, socketIoClientPath } from '../public/config'
+import { config } from '../public/config'
+import { socketIoClientPath } from '../public/socket-io-path'
 import { getChatRunServer } from '../public/chat-run'
 import { resolveModelExecutionIdentity } from '../contracts/runs/model-execution-identity'
 
@@ -35,6 +36,7 @@ const CHAT_RUN_EVENTS = [
   'tool.completed',
   'tool.failed',
   'workspace.diff.completed',
+  'plan.updated',
   'run.completed',
   'run.failed',
   'compression.started',
@@ -54,6 +56,12 @@ const CHAT_RUN_EVENTS = [
   'clarify.resolved',
   'location.requested',
   'location.resolved',
+  'calendar.requested',
+  'calendar.resolved',
+  'reminder.requested',
+  'reminder.resolved',
+  'health.requested',
+  'health.resolved',
   'peer.user.message',
 ]
 
@@ -92,6 +100,76 @@ export async function requestMobileLocation(ctx: Context) {
   }
 }
 
+export async function requestMobileCalendar(ctx: Context) {
+  const body = (ctx.request.body || {}) as Record<string, unknown>
+  const sessionId = String(body.session_id || '').trim()
+  if (!sessionId) {
+    ctx.status = 400
+    ctx.body = { ok: false, error: 'session_id is required' }
+    return
+  }
+  const server = getChatRunServer()
+  if (!server?.requestMobileCalendar) {
+    ctx.status = 503
+    ctx.body = { ok: false, error: 'Chat run service is unavailable' }
+    return
+  }
+  const profile = String(ctx.state.profile?.name || 'default').trim() || 'default'
+  try {
+    const result = await server.requestMobileCalendar({
+      sessionId,
+      profile,
+      capability: body.capability === 'reminder' ? 'reminder' : 'calendar',
+      action: body.action,
+      purpose: body.purpose,
+      startMs: body.start_ms,
+      endMs: body.end_ms,
+      includeCompleted: body.include_completed,
+      limit: body.limit,
+      item: body.item,
+      timeoutMs: body.timeout_ms,
+    })
+    ctx.body = { ok: true, session_id: sessionId, ...result }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    ctx.status = error === 'Session not found' ? 404 : 400
+    ctx.body = { ok: false, error }
+  }
+}
+
+export async function requestMobileHealth(ctx: Context) {
+  const body = (ctx.request.body || {}) as Record<string, unknown>
+  const sessionId = String(body.session_id || '').trim()
+  if (!sessionId) {
+    ctx.status = 400
+    ctx.body = { ok: false, error: 'session_id is required' }
+    return
+  }
+  const server = getChatRunServer()
+  if (!server?.requestMobileHealth) {
+    ctx.status = 503
+    ctx.body = { ok: false, error: 'Chat run service is unavailable' }
+    return
+  }
+  const profile = String(ctx.state.profile?.name || 'default').trim() || 'default'
+  try {
+    const result = await server.requestMobileHealth({
+      sessionId,
+      profile,
+      purpose: body.purpose,
+      metrics: body.metrics,
+      startMs: body.start_ms,
+      endMs: body.end_ms,
+      limit: body.limit,
+      timeoutMs: body.timeout_ms,
+    })
+    ctx.body = { ok: true, session_id: sessionId, ...result }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    ctx.status = error === 'Session not found' ? 404 : 400
+    ctx.body = { ok: false, error }
+  }
+}
 function bearerToken(ctx: Context): string {
   const match = ctx.get('authorization').match(/^Bearer\s+(.+)$/i)
   return match?.[1]?.trim() || ''

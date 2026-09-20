@@ -15,6 +15,7 @@ import { useI18n } from "vue-i18n";
 import { NButton, NInput } from "naive-ui";
 import VirtualMessageList from "./VirtualMessageList.vue";
 import MessageItem from "./MessageItem.vue";
+import { positionTaskPlansAtTurnEnd } from "@/utils/task-plan";
 import LiveReasoningStatus from "./LiveReasoningStatus.vue";
 import ToolRunCard from "./ToolRunCard.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
@@ -257,7 +258,7 @@ const displayMessages = computed(() => {
       }
       return message;
     });
-  let out = groupCompletedToolsByRun(renderedMessages);
+  let out = groupCompletedToolsByRun(positionTaskPlansAtTurnEnd(renderedMessages));
   if (compressionMessage.value) {
     const s = chatStore.compressionState
     // Sticky fix: anchor the synthetic compress card right after the triggering
@@ -378,7 +379,7 @@ const canInsertQueuedMessages = computed(() => {
   if (agent === "ekko-agent") {
     return session.source === "coding_agent" || session.source === "global_agent";
   }
-  if (agent === "codex" || agent === "pi" || agent === "grok" || agent === "opencode" || agent === "claude" || agent === "claude-code") return true;
+  if (agent === "codex" || agent === "pi" || agent === "grok" || (agent === "opencode" || agent === "dsh") || agent === "claude" || agent === "claude-code") return true;
   return !session.source || session.source === "cli" || session.source === "global_agent";
 });
 const visibleApproval = computed(() => chatStore.activePendingApproval);
@@ -782,6 +783,7 @@ defineExpose({
         <Transition name="fade">
           <div v-if="isRunIndicatorActive" class="streaming-indicator">
             <LiveReasoningStatus
+              :agent="assistantAgent"
               :reasoning="liveReasoningDetail?.reasoning"
               :reasoning-id="liveReasoningDetail?.messageId"
               :elapsed="formattedThinkingElapsed"

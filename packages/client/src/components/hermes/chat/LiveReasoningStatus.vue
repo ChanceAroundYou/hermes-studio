@@ -3,13 +3,18 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import thinkingImage from '@/assets/thinking.gif'
+import type { ChatAgentAvatar } from '@/utils/chat-agent-avatar'
 
 const settingsStore = useSettingsStore()
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   reasoning?: string | null
   reasoningId?: string | number | null
   elapsed: string
-}>()
+  agent?: ChatAgentAvatar
+}>(), {
+  agent: () => ({ label: 'Hermes', src: '/coding-agents/hermes.png' }),
+})
+const isEkko = computed(() => props.agent.label === 'Ekko')
 
 const { t } = useI18n()
 const expandedOverride = ref<boolean | null>(null)
@@ -78,10 +83,11 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
   <div class="live-reasoning-status">
     <div class="thinking-status">
       <img
-        :src="thinkingImage"
+        :src="isEkko ? thinkingImage : agent.src"
         alt=""
         aria-hidden="true"
         class="thinking-avatar"
+        :class="isEkko ? 'thinking-avatar--animated' : 'thinking-avatar--logo'"
       >
       <div class="thinking-status-copy">
         <span class="thinking-status-label">{{ t('chat.thinkingInProgress') }}</span>
@@ -161,9 +167,18 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
   object-fit: cover;
   flex-shrink: 0;
 
-  .dark & {
-    filter: brightness(1.18) contrast(1.08) saturate(1.08);
+  &--animated {
+    .dark & {
+      filter: brightness(1.18) contrast(1.08) saturate(1.08);
+    }
   }
+}
+
+.thinking-avatar--logo {
+  box-sizing: border-box;
+  padding: 5px;
+  object-fit: contain;
+  background: #fff;
 }
 
 .thinking-status-copy {

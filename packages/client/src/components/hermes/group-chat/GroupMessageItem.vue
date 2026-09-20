@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TaskPlanCard from '../chat/TaskPlanCard.vue'
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
@@ -159,6 +160,12 @@ const thinkingExpanded = computed(() => {
     return !!settingsStore.display.show_reasoning
 })
 const assistantBody = computed(() => parsedThinking.value.body || props.message.content || '')
+function resolveGroupImageUrl(path: string): string {
+    return getGroupChatAttachmentUrl({
+        roomId: props.message.roomId || groupChatStore.currentRoomId || '',
+        inviteCode: groupChatStore.inviteGuest ? groupChatStore.activeInviteCode || undefined : undefined,
+    }, path)
+}
 const contentBlocks = computed(() => {
     const content = props.message.content || ''
     const trimmed = content.trim()
@@ -547,6 +554,7 @@ function playSpeech(content: string, autoplay = false, profileOverride = '') {
             model: voiceSettings.doubaoModel.value,
             voice: voiceSettings.doubaoVoice.value,
             stylePrompt: voiceSettings.doubaoStylePrompt.value || undefined,
+            speed: voiceSettings.doubaoSpeed.value || undefined,
         }
         if (autoplay) void speech.openaiPlay(props.message.id, content, options).catch(handleAutoplayTtsError)
         else speech.openaiToggle(props.message.id, content, options)
@@ -678,7 +686,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <div v-if="isToolMessage" class="group-message tool-message" :class="{ embedded }">
+    <TaskPlanCard v-if="message.taskPlan" :plan="message.taskPlan" />
+    <div v-else-if="isToolMessage" class="group-message tool-message" :class="{ embedded }">
         <div class="msg-body">
             <div v-if="!embedded" class="msg-header">
                 <GroupAgentMessageAvatar
@@ -819,10 +828,10 @@ onBeforeUnmount(() => {
                     </div>
                 </div>
                 <template v-if="parsedMessageReference">
-                    <MarkdownRenderer :content="referencedContentMarkdown" :mention-names="mentionNames" />
-                    <MarkdownRenderer v-if="parsedMessageReference.reply" :content="parsedMessageReference.reply" :mention-names="mentionNames" />
+                    <MarkdownRenderer :content="referencedContentMarkdown" :mention-names="mentionNames" :resolve-image-url="resolveGroupImageUrl" />
+                    <MarkdownRenderer v-if="parsedMessageReference.reply" :content="parsedMessageReference.reply" :mention-names="mentionNames" :resolve-image-url="resolveGroupImageUrl" />
                 </template>
-                <MarkdownRenderer v-else-if="renderedDisplayBody" :content="renderedDisplayBody" :mention-names="mentionNames" />
+                <MarkdownRenderer v-else-if="renderedDisplayBody" :content="renderedDisplayBody" :mention-names="mentionNames" :resolve-image-url="resolveGroupImageUrl" :defer-images="!!message.isStreaming" />
                 <ToolChangeCard
                     v-for="change in assistantWorkspaceChanges"
                     :key="change.change_id"
@@ -1495,6 +1504,20 @@ onBeforeUnmount(() => {
     40% {
         opacity: 1;
         transform: scale(1);
+    }
+}
+@media (max-width: $breakpoint-mobile) {
+    .group-message .msg-body {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .group-message.embedded {
+        .msg-content,
+        &.agent .msg-content.agent-content,
+        &.self .msg-content {
+            padding: 10px 14px;
+        }
     }
 }
 </style>

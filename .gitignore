@@ -53,3 +53,5 @@ CLAUDE.md
 packages/client/src/**/*.js
 .hermes/
 .claude/
+# Local npm release tarballs
+/release/npm/

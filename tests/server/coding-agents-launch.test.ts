@@ -3,8 +3,12 @@ import { createCipheriv, randomBytes } from 'crypto'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { parse as parseToml } from 'smol-toml'
+import { parse as parseYaml } from 'yaml'
+import { readDshMcpServers } from '../../packages/server/src/modules/coding-agents/services/dsh/config'
 import { claudeProxyMessages, claudeProxyModels, registerClaudeCodeProxyTarget } from '../../packages/server/src/modules/coding-agents/services/claude-code/proxy'
 import {
+  revokeCodexProxyTargets,
   codexProxyModels,
   codexProxyResponses,
   isAuthorizedCodexProxyRequest,
@@ -29,6 +33,15 @@ import { codingAgentRunManager } from '../../packages/server/src/modules/coding-
 import { configureProfileConfig } from '../../packages/server/src/modules/studio/public/profile-config'
 import * as providerRuntime from '../../packages/server/src/modules/studio/public/provider-runtime'
 import { upsertCodingAgentMcpServer } from '../../packages/server/src/modules/coding-agents/services/mcp-manager'
+
+// Registry tests verify isolated homes/model injection without requiring a
+// machine-wide DSH install. Real Web composition is covered by dsh-web-real.
+vi.mock('../../packages/server/src/modules/coding-agents/services/dsh/host', async original => {
+  const actual = await original<typeof import('../../packages/server/src/modules/coding-agents/services/dsh/host')>()
+  return { ...actual, createDshHost: (host: Parameters<typeof actual.createDshHost>[0]) => ({
+    ...actual.createDshHost(host), runtimeInput: async () => ({ sourceHome: host.getSourceHome(), launchPath: '/fixture/bin' }),
+  }) }
+})
 
 const homes: string[] = []
 
@@ -72,6 +85,32 @@ function makeHome() {
 
 beforeEach(() => {
   mockProcessUid(1000)
+})
+
+it.each(['scoped', 'global'] as const)('prepares DSH %s ACP homes independently for simultaneous conversations', async mode => {
+  const home = makeHome()
+  const input = { mode, profile: 'default', provider: 'custom:test', model: 'test-model',
+    baseUrl: 'https://api.example.com/v1', apiKey: 'upstream-test-secret', apiMode: 'chat_completions',
+    workspace: join(home, 'workspace'), groupSystemPrompt: 'DSH group instructions' }
+  const launch = await prepareCodingAgentLaunch('dsh', { ...input, sessionId: 'one', agentSessionId: 'run-one' })
+  const other = await prepareCodingAgentLaunch('dsh', { ...input, sessionId: 'two', agentSessionId: 'run-two' })
+  expect(launch.rootDir).not.toBe(other.rootDir)
+  expect(launch.env.DSH_HOME).toBe(launch.rootDir)
+  expect(launch.env.DSH_PERMISSION_MODE).toBe('danger-full-access')
+  expect(launch.env.PATH).toContain('/fixture/bin')
+  expect(launch.args).toEqual(['--profile', 'acp', '--patch', join(launch.rootDir, 'studio.patch.yml')])
+  expect(readFileSync(launch.promptFile!, 'utf8')).toContain('DSH group instructions')
+  const servers = readDshMcpServers(readFileSync(join(launch.rootDir, 'cordis.patch.yml'), 'utf8'))
+  expect(servers.size).toBeGreaterThanOrEqual(4)
+  for (const server of servers.values()) expect(server.env.ELECTRON_RUN_AS_NODE).toBe('1')
+  const overlay = readFileSync(join(launch.rootDir, 'studio.patch.yml'), 'utf8')
+  expect(overlay).not.toContain('upstream-test-secret')
+  const acpConfig = parseYaml(overlay).find((row: any) => row.id === 'acp')
+  if (mode === 'scoped') {
+    expect(acpConfig.config).toEqual({ provider: 'ekko-studio', model: 'test-model' })
+    expect(launch.env.HERMES_DSH_API_KEY).toBeTruthy()
+    expect(launch.env.HERMES_DSH_API_KEY).not.toBe('upstream-test-secret')
+  } else expect(acpConfig).toBeUndefined()
 })
 
 afterEach(() => {
@@ -207,7 +246,7 @@ describe('coding agent launch preparation', () => {
 
   it('applies edited Studio-managed MCP configuration to the scoped Codex runtime', async () => {
     const home = makeHome()
-    await upsertCodingAgentMcpServer('codex', 'hermes-studio-api', {
+    await upsertCodingAgentMcpServer('codex', 'ekko-studio-api', {
       url: 'https://mcp.example.com/api',
       enabled: true,
     }, { profile: 'default', provider: 'custom:test' })
@@ -223,7 +262,7 @@ describe('coding agent launch preparation', () => {
       agentSessionId: 'managed-mcp-agent-session',
     })
     const config = readFileSync(join(launch.rootDir, 'config.toml'), 'utf-8')
-    const managedBlock = config.match(/\[mcp_servers\.hermes-studio-api\][\s\S]*?(?=\n\[|$)/)?.[0] || ''
+    const managedBlock = config.match(/\[mcp_servers\.ekko-studio-api\][\s\S]*?(?=\n\[|$)/)?.[0] || ''
     expect(managedBlock).toContain('url = "https://mcp.example.com/api"')
     expect(managedBlock).not.toContain('command =')
   })
@@ -259,6 +298,204 @@ describe('coding agent launch preparation', () => {
     expect(providerIndex).toBeLessThan(providerSectionIndex)
     expect(providerSectionIndex).toBeLessThan(hooksSectionIndex)
     expect(config.slice(0, config.indexOf('\n['))).toContain('model = "codex-model"')
+  })
+
+  it('preserves complete multiline top-level arrays when strings and comments contain brackets', async () => {
+    const home = makeHome()
+    const globalConfigPath = join(home, 'global-home', '.codex', 'config.toml')
+    mkdirSync(dirname(globalConfigPath), { recursive: true })
+    writeFileSync(globalConfigPath, [
+      'notify = [',
+      '  "first item contains ]",',
+      '  "second item", # comment contains [',
+      ']',
+      '',
+      '[features]',
+      'goals = true',
+      '',
+    ].join('\n'))
+
+    const launch = await prepareCodingAgentLaunch('codex', {
+      profile: 'default',
+      provider: 'custom:test',
+      model: 'codex-model',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      apiMode: 'codex_responses',
+      sessionId: 'codex-multiline-array-session',
+      agentSessionId: 'codex-multiline-array-agent-session',
+    })
+    const config = readFileSync(join(launch.rootDir, 'config.toml'), 'utf-8')
+    const parsed = parseToml(config)
+
+    expect(parsed.notify).toEqual(['first item contains ]', 'second item'])
+    expect(config).toContain('  "second item", # comment contains [\n]')
+  })
+
+  it('preserves arrays containing multiline strings that end with a quote', async () => {
+    const home = makeHome()
+    const globalConfigPath = join(home, 'global-home', '.codex', 'config.toml')
+    mkdirSync(dirname(globalConfigPath), { recursive: true })
+    writeFileSync(globalConfigPath, [
+      'notify = [',
+      '  """first line contains ]',
+      'second line contains [ and ends with a quote"""",',
+      ']',
+      '',
+      '[features]',
+      'goals = true',
+      '',
+    ].join('\n'))
+
+    const launch = await prepareCodingAgentLaunch('codex', {
+      profile: 'default',
+      provider: 'custom:test',
+      model: 'codex-model',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      apiMode: 'codex_responses',
+      sessionId: 'codex-multiline-string-array-session',
+      agentSessionId: 'codex-multiline-string-array-agent-session',
+    })
+    const config = readFileSync(join(launch.rootDir, 'config.toml'), 'utf-8')
+    const parsed = parseToml(config)
+
+    expect(parsed.notify).toEqual(['first line contains ]\nsecond line contains [ and ends with a quote"'])
+    expect(config).toContain('second line contains [ and ends with a quote"""",\n]')
+  })
+
+  it('preserves top-level multiline string values', async () => {
+    const home = makeHome()
+    const globalConfigPath = join(home, 'global-home', '.codex', 'config.toml')
+    mkdirSync(dirname(globalConfigPath), { recursive: true })
+    writeFileSync(globalConfigPath, [
+      'custom_instructions = """first line',
+      'second line contains [ and ]',
+      'third line"""',
+      '',
+      '[features]',
+      'goals = true',
+      '',
+    ].join('\n'))
+
+    const launch = await prepareCodingAgentLaunch('codex', {
+      profile: 'default',
+      provider: 'custom:test',
+      model: 'codex-model',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      apiMode: 'codex_responses',
+      sessionId: 'codex-multiline-string-session',
+      agentSessionId: 'codex-multiline-string-agent-session',
+    })
+    const config = readFileSync(join(launch.rootDir, 'config.toml'), 'utf-8')
+    const parsed = parseToml(config)
+
+    expect(parsed.custom_instructions).toBe('first line\nsecond line contains [ and ]\nthird line')
+  })
+
+  it('does not treat table headers inside multiline strings as real sections', async () => {
+    const home = makeHome()
+    const globalConfigPath = join(home, 'global-home', '.codex', 'config.toml')
+    mkdirSync(dirname(globalConfigPath), { recursive: true })
+    writeFileSync(globalConfigPath, [
+      '[custom]',
+      'template = """first line',
+      '[features]',
+      'this remains string content',
+      '"""',
+      '',
+      '[features]',
+      'goals = true',
+      '',
+    ].join('\n'))
+
+    const launch = await prepareCodingAgentLaunch('codex', {
+      profile: 'default',
+      provider: 'custom:test',
+      model: 'codex-model',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      apiMode: 'codex_responses',
+      sessionId: 'codex-multiline-table-string-session',
+      agentSessionId: 'codex-multiline-table-string-agent-session',
+    })
+    const parsed = parseToml(readFileSync(join(launch.rootDir, 'config.toml'), 'utf-8'))
+
+    expect(parsed.custom).toEqual({
+      template: 'first line\n[features]\nthis remains string content\n',
+    })
+  })
+
+  it('keeps Codex array-of-table hooks out of the features table', async () => {
+    const home = makeHome()
+    const globalConfigPath = join(home, 'global-home', '.codex', 'config.toml')
+    mkdirSync(dirname(globalConfigPath), { recursive: true })
+    writeFileSync(globalConfigPath, [
+      '[features]',
+      'goals = true',
+      'hooks = true',
+      'js_repl = false',
+      '',
+      '[[hooks.SessionStart]]',
+      'matcher = "startup|resume|clear|compact"',
+      '',
+      '[[hooks.SessionStart.hooks]]',
+      'command = \'node "C:/Users/Lenovo/.agent-extensions/token-saver/agent-token-saver-hook.mjs"\'',
+      'timeout = 5',
+      'type = "command"',
+      '',
+    ].join('\n'))
+
+    const launch = await prepareCodingAgentLaunch('codex', {
+      profile: 'default',
+      provider: 'custom:test',
+      model: 'codex-model',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      apiMode: 'codex_responses',
+      sessionId: 'codex-array-table-session',
+      agentSessionId: 'codex-array-table-agent-session',
+    })
+    const config = readFileSync(join(launch.rootDir, 'config.toml'), 'utf-8')
+    const featureIndex = config.indexOf('[features]')
+    const featureBlock = config.slice(featureIndex)
+
+    expect(config).toContain('[[hooks.SessionStart]]')
+    expect(config).toContain('[[hooks.SessionStart.hooks]]')
+    expect(featureBlock).toContain('goals = true')
+    expect(featureBlock).not.toContain('matcher = "startup|resume|clear|compact"')
+    expect(featureBlock).not.toContain('type = "command"')
+  })
+
+  it('preserves empty Codex array-of-table instances', async () => {
+    const home = makeHome()
+    const globalConfigPath = join(home, 'global-home', '.codex', 'config.toml')
+    mkdirSync(dirname(globalConfigPath), { recursive: true })
+    writeFileSync(globalConfigPath, [
+      '[[hooks.SessionStart]]',
+      '',
+      '[[hooks.SessionStart]]',
+      'matcher = "resume"',
+      '',
+    ].join('\n'))
+
+    const launch = await prepareCodingAgentLaunch('codex', {
+      profile: 'default',
+      provider: 'custom:test',
+      model: 'codex-model',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      apiMode: 'codex_responses',
+      sessionId: 'codex-empty-array-table-session',
+      agentSessionId: 'codex-empty-array-table-agent-session',
+    })
+    const config = readFileSync(join(launch.rootDir, 'config.toml'), 'utf-8')
+
+    expect(config.match(/\[\[hooks\.SessionStart\]\]/g)).toHaveLength(2)
+    expect(parseToml(config)).toMatchObject({
+      hooks: { SessionStart: [{}, { matcher: 'resume' }] },
+    })
   })
 
   it('invalidates all scoped runtimes when a shared Coding Agent config changes', async () => {
@@ -312,7 +549,7 @@ describe('coding agent launch preparation', () => {
       },
       mcpServers: {
         user_docs: { url: 'https://docs.example.com/mcp', directTools: true },
-        'hermes-studio-api': {
+        'ekko-studio-api': {
           command: 'node',
           env: { HERMES_WEB_UI_MANAGED_MCP: '1' },
           directTools: true,
@@ -333,7 +570,7 @@ describe('coding agent launch preparation', () => {
     expect(migrated.settings.agentPluginPaths).toEqual(['./plugins'])
     expect(migrated.settings).not.toHaveProperty('freezeDirectTools')
     expect(migrated.mcpServers.user_docs.directTools).toBe(true)
-    expect(migrated.mcpServers['hermes-studio-api']).toMatchObject({
+    expect(migrated.mcpServers['ekko-studio-api']).toMatchObject({
       directTools: false,
       lifecycle: 'lazy',
     })
@@ -394,10 +631,10 @@ describe('coding agent launch preparation', () => {
     expect(runtimeMcp.settings.directTools).toBe(false)
     expect(runtimeMcp.settings).not.toHaveProperty('freezeDirectTools')
     expect(runtimeMcp.mcpServers.user_docs).toEqual({ url: 'https://docs.example.com/mcp' })
-    expect(runtimeMcp.mcpServers['hermes-studio-api']).toMatchObject({ directTools: false, lifecycle: 'lazy' })
-    expect(runtimeMcp.mcpServers['hermes-studio-browser']).toMatchObject({ directTools: false, lifecycle: 'lazy' })
-    expect(runtimeMcp.mcpServers['hermes-studio-devices']).toMatchObject({ directTools: false, lifecycle: 'lazy' })
-    expect(runtimeMcp.mcpServers['hermes-studio-use']).toMatchObject({ directTools: false, lifecycle: 'lazy' })
+    expect(runtimeMcp.mcpServers['ekko-studio-api']).toMatchObject({ directTools: false, lifecycle: 'lazy' })
+    expect(runtimeMcp.mcpServers['ekko-studio-browser']).toMatchObject({ directTools: false, lifecycle: 'lazy' })
+    expect(runtimeMcp.mcpServers['ekko-studio-devices']).toMatchObject({ directTools: false, lifecycle: 'lazy' })
+    expect(runtimeMcp.mcpServers['ekko-studio-use']).toMatchObject({ directTools: false, lifecycle: 'lazy' })
     const runtimeModels = JSON.parse(readFileSync(join(result.rootDir, 'models.json'), 'utf-8'))
     expect(runtimeModels.providers['hermes-studio'].apiKey).toMatch(/^hwui_/)
     expect(runtimeModels.providers['hermes-studio'].apiKey).not.toBe('sk-runtime-secret')
@@ -447,6 +684,106 @@ describe('coding agent launch preparation', () => {
       reasoning: true,
       thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
     })
+  })
+
+  it.each([
+    'pi-mcp-adapter@2.32.1',
+    'npm:pi-mcp-adapter',
+    'npm:pi-mcp-adapter@2.32.1',
+    { source: 'npm:pi-mcp-adapter@2.32.1' },
+  ])('reuses a user Pi MCP adapter package %j without the bundle', async (adapterPackage) => {
+    const home = makeHome()
+    const liveSettingsPath = join(home, 'global-home', '.pi', 'agent', 'settings.json')
+    mkdirSync(dirname(liveSettingsPath), { recursive: true })
+    writeFileSync(liveSettingsPath, `${JSON.stringify({
+      packages: [adapterPackage],
+    }, null, 2)}\n`)
+
+    const result = await prepareCodingAgentLaunch('pi', {
+      profile: 'default',
+      provider: 'custom:test',
+      model: 'test-model',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-runtime-secret',
+      apiMode: 'codex_responses',
+      sessionId: 'session-user-adapter',
+      agentSessionId: 'agent-session-user-adapter',
+    })
+
+    const runtimeSettings = JSON.parse(readFileSync(join(result.rootDir, 'settings.json'), 'utf-8'))
+    const bundledEntry = join(home, 'coding-agent', 'pi-mcp-adapter', 'node_modules', 'pi-mcp-adapter', 'index.ts')
+    expect(runtimeSettings.extensions).not.toContain(bundledEntry)
+    expect(runtimeSettings.extensions).toContain(join(result.rootDir, 'hermes-studio-runtime.ts'))
+    // The user's own package selection is preserved so Pi loads their adapter.
+    expect(runtimeSettings.packages).toEqual([
+      typeof adapterPackage === 'string' && !adapterPackage.startsWith('npm:') ? `npm:${adapterPackage}` : adapterPackage,
+    ])
+  })
+
+  it('preserves a relative user adapter extension alongside an inherited bundled entry', async () => {
+    const home = makeHome()
+    const liveDir = join(home, 'global-home', '.pi', 'agent')
+    const userAdapter = join(liveDir, 'node_modules', 'pi-mcp-adapter', 'index.ts')
+    mkdirSync(dirname(userAdapter), { recursive: true })
+    writeFileSync(userAdapter, 'export default function () {}')
+    const liveSettings = JSON.stringify({ extensions: ['./node_modules/pi-mcp-adapter/index.ts'] })
+    writeFileSync(join(liveDir, 'settings.json'), liveSettings)
+    const bundle = join(home, 'coding-agent', 'pi-mcp-adapter', 'node_modules', 'pi-mcp-adapter', 'index.ts')
+    const scopedDir = join(home, 'coding-agent', 'model', 'default', 'custom_test', 'pi')
+    mkdirSync(scopedDir, { recursive: true })
+    writeFileSync(join(scopedDir, 'settings.json'), JSON.stringify({ extensions: [bundle, './custom.ts'] }))
+    const result = await prepareCodingAgentLaunch('pi', {
+      profile: 'default', provider: 'custom:test', model: 'test-model',
+      baseUrl: 'https://api.example.com/v1', apiKey: 'test-key', apiMode: 'codex_responses',
+    })
+    const settings = JSON.parse(readFileSync(join(result.rootDir, 'settings.json'), 'utf-8'))
+    expect(settings.extensions).toContain(userAdapter)
+    expect(settings.extensions).toContain(join(scopedDir, 'custom.ts'))
+    expect(settings.extensions).not.toContain(bundle)
+    expect(settings.extensions).toContain(join(result.rootDir, 'hermes-studio-runtime.ts'))
+    expect(readFileSync(join(liveDir, 'settings.json'), 'utf-8')).toBe(liveSettings)
+  })
+
+  it('falls back to the bundle when scoped settings disable the live adapter package', async () => {
+    const home = makeHome()
+    const liveDir = join(home, 'global-home', '.pi', 'agent')
+    mkdirSync(liveDir, { recursive: true })
+    writeFileSync(join(liveDir, 'settings.json'), JSON.stringify({ packages: ['npm:pi-mcp-adapter'] }))
+    const bundle = join(home, 'coding-agent', 'pi-mcp-adapter', 'node_modules', 'pi-mcp-adapter', 'index.ts')
+    mkdirSync(dirname(bundle), { recursive: true })
+    writeFileSync(bundle, 'export default function () {}')
+    const scopedDir = join(home, 'coding-agent', 'model', 'default', 'custom_test', 'pi')
+    mkdirSync(scopedDir, { recursive: true })
+    const packages = [{ source: 'npm:pi-mcp-adapter', extensions: [] }]
+    writeFileSync(join(scopedDir, 'settings.json'), JSON.stringify({ packages }))
+    const result = await prepareCodingAgentLaunch('pi', {
+      profile: 'default', provider: 'custom:test', model: 'test-model',
+      baseUrl: 'https://api.example.com/v1', apiKey: 'test-key', apiMode: 'codex_responses',
+    })
+    const settings = JSON.parse(readFileSync(join(result.rootDir, 'settings.json'), 'utf-8'))
+    expect(settings.extensions).toContain(bundle)
+    expect(settings.packages).toEqual(packages)
+  })
+
+  it('injects the bundled Pi MCP adapter when the user has no pi-mcp-adapter installed', async () => {
+    const home = makeHome()
+    const adapterEntry = join(home, 'coding-agent', 'pi-mcp-adapter', 'node_modules', 'pi-mcp-adapter', 'index.ts')
+    mkdirSync(dirname(adapterEntry), { recursive: true })
+    writeFileSync(adapterEntry, 'export default {}')
+
+    const result = await prepareCodingAgentLaunch('pi', {
+      profile: 'default',
+      provider: 'custom:test',
+      model: 'test-model',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-runtime-secret',
+      apiMode: 'codex_responses',
+      sessionId: 'session-bundled-adapter',
+      agentSessionId: 'agent-session-bundled-adapter',
+    })
+
+    const runtimeSettings = JSON.parse(readFileSync(join(result.rootDir, 'settings.json'), 'utf-8'))
+    expect(runtimeSettings.extensions).toContain(adapterEntry)
   })
 
   it('migrates legacy plaintext Pi proxy targets to encrypted storage during restore', async () => {
@@ -610,6 +947,68 @@ describe('coding agent launch preparation', () => {
     expect(persisted.input.agentSessionId).not.toBe(persisted.input.chatSessionId)
   })
 
+  it.each(['codex', 'claude-code', 'pi'] as const)('injects global %s MCP into private files and preserves user configuration', async agent => {
+    const home = makeHome()
+    const source = join(home, 'global-home', agent === 'codex' ? '.codex' : agent === 'pi' ? '.pi/agent' : '.claude')
+    mkdirSync(source, { recursive: true })
+    const external = { command: 'user-mcp', args: ['--custom'], env: { USER_OPTION: 'keep' } }
+    const sourceConfig = agent === 'codex' ? 'config.toml' : 'mcp.json'
+    const original = agent === 'codex'
+      ? [
+          '# User formatting must remain unchanged.',
+          'model = "user-model"',
+          'model_provider = "user-provider"',
+          '[profiles.personal]',
+          'model = "personal-model"',
+          '[mcp_servers."user.tools"]',
+          'command = "user-mcp"',
+          'args = ["--custom"]',
+          'env = { USER_OPTION = "keep" }',
+          '[mcp_servers.hermes-studio]',
+          'command = "obsolete-studio"',
+        ].join('\n')
+      : JSON.stringify({ mcpServers: { 'user.tools': external } }, null, 4)
+    const settings = JSON.stringify({ defaultProvider: 'user-provider', defaultModel: 'user-model', packages: ['npm:pi-mcp-adapter'] })
+    writeFileSync(join(source, sourceConfig), original)
+    writeFileSync(join(source, 'settings.json'), settings)
+    writeFileSync(join(source, 'auth.json'), '{"user":"login-fixture"}')
+    const input = { mode: 'global' as const, profile: 'default', sessionId: 'first', agentSessionId: 'first-run', piOutputMode: 'rpc' as const }
+    const first = await prepareCodingAgentLaunch(agent, input)
+    const second = await prepareCodingAgentLaunch(agent, { ...input, sessionId: 'second', agentSessionId: 'second-run' })
+    const resumed = await prepareCodingAgentLaunch(agent, { ...input, agentNativeSessionId: 'native-thread' })
+    expect(first.rootDir).not.toBe(second.rootDir)
+    expect(resumed.rootDir).toBe(first.rootDir)
+    for (const launch of [first, second, resumed]) {
+      const configPath = join(launch.rootDir, sourceConfig)
+      const runtime = agent === 'codex' ? parseToml(readFileSync(configPath, 'utf8')) : JSON.parse(readFileSync(configPath, 'utf8'))
+      const servers = agent === 'codex' ? runtime.mcp_servers : runtime.mcpServers
+      expect(servers['user.tools']).toEqual(external)
+      expect(servers['hermes-studio']).toBeUndefined()
+      for (const toolset of ['api', 'browser', 'devices', 'use', 'interaction']) {
+        expect(servers[`ekko-studio-${toolset}`]).toMatchObject({ env: { ELECTRON_RUN_AS_NODE: '1' } })
+      }
+      if (agent === 'codex') {
+        expect(runtime).toMatchObject({ model: 'user-model', model_provider: 'user-provider', profiles: { personal: { model: 'personal-model' } } })
+        expect(launch.env.CODEX_HOME).toBe(launch.rootDir)
+      } else {
+        expect(launch.args[launch.args.indexOf('--mcp-config') + 1]).toBe(configPath)
+        expect(launch.args).not.toContain('--model')
+      }
+      if (agent === 'pi') {
+        expect(launch.env.PI_CODING_AGENT_DIR).toBe(source)
+        expect(launch.args.filter(arg => arg.includes('pi-mcp-adapter'))).toEqual([])
+      }
+    }
+    await upsertCodingAgentMcpServer(agent, 'ekko-studio-interaction', { enabled: false }, { profile: 'default', provider: 'global' })
+    const disabled = await prepareCodingAgentLaunch(agent, input)
+    const content = readFileSync(join(disabled.rootDir, sourceConfig), 'utf8')
+    if (agent === 'codex') expect((parseToml(content).mcp_servers as any)['ekko-studio-interaction'].enabled).toBe(false)
+    else expect(JSON.parse(content).mcpServers['ekko-studio-interaction']).toBeUndefined()
+    expect(readFileSync(join(source, sourceConfig), 'utf8')).toBe(original)
+    expect(readFileSync(join(source, 'settings.json'), 'utf8')).toBe(settings)
+    expect(readFileSync(join(source, 'auth.json'), 'utf8')).toBe('{"user":"login-fixture"}')
+  })
+
   it('launches Claude Code with the global config when requested', async () => {
     const home = makeHome()
     const rootDir = join(home, 'coding-agent', 'model', 'default', 'global', 'claude-code')
@@ -632,15 +1031,16 @@ describe('coding agent launch preparation', () => {
       args: [
         '--append-system-prompt-file',
         promptPath,
+        '--mcp-config', join(rootDir, 'mcp.json'),
         '--dangerously-skip-permissions',
       ],
       env: {},
-      shellCommand: `cd ${join(home, 'coding-agent', 'workspace', 'default', 'global')} && claude --append-system-prompt-file ${promptPath} --dangerously-skip-permissions`,
+      shellCommand: `cd ${join(home, 'coding-agent', 'workspace', 'default', 'global')} && claude --append-system-prompt-file ${promptPath} --mcp-config ${join(rootDir, 'mcp.json')} --dangerously-skip-permissions`,
       files: [{
         key: 'prompt',
         path: 'hermes-rules.md',
         absolutePath: promptPath,
-      }],
+      }, { key: 'mcp', path: 'mcp.json', absolutePath: join(rootDir, 'mcp.json') }],
       promptFile: promptPath,
     })
     const prompt = readFileSync(promptPath, 'utf-8')
@@ -666,10 +1066,13 @@ describe('coding agent launch preparation', () => {
       args: [
         '--append-system-prompt-file',
         join(home, 'coding-agent', 'model', 'default', 'global', 'claude-code', 'hermes-rules.md'),
+        '--mcp-config', join(home, 'coding-agent', 'model', 'default', 'global', 'claude-code', 'mcp.json'),
         '--permission-mode',
         'auto',
+        '--allowedTools',
+        'mcp__ekko-studio-interaction__ekko_studio_update_plan',
       ],
-      shellCommand: `cd ${join(home, 'coding-agent', 'workspace', 'default', 'global')} && claude --append-system-prompt-file ${join(home, 'coding-agent', 'model', 'default', 'global', 'claude-code', 'hermes-rules.md')} --permission-mode auto`,
+      shellCommand: `cd ${join(home, 'coding-agent', 'workspace', 'default', 'global')} && claude --append-system-prompt-file ${join(home, 'coding-agent', 'model', 'default', 'global', 'claude-code', 'hermes-rules.md')} --mcp-config ${join(home, 'coding-agent', 'model', 'default', 'global', 'claude-code', 'mcp.json')} --permission-mode auto --allowedTools mcp__ekko-studio-interaction__ekko_studio_update_plan`,
     })
   })
 
@@ -698,16 +1101,19 @@ describe('coding agent launch preparation', () => {
       command: 'codex',
       args: [],
       env: { CODEX_HOME: rootDir },
-      files: [{ key: 'agents', path: 'AGENTS.md', absolutePath: join(rootDir, 'AGENTS.md') }],
+      files: [
+        { key: 'agents', path: 'AGENTS.md', absolutePath: join(rootDir, 'AGENTS.md') },
+        { key: 'config', path: 'config.toml', absolutePath: join(rootDir, 'config.toml') },
+      ],
       promptFile: join(rootDir, 'AGENTS.md'),
     })
     expect(result.shellCommand).toContain(`CODEX_HOME=${rootDir}`)
     expect(result.shellCommand).toContain('codex')
-    expect(readFileSync(join(rootDir, 'config.toml'), 'utf8')).toBe('model = "gpt-global"\n')
+    expect(parseToml(readFileSync(join(rootDir, 'config.toml'), 'utf8')).model).toBe('gpt-global')
     expect(readFileSync(join(rootDir, 'auth.json'), 'utf8')).toBe('{"token":"user-token"}\n')
     const prompt = readFileSync(join(rootDir, 'AGENTS.md'), 'utf8')
     expect(prompt).toContain('User global Codex instructions.')
-    expect(prompt).toContain('Hermes Studio MCP usage')
+    expect(prompt).toContain('Ekko Studio MCP usage')
     expect(readFileSync(join(globalCodexHome, 'config.toml'), 'utf8')).toBe('model = "gpt-global"\n')
     expect(readFileSync(join(globalCodexHome, 'auth.json'), 'utf8')).toBe('{"token":"user-token"}\n')
     expect(readFileSync(join(globalCodexHome, 'AGENTS.md'), 'utf8')).toBe('User global Codex instructions.\n')
@@ -744,7 +1150,7 @@ describe('coding agent launch preparation', () => {
       { key: 'config', path: 'config.toml', absolutePath: join(rootDir, 'config.toml') },
       { key: 'agents', path: 'AGENTS.md', absolutePath: join(rootDir, 'AGENTS.md') },
     ]))
-    expect(readFileSync(join(rootDir, 'config.toml'), 'utf8')).toContain('[mcp_servers.hermes-studio-api]')
+    expect(readFileSync(join(rootDir, 'config.toml'), 'utf8')).toContain('[mcp_servers.ekko-studio-api]')
     expect(readFileSync(join(rootDir, 'auth.json'), 'utf8')).toBe('{"token":"user-token"}\n')
     expect(readFileSync(join(rootDir, 'AGENTS.md'), 'utf8')).toContain('User global Grok instructions.')
     expect(readFileSync(join(globalGrokHome, 'config.toml'), 'utf8')).toBe('[models]\ndefault = "grok-4"\n')
@@ -795,7 +1201,7 @@ describe('coding agent launch preparation', () => {
     expect(JSON.parse(result.env.OPENCODE_CONFIG_CONTENT).instructions)
       .toEqual([join(result.rootDir, 'hermes-rules.md')])
     expect(config.mcp.local).toEqual({ type: 'local', command: ['local-mcp'], enabled: true })
-    expect(config.mcp['hermes-studio-api']).toMatchObject({ type: 'local', enabled: true })
+    expect(config.mcp['ekko-studio-api']).toMatchObject({ type: 'local', enabled: true })
     expect(readFileSync(join(result.rootDir, 'AGENTS.md'), 'utf8')).toContain('User global OpenCode instructions.')
     expect(readFileSync(join(result.rootDir, 'hermes-rules.md'), 'utf8')).toContain('BEGIN HERMES WEB UI PROMPT')
     expect(statSync(join(result.rootDir, 'skills')).isDirectory()).toBe(true)
@@ -883,7 +1289,7 @@ describe('coding agent launch preparation', () => {
     expect(configText).not.toContain('sk-opencode-upstream')
     expect(readFileSync(join(result.rootDir, 'AGENTS.md'), 'utf8')).not.toContain('OpenCode workflow memory.')
     expect(readFileSync(join(baseRoot, 'AGENTS.md'), 'utf8')).toContain('OpenCode workflow memory.')
-    expect(JSON.parse(readFileSync(join(baseRoot, 'opencode.json'), 'utf8')).mcp['hermes-studio-api'])
+    expect(JSON.parse(readFileSync(join(baseRoot, 'opencode.json'), 'utf8')).mcp['ekko-studio-api'])
       .toMatchObject({ type: 'local', enabled: true })
     expect(statSync(join(baseRoot, 'skills')).isDirectory()).toBe(true)
     expect(readFileSync(join(baseRoot, 'skills', 'workflow-skill', 'SKILL.md'), 'utf8')).toBe('# Workflow skill\n')
@@ -910,6 +1316,9 @@ describe('coding agent launch preparation', () => {
 
   it('launches interactive Pi with its global config when requested', async () => {
     const home = makeHome()
+    const adapter = join(home, 'coding-agent', 'pi-mcp-adapter', 'node_modules', 'pi-mcp-adapter', 'index.ts')
+    mkdirSync(dirname(adapter), { recursive: true })
+    writeFileSync(adapter, 'export default {}')
 
     const result = await prepareCodingAgentLaunch('pi', {
       mode: 'global',
@@ -927,19 +1336,24 @@ describe('coding agent launch preparation', () => {
       rootDir,
       workspaceDir: join(home, 'coding-agent', 'workspace', 'default', 'global'),
       command: 'pi',
-      args: ['--append-system-prompt', promptPath],
-      env: {},
-      shellCommand: `cd ${join(home, 'coding-agent', 'workspace', 'default', 'global')} && pi --append-system-prompt ${promptPath}`,
-      files: [{ key: 'prompt', path: 'APPEND_SYSTEM.md', absolutePath: promptPath }],
+      args: ['--append-system-prompt', promptPath, '--extension', adapter, '--mcp-config', join(rootDir, 'mcp.json')],
+      env: { PI_CODING_AGENT_DIR: join(home, 'global-home', '.pi', 'agent') },
+      files: [
+        { key: 'prompt', path: 'APPEND_SYSTEM.md', absolutePath: promptPath },
+        { key: 'mcp', path: 'mcp.json', absolutePath: join(rootDir, 'mcp.json') },
+      ],
       promptFile: promptPath,
     })
     expect(rootDir).toContain(join('coding-agent', 'model', 'default', 'global', 'pi', 'runs'))
-    expect(readFileSync(promptPath, 'utf8')).toContain('Hermes Studio MCP usage')
+    expect(readFileSync(promptPath, 'utf8')).toContain('Ekko Studio MCP usage')
     expect(existsSync(join(home, 'global-home', '.pi', 'agent', 'APPEND_SYSTEM.md'))).toBe(false)
   })
 
   it('runs Studio Pi chats over RPC while preserving the global Pi config', async () => {
     const home = makeHome()
+    const adapter = join(home, 'coding-agent', 'pi-mcp-adapter', 'node_modules', 'pi-mcp-adapter', 'index.ts')
+    mkdirSync(dirname(adapter), { recursive: true })
+    writeFileSync(adapter, 'export default {}')
 
     const result = await prepareCodingAgentLaunch('pi', {
       mode: 'global',
@@ -967,6 +1381,8 @@ describe('coding agent launch preparation', () => {
       '--mode', 'rpc',
       '--session-id', 'global-pi-native',
       '--extension', join(result.rootDir, 'hermes-studio-runtime.ts'),
+      '--extension', adapter,
+      '--mcp-config', join(result.rootDir, 'mcp.json'),
       '--no-approve',
     ])
     expect(result.args).not.toContain('--provider')
@@ -1072,40 +1488,43 @@ describe('coding agent launch preparation', () => {
     expect(result.env.ENABLE_TOOL_SEARCH).toBe('true')
 
     const mcp = JSON.parse(readFileSync(join(result.rootDir, 'mcp.json'), 'utf-8'))
-    expect(mcp.mcpServers['hermes-studio-api']).toMatchObject({
+    expect(mcp.mcpServers['ekko-studio-api']).toMatchObject({
       command: process.execPath,
-      args: [join(process.cwd(), 'bin/hermes-studio-mcp.mjs'), 'api'],
+      args: [join(process.cwd(), 'bin/ekko-studio-mcp.mjs'), 'api'],
       env: {
         HERMES_WEB_UI_URL: 'http://127.0.0.1:6060',
         HERMES_WEB_UI_HOME: home,
         HERMES_WEBUI_STATE_DIR: home,
         HERMES_WEB_UI_PROFILE: 'default',
-        HERMES_MCP_SERVER_NAME: 'hermes-studio-api',
+        HERMES_MCP_SERVER_NAME: 'ekko-studio-api',
         HERMES_MCP_TOOLSET: 'api',
         HERMES_WEB_UI_MANAGED_MCP: '1',
       },
     })
-    expect(mcp.mcpServers['hermes-studio-browser']).toMatchObject({
+    for (const name of ['ekko-studio-api', 'ekko-studio-browser', 'ekko-studio-devices', 'ekko-studio-use', 'ekko-studio-interaction']) {
+      expect(mcp.mcpServers[name].env.ELECTRON_RUN_AS_NODE).toBe('1')
+    }
+    expect(mcp.mcpServers['ekko-studio-browser']).toMatchObject({
       command: process.execPath,
-      args: [join(process.cwd(), 'bin/hermes-studio-mcp.mjs'), 'browser'],
+      args: [join(process.cwd(), 'bin/ekko-studio-mcp.mjs'), 'browser'],
       env: {
-        HERMES_MCP_SERVER_NAME: 'hermes-studio-browser',
+        HERMES_MCP_SERVER_NAME: 'ekko-studio-browser',
         HERMES_MCP_TOOLSET: 'browser',
       },
     })
-    expect(mcp.mcpServers['hermes-studio-devices']).toMatchObject({
+    expect(mcp.mcpServers['ekko-studio-devices']).toMatchObject({
       command: process.execPath,
-      args: [join(process.cwd(), 'bin/hermes-studio-mcp.mjs'), 'devices'],
+      args: [join(process.cwd(), 'bin/ekko-studio-mcp.mjs'), 'devices'],
       env: {
-        HERMES_MCP_SERVER_NAME: 'hermes-studio-devices',
+        HERMES_MCP_SERVER_NAME: 'ekko-studio-devices',
         HERMES_MCP_TOOLSET: 'devices',
       },
     })
-    expect(mcp.mcpServers['hermes-studio-use']).toMatchObject({
+    expect(mcp.mcpServers['ekko-studio-use']).toMatchObject({
       command: process.execPath,
-      args: [join(process.cwd(), 'bin/hermes-studio-mcp.mjs'), 'use'],
+      args: [join(process.cwd(), 'bin/ekko-studio-mcp.mjs'), 'use'],
       env: {
-        HERMES_MCP_SERVER_NAME: 'hermes-studio-use',
+        HERMES_MCP_SERVER_NAME: 'ekko-studio-use',
         HERMES_MCP_TOOLSET: 'use',
       },
     })
@@ -1115,7 +1534,7 @@ describe('coding agent launch preparation', () => {
     expect(prompt).toContain('当你的回复中包含图片、视频或文件引用时')
   })
 
-  it('uses the desktop runtime node for scoped Hermes Studio MCP configs when available', async () => {
+  it('uses the desktop runtime node for scoped Ekko Studio MCP configs when available', async () => {
     const home = makeHome()
     process.env.HERMES_AGENT_NODE = '/runtime/node'
 
@@ -1128,18 +1547,18 @@ describe('coding agent launch preparation', () => {
     })
 
     const mcp = JSON.parse(readFileSync(join(result.rootDir, 'mcp.json'), 'utf-8'))
-    expect(mcp.mcpServers['hermes-studio-api']).toMatchObject({
+    expect(mcp.mcpServers['ekko-studio-api']).toMatchObject({
       command: '/runtime/node',
-      args: [join(process.cwd(), 'bin/hermes-studio-mcp.mjs'), 'api'],
+      args: [join(process.cwd(), 'bin/ekko-studio-mcp.mjs'), 'api'],
       env: {
         HERMES_WEB_UI_HOME: home,
-        HERMES_MCP_SERVER_NAME: 'hermes-studio-api',
+        HERMES_MCP_SERVER_NAME: 'ekko-studio-api',
         HERMES_MCP_TOOLSET: 'api',
       },
     })
-    expect(mcp.mcpServers['hermes-studio-devices'].command).toBe('/runtime/node')
-    expect(mcp.mcpServers['hermes-studio-browser'].command).toBe('/runtime/node')
-    expect(mcp.mcpServers['hermes-studio-use'].command).toBe('/runtime/node')
+    expect(mcp.mcpServers['ekko-studio-devices'].command).toBe('/runtime/node')
+    expect(mcp.mcpServers['ekko-studio-browser'].command).toBe('/runtime/node')
+    expect(mcp.mcpServers['ekko-studio-use'].command).toBe('/runtime/node')
   })
 
   it('cleans legacy Hermes MCP entries from scoped Claude and Codex configs', async () => {
@@ -1174,10 +1593,10 @@ describe('coding agent launch preparation', () => {
     expect(claudeMcp.mcpServers['hermes-studio']).toBeUndefined()
     expect(claudeMcp.mcpServers['hermes-web-ui-mcp']).toBeUndefined()
     expect(claudeMcp.mcpServers.custom).toEqual({ command: 'custom-mcp' })
-    expect(claudeMcp.mcpServers['hermes-studio-api']).toBeDefined()
-    expect(claudeMcp.mcpServers['hermes-studio-browser']).toBeDefined()
-    expect(claudeMcp.mcpServers['hermes-studio-devices']).toBeDefined()
-    expect(claudeMcp.mcpServers['hermes-studio-use']).toBeDefined()
+    expect(claudeMcp.mcpServers['ekko-studio-api']).toBeDefined()
+    expect(claudeMcp.mcpServers['ekko-studio-browser']).toBeDefined()
+    expect(claudeMcp.mcpServers['ekko-studio-devices']).toBeDefined()
+    expect(claudeMcp.mcpServers['ekko-studio-use']).toBeDefined()
 
     const codexRoot = join(home, 'coding-agent', 'model', 'default', 'openrouter', 'codex')
     const codexConfigPath = join(codexRoot, 'config.toml')
@@ -1200,10 +1619,13 @@ describe('coding agent launch preparation', () => {
     const codexConfig = readFileSync(join(codex.rootDir, 'config.toml'), 'utf-8')
     expect(codexConfig).not.toContain('[mcp_servers.hermes-studio]')
     expect(codexConfig).not.toContain('[mcp_servers.hermes-web-ui-mcp]')
-    expect(codexConfig).toContain('[mcp_servers.hermes-studio-api]')
-    expect(codexConfig).toContain('[mcp_servers.hermes-studio-browser]')
-    expect(codexConfig).toContain('[mcp_servers.hermes-studio-devices]')
-    expect(codexConfig).toContain('[mcp_servers.hermes-studio-use]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-api]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-browser]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-devices]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-use]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-interaction]')
+    expect(codexConfig).toMatch(/\[mcp_servers.ekko-studio-interaction\][\s\S]*?tool_timeout_sec = 360/)
+    expect(codexConfig).toMatch(/\[mcp_servers.ekko-studio-use\][\s\S]*?tool_timeout_sec = 360/)
   })
 
   it('inherits external MCP configs for scoped Claude and Codex launches', async () => {
@@ -1222,7 +1644,7 @@ describe('coding agent launch preparation', () => {
           url: 'https://nowledge-mem.example/remote-api/mcp/',
           headers: { APP: 'claude code', Authorization: 'Bearer test' },
         },
-        'hermes-studio-api': { command: 'stale-managed' },
+        'ekko-studio-api': { command: 'stale-managed' },
       },
     }, null, 2)}
 `)
@@ -1254,7 +1676,7 @@ describe('coding agent launch preparation', () => {
       'APP = "codex"',
       'Authorization = "Bearer test"',
       '',
-      '[mcp_servers.hermes-studio-api]',
+      '[mcp_servers.ekko-studio-api]',
       'command = "stale-managed"',
       '',
       '[model_providers.unrelated]',
@@ -1305,7 +1727,7 @@ describe('coding agent launch preparation', () => {
       type: 'http',
       url: 'https://nowledge-mem.example/remote-api/mcp/',
     })
-    expect(claudeMcp.mcpServers['hermes-studio-api'].command).toBe(process.execPath)
+    expect(claudeMcp.mcpServers['ekko-studio-api'].command).toBe(process.execPath)
 
     const codex = await prepareCodingAgentLaunch('codex', {
       profile: 'default',
@@ -1328,10 +1750,13 @@ describe('coding agent launch preparation', () => {
     expect(codexConfig).not.toContain('APP = "codex-scoped"')
     expect(codexConfig).not.toContain('command = "stale-managed"')
     expect(codexConfig).not.toContain('[model_providers.unrelated]')
-    expect(codexConfig).toContain('[mcp_servers.hermes-studio-api]')
-    expect(codexConfig).toContain('[mcp_servers.hermes-studio-browser]')
-    expect(codexConfig).toContain('[mcp_servers.hermes-studio-devices]')
-    expect(codexConfig).toContain('[mcp_servers.hermes-studio-use]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-api]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-browser]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-devices]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-use]')
+    expect(codexConfig).toContain('[mcp_servers.ekko-studio-interaction]')
+    expect(codexConfig).toMatch(/\[mcp_servers.ekko-studio-interaction\][\s\S]*?tool_timeout_sec = 360/)
+    expect(codexConfig).toMatch(/\[mcp_servers.ekko-studio-use\][\s\S]*?tool_timeout_sec = 360/)
   })
 
   it('isolates Claude Code settings for hidden chat runs only', async () => {
@@ -1505,9 +1930,12 @@ describe('coding agent launch preparation', () => {
       join(result.rootDir, 'hermes-rules.md'),
       '--permission-mode',
       'auto',
+      '--allowedTools',
+      'mcp__ekko-studio-interaction__ekko_studio_update_plan',
     ])
     const launcher = readFileSync(join(result.rootDir, 'launch.sh'), 'utf-8')
     expect(launcher).toContain('--permission-mode auto')
+    expect(launcher).toContain('--allowedTools mcp__ekko-studio-interaction__ekko_studio_update_plan')
     expect(launcher).not.toContain('--dangerously-skip-permissions')
     expect(result.rootDir).toBe(join(home, 'coding-agent', 'model', 'default', 'openrouter', 'claude-code'))
   })
@@ -1628,24 +2056,25 @@ describe('coding agent launch preparation', () => {
     expect(config).toContain(`model_catalog_json = "${join(result.rootDir, 'codex-model-catalog.json')}"`)
     expect(config).toContain('model_reasoning_summary = "auto"')
     expect(config).toContain('developer_instructions = """')
-    expect(config).toContain('Hermes Studio MCP usage')
-    expect(config).toContain('hermes_studio_browser_toolset is available')
+    expect(config).toContain('Ekko Studio MCP usage')
+    expect(config).toContain('ekko_studio_browser_toolset is available')
     expect(config).toContain('call it with action=list')
     expect(config).toContain('Browser MCP exposes a compact toolset rather than resources')
     expect(config).toContain('# 输出格式规范')
-    expect(config).toContain('[mcp_servers.hermes-studio-api]')
-    expect(config).toContain('[mcp_servers.hermes-studio-devices]')
-    expect(config).toContain('[mcp_servers.hermes-studio-use]')
+    expect(config).toContain('[mcp_servers.ekko-studio-api]')
+    expect(config).toContain('[mcp_servers.ekko-studio-devices]')
+    expect(config).toContain('[mcp_servers.ekko-studio-use]')
     expect(config).toContain(`command = "${process.execPath}"`)
-    expect(config).toContain(`args = ["${join(process.cwd(), 'bin/hermes-studio-mcp.mjs')}", "api"]`)
-    expect(config).toContain(`args = ["${join(process.cwd(), 'bin/hermes-studio-mcp.mjs')}", "devices"]`)
-    expect(config).toContain(`args = ["${join(process.cwd(), 'bin/hermes-studio-mcp.mjs')}", "use"]`)
-    expect(config).toContain(`env = { HERMES_WEB_UI_URL = "http://127.0.0.1:6060", HERMES_WEB_UI_HOME = "${home}"`)
+    expect(config).toContain(`args = ["${join(process.cwd(), 'bin/ekko-studio-mcp.mjs')}", "api"]`)
+    expect(config).toContain(`args = ["${join(process.cwd(), 'bin/ekko-studio-mcp.mjs')}", "devices"]`)
+    expect(config).toContain(`args = ["${join(process.cwd(), 'bin/ekko-studio-mcp.mjs')}", "use"]`)
+    expect(config).toContain('ELECTRON_RUN_AS_NODE = "1"')
+    expect(config).toContain(`HERMES_WEB_UI_URL = "http://127.0.0.1:8648", HERMES_WEB_UI_HOME = "${home}"`)
     expect(config).toContain('HERMES_WEBUI_STATE_DIR = "')
     expect(config).toContain('HERMES_WEB_UI_PROFILE = "default"')
-    expect(config).toContain('HERMES_MCP_SERVER_NAME = "hermes-studio-api"')
-    expect(config).toContain('HERMES_MCP_SERVER_NAME = "hermes-studio-devices"')
-    expect(config).toContain('HERMES_MCP_SERVER_NAME = "hermes-studio-use"')
+    expect(config).toContain('HERMES_MCP_SERVER_NAME = "ekko-studio-api"')
+    expect(config).toContain('HERMES_MCP_SERVER_NAME = "ekko-studio-devices"')
+    expect(config).toContain('HERMES_MCP_SERVER_NAME = "ekko-studio-use"')
     expect(config).toContain('HERMES_MCP_TOOLSET = "api"')
     expect(config).toContain('HERMES_MCP_TOOLSET = "devices"')
     expect(config).toContain('HERMES_MCP_TOOLSET = "use"')
@@ -1653,7 +2082,7 @@ describe('coding agent launch preparation', () => {
 
     expect(result.files.some(file => file.key === 'agents')).toBe(true)
     const agents = readFileSync(join(result.rootDir, 'AGENTS.md'), 'utf-8')
-    expect(agents).toContain('Hermes Studio MCP usage')
+    expect(agents).toContain('Ekko Studio MCP usage')
     expect(agents).toContain('# 输出格式规范')
 
     const catalog = JSON.parse(readFileSync(join(result.rootDir, 'codex-model-catalog.json'), 'utf-8'))
@@ -1665,6 +2094,23 @@ describe('coding agent launch preparation', () => {
     expect(catalog.models[0].supported_reasoning_levels).toEqual(expect.arrayContaining([
       expect.objectContaining({ effort: 'max' }),
     ]))
+  })
+
+  it('binds managed mobile MCP calls to the current Studio chat session for Codex', async () => {
+    makeHome()
+
+    const result = await prepareCodingAgentLaunch('codex', {
+      profile: 'default',
+      provider: 'openrouter',
+      model: 'openai/gpt-oss-20b:free',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'sk-test',
+      sessionId: 'studio-chat-session',
+    })
+
+    expect(result.env.HERMES_STUDIO_SESSION_ID).toBe('studio-chat-session')
+    expect(readFileSync(join(result.rootDir, 'launch.sh'), 'utf-8'))
+      .toContain('export HERMES_STUDIO_SESSION_ID=studio-chat-session')
   })
 
   it('runs scoped Grok through the local proxy without writing the upstream secret to disk', async () => {
@@ -1697,7 +2143,7 @@ describe('coding agent launch preparation', () => {
     expect(config).toContain('api_backend = "responses"')
     expect(config).toContain('env_key = "HERMES_STUDIO_GROK_API_KEY"')
     expect(config).toContain(`/api/codex-proxy/`)
-    expect(config).toContain('[mcp_servers.hermes-studio-api]')
+    expect(config).toContain('[mcp_servers.ekko-studio-api]')
     expect(config).not.toContain('sk-upstream-secret')
 
     const prompt = readFileSync(join(result.rootDir, 'AGENTS.md'), 'utf-8')
@@ -2133,7 +2579,7 @@ describe('coding agent launch preparation', () => {
           type: 'tool_use',
           id: 'call_search',
           name: 'tool_search',
-          input: { query: 'Hermes Studio browser tabs' },
+          input: { query: 'Ekko Studio browser tabs' },
         }],
         stop_reason: 'tool_use',
         usage: { input_tokens: 3, output_tokens: 1 },
@@ -2146,7 +2592,7 @@ describe('coding agent launch preparation', () => {
         content: [{
           type: 'tool_use',
           id: 'call_browser',
-          name: 'hermes_studio_browser_toolset',
+          name: 'ekko_studio_browser_toolset',
           input: { action: 'list' },
         }],
         stop_reason: 'tool_use',
@@ -2182,7 +2628,7 @@ describe('coding agent launch preparation', () => {
       call_id: 'call_search',
       status: 'completed',
       execution: 'client',
-      arguments: { query: 'Hermes Studio browser tabs' },
+      arguments: { query: 'Ekko Studio browser tabs' },
     }])
 
     const secondCtx = makeProxyContext(routeKey, token, {
@@ -2193,7 +2639,7 @@ describe('coding agent launch preparation', () => {
           call_id: 'call_search',
           status: 'completed',
           execution: 'client',
-          arguments: { query: 'Hermes Studio browser tabs' },
+          arguments: { query: 'Ekko Studio browser tabs' },
         },
         {
           type: 'tool_search_output',
@@ -2202,10 +2648,10 @@ describe('coding agent launch preparation', () => {
           execution: 'client',
           tools: [{
             type: 'namespace',
-            name: 'mcp__hermes_studio_browser',
+            name: 'mcp__ekko_studio_browser',
             tools: [{
               type: 'function',
-              name: 'hermes_studio_browser_toolset',
+              name: 'ekko_studio_browser_toolset',
               description: 'Discover browser operations.',
               parameters: { type: 'object', properties: { action: { type: 'string' } }, required: ['action'] },
             }],
@@ -2220,7 +2666,7 @@ describe('coding agent launch preparation', () => {
     const secondRequestBody = JSON.parse(fetchMock.mock.calls[1][1].body)
     expect(secondRequestBody.tools.map((tool: any) => tool.name)).toEqual([
       'tool_search',
-      'hermes_studio_browser_toolset',
+      'ekko_studio_browser_toolset',
     ])
     expect(secondRequestBody.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -2231,8 +2677,8 @@ describe('coding agent launch preparation', () => {
     expect(secondCtx.body.output[0]).toMatchObject({
       type: 'function_call',
       call_id: 'call_browser',
-      name: 'hermes_studio_browser_toolset',
-      namespace: 'mcp__hermes_studio_browser',
+      name: 'ekko_studio_browser_toolset',
+      namespace: 'mcp__ekko_studio_browser',
     })
   })
 
@@ -2257,7 +2703,7 @@ describe('coding agent launch preparation', () => {
       content: [{
         type: 'tool_use',
         id: 'toolu_browser',
-        name: 'hermes_studio_browser_toolset',
+        name: 'ekko_studio_browser_toolset',
         input: { action: 'list' },
       }],
       stop_reason: 'tool_use',
@@ -2269,8 +2715,8 @@ describe('coding agent launch preparation', () => {
       input: [{ role: 'user', content: [{ type: 'input_text', text: 'open a browser' }] }],
       tools: [{
         type: 'namespace',
-        name: 'mcp__hermes_studio_browser',
-        description: 'Hermes Studio browser tools',
+        name: 'mcp__ekko_studio_browser',
+        description: 'Ekko Studio browser tools',
       }],
     })
 
@@ -2278,7 +2724,7 @@ describe('coding agent launch preparation', () => {
 
     const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body)
     expect(requestBody.tools).toEqual([expect.objectContaining({
-      name: 'hermes_studio_browser_toolset',
+      name: 'ekko_studio_browser_toolset',
       input_schema: expect.objectContaining({
         required: ['action'],
       }),
@@ -2286,9 +2732,9 @@ describe('coding agent launch preparation', () => {
     expect(ctx.body.output[0]).toMatchObject({
       type: 'function_call',
       call_id: 'toolu_browser',
-      name: 'hermes_studio_browser_toolset',
+      name: 'ekko_studio_browser_toolset',
       arguments: '{"action":"list"}',
-      namespace: 'mcp__hermes_studio_browser',
+      namespace: 'mcp__ekko_studio_browser',
     })
   })
 
@@ -2712,7 +3158,7 @@ describe('coding agent launch preparation', () => {
     const target = registerClaudeCodeProxyTarget({
       provider: 'fun-codex',
       model: 'gpt-5.5',
-      baseUrl: 'https://api.apikey.fun/v1',
+      baseUrl: 'https://api.apikey.fan/v1',
       apiKey: 'sk-upstream',
       apiMode: 'codex_responses',
     })
@@ -2734,7 +3180,7 @@ describe('coding agent launch preparation', () => {
 
     await claudeProxyMessages(ctx)
 
-    expect(fetchMock).toHaveBeenCalledWith('https://api.apikey.fun/v1/responses', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith('https://api.apikey.fan/v1/responses', expect.objectContaining({
       method: 'POST',
       headers: expect.objectContaining({ Authorization: 'Bearer sk-upstream' }),
     }))
@@ -2760,7 +3206,7 @@ describe('coding agent launch preparation', () => {
     const target = registerClaudeCodeProxyTarget({
       provider: 'fun-codex',
       model: 'gpt-5.5',
-      baseUrl: 'https://api.apikey.fun/v1',
+      baseUrl: 'https://api.apikey.fan/v1',
       apiKey: 'sk-upstream',
       apiMode: 'codex_responses',
     })
@@ -2923,7 +3369,7 @@ describe('coding agent launch preparation', () => {
     const target = registerClaudeCodeProxyTarget({
       provider: 'fun-claude',
       model: 'claude-sonnet-4-6',
-      baseUrl: 'https://api.apikey.fun',
+      baseUrl: 'https://api.apikey.fan',
       apiKey: 'sk-upstream',
       apiMode: 'anthropic_messages',
     })
@@ -2946,7 +3392,7 @@ describe('coding agent launch preparation', () => {
 
     await claudeProxyMessages(ctx)
 
-    expect(fetchMock).toHaveBeenCalledWith('https://api.apikey.fun/v1/messages', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith('https://api.apikey.fan/v1/messages', expect.objectContaining({
       method: 'POST',
       headers: expect.objectContaining({
         Authorization: 'Bearer sk-upstream',
@@ -3075,5 +3521,66 @@ describe('coding agent launch preparation', () => {
     expect(ids).toContain('claude-sonnet-4-6')
     expect(ids).toContain('claude-opus-4-7')
     expect(ids).toContain('cognitivecomputations/dolphin-mistral-24b-venice-edition:free')
+  })
+})
+
+
+describe('OpenCode Free coding agents', () => {
+  it.each(['claude-code', 'codex', 'pi', 'grok', 'opencode'])('prepares %s with a protected local proxy and no upstream key', async (id) => {
+    const home = makeHome()
+    if (id === 'pi') {
+      const adapter = join(home, 'coding-agent', 'pi-mcp-adapter', 'node_modules', 'pi-mcp-adapter', 'index.ts')
+      mkdirSync(dirname(adapter), { recursive: true })
+      writeFileSync(adapter, 'export default {}')
+    }
+    const launch = await prepareCodingAgentLaunch(id as any, {
+      profile: 'default', provider: 'opencode-free', model: 'mimo-v2.5-free', mode: 'scoped',
+    })
+    const contents = launch.files.map(file => readFileSync(file.absolutePath, 'utf8')).join('\n')
+    expect(contents).toMatch(/api\/(codex-proxy|claude-code-proxy)\//)
+    expect(contents + JSON.stringify(launch.env)).toContain('hwui_')
+    if (id === 'codex' || id === 'pi') {
+      revokeCodexProxyTargets('default', 'opencode-free')
+      const restored = id === 'pi' ? await restorePersistedPiProxyTargets() : await restorePersistedCodexProxyTargets()
+      expect(restored).toBeGreaterThan(0)
+    }
+  })
+
+  it.each([
+    ['mimo-v2.5-free', 'chat/completions'],
+    ['muse-spark-free', 'responses'],
+    ['qwen3-free', 'messages'],
+  ])('routes %s anonymously through both proxy protocols', async (model, endpoint) => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      id: 'test', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'ok' }],
+      output: [], choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+    }), { headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    for (const claude of [false, true]) {
+      const input = { profile: 'default', provider: 'opencode-free', model, baseUrl: 'https://stale.example', apiKey: 'stale-key' }
+      const target = claude ? registerClaudeCodeProxyTarget(input) : registerCodexProxyTarget(input)
+      const handler = claude ? claudeProxyMessages : codexProxyResponses
+      const body = { model, max_tokens: 16, messages: [{ role: 'user', content: 'hello' }], input: 'hello' }
+      const denied = makeProxyContext(target.routeKey, '', body)
+      await handler(denied)
+      expect(denied.status).toBe(401)
+      fetchMock.mockClear()
+      const ctx = makeProxyContext(target.routeKey, target.token, body)
+      await handler(ctx)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as any
+      expect(url).toBe(`https://opencode.ai/zen/v1/${endpoint}`)
+      const headers = new Headers(init.headers)
+      expect(headers.has('authorization')).toBe(false)
+      expect(headers.has('x-api-key')).toBe(false)
+      expect(JSON.parse(init.body).model).toBe(model)
+    }
+  })
+
+  it('rejects paid model IDs for the native anonymous provider', async () => {
+    makeHome()
+    await expect(prepareCodingAgentLaunch('codex', {
+      provider: 'opencode-free', model: 'gpt-5', mode: 'scoped',
+    })).rejects.toMatchObject({ status: 400 })
   })
 })

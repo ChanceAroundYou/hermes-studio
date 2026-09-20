@@ -288,7 +288,7 @@ describe('Agent Manager page', () => {
     expect(wrapper.get('[data-testid="agent-card-codex"]').text()).toContain('agentManager.codingAgentDescription')
     expect(wrapper.get('[data-testid="agent-card-codex"]').text()).toContain('codingAgents.installNow')
     expect(wrapper.get('.coding-agent-grid').findAll('.agent-card').map(card => card.attributes('data-testid')))
-      .toEqual(['agent-card-ekko', 'agent-card-hermes', 'agent-card-claude-code', 'agent-card-codex', 'agent-card-pi', 'agent-card-grok', 'agent-card-opencode'])
+      .toEqual(['agent-card-ekko', 'agent-card-hermes', 'agent-card-claude-code', 'agent-card-codex', 'agent-card-pi', 'agent-card-grok', 'agent-card-opencode', 'agent-card-dsh'])
   })
 
   it('detects the CLI before offering Runtime management in the desktop shell', async () => {
@@ -446,7 +446,7 @@ describe('Agent Manager page', () => {
 
     expect(claudeCard.find('.update-alert').exists()).toBe(false)
     expect(claudeCard.findAll('button').map(button => button.text()))
-      .toContain('agentManager.updateToVersion:2.1.0')
+      .toContain('agentManager.updateToVersion:v2.1.0')
   })
 
   it('only probes installed Agents after the user clicks refresh', async () => {

@@ -14,6 +14,7 @@ describe('PWA metadata', () => {
     const manifest = JSON.parse(readFileSync('packages/client/public/manifest.webmanifest', 'utf8'))
 
     expect(manifest.name).toBe('Hermes Studio')
+    expect(manifest.short_name).toBe('Hermes')
     expect(manifest.display).toBe('standalone')
     expect(manifest.start_url).toBe('/hermes/#/hermes/chat')
     expect(manifest.scope).toBe('/hermes/')

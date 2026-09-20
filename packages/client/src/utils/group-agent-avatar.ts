@@ -10,6 +10,7 @@ const DEFAULT_AGENT_ICONS: Record<RoomAgent['agent'], string> = {
     pi: `${getBaseUrlValue()}/coding-agents/pi.svg`,
     grok: `${getBaseUrlValue()}/coding-agents/grok.svg`,
     opencode: `${getBaseUrlValue()}/coding-agents/opencode.png`,
+    dsh: `${getBaseUrlValue()}/coding-agents/deepseek.svg`,
 }
 
 export function parseStoredAvatar(raw: unknown): ProfileAvatar | null {

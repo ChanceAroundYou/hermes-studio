@@ -1,7 +1,11 @@
+import { findPushRunLink, linkPushRun, type PushRunRef } from '../../repositories/run-push-store'
+import { withTaskPlanTurnContext } from '../task-plan-runs'
+import type { TaskPlanSnapshot } from '../../contracts/task-plan'
+import { groupTaskPlanMessage } from './task-plan'
 import { io, Socket } from 'socket.io-client'
 import { createHash, randomBytes, randomUUID } from 'crypto'
 import { getToken } from '../../public/auth'
-import { socketIoClientPath } from '../../public/config'
+import { socketIoClientPath } from '../../public/socket-io-path'
 import { logger } from '../../public/logging'
 import { countTokens } from '../context-compressor'
 import {
@@ -36,12 +40,13 @@ export const GROUP_CHAT_AGENT_SOCKET_SECRET = randomBytes(32).toString('hex')
 
 export interface AgentConfig {
     agentId?: string
-    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode'
+    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
     agentMode?: 'scoped' | 'global'
     profile: string
     provider?: string
     model?: string
     apiMode?: string
+    agentPreset?: string
     reasoningEffort?: string
     name: string
     description: string
@@ -103,11 +108,12 @@ export function mentionMessageToStoredContextMessage(roomId: string, msg: Mentio
 type GroupEstimateMessage = { role: 'user' | 'assistant'; content: string }
 export type GroupModelContext = { model: string; provider: string }
 export type GroupAgentSessionConfig = {
-    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode'
+    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
     agentMode?: 'scoped' | 'global'
     provider?: string
     model?: string
     apiMode?: string
+    agentPreset?: string
     reasoningEffort?: string
 }
 type WorkspaceDiffTerminalStatus = 'completed' | 'failed' | 'aborted'
@@ -231,12 +237,13 @@ export interface GroupAgentEventSink {
 
 export interface GroupAgentExecutor {
     readonly agentId: string
-    readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode'
+    readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
     readonly agentMode: 'scoped' | 'global'
     readonly profile: string
     readonly provider: string
     readonly model: string
     readonly apiMode: string
+    readonly agentPreset?: string
     readonly reasoningEffort: string
     readonly name: string
     readonly description: string
@@ -289,7 +296,7 @@ export interface GroupChatRunService {
             workspace?: string | null
             source?: string
             session_source?: 'group_chat'
-            coding_agent_id?: 'claude-code' | 'codex' | 'pi' | 'grok' | 'opencode' | 'ekko-agent'
+            coding_agent_id?: 'claude-code' | 'codex' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'ekko-agent'
             mode?: 'scoped' | 'global'
             profile?: string
             reasoning_effort?: string
@@ -310,6 +317,7 @@ export interface GroupChatRunService {
             memory_default_write_scope?: Record<string, string>
         },
         options?: {
+            pushRoot?: PushRunRef
             profile?: string
             timeoutMs?: number
             onEvent?: (event: string, payload: any) => void
@@ -320,6 +328,10 @@ export interface GroupChatRunService {
         reasoning?: string | null
         error?: string
     }>
+    beginGroupTaskPlanRun?(sessionId: string, profile: string, runId: string, isCurrent: () => boolean, publish: (snapshot: TaskPlanSnapshot) => void): {
+        contextId: string
+        finish(state: 'ended' | 'interrupted' | 'failed'): void
+    }
     abortSession(sessionId: string, reason?: string): Promise<void>
     disposeSession?(sessionId: string): Promise<void>
     respondCodingAgentApproval?(sessionId: string, approvalId: string, choice: string): boolean
@@ -330,12 +342,13 @@ export interface GroupChatRunService {
 
 export class AgentClient implements GroupAgentExecutor {
     readonly agentId: string
-    readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode'
+    readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
     readonly agentMode: 'scoped' | 'global'
     readonly profile: string
     readonly provider: string
     readonly model: string
     readonly apiMode: string
+    readonly agentPreset?: string
     readonly reasoningEffort: string
     readonly name: string
     readonly description: string
@@ -365,7 +378,7 @@ export class AgentClient implements GroupAgentExecutor {
     constructor(config: AgentConfig, handlers: AgentEventHandler = {}, eventSink: GroupAgentEventSink | null = null) {
         this.agentId = config.agentId || Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
         this.agent = config.agent || 'hermes'
-        this.agentMode = config.agentMode === 'global' && (this.agent === 'claude' || this.agent === 'codex' || this.agent === 'pi' || this.agent === 'grok' || this.agent === 'opencode')
+        this.agentMode = config.agentMode === 'global' && (this.agent === 'claude' || this.agent === 'codex' || this.agent === 'pi' || this.agent === 'grok' || (this.agent === 'opencode' || this.agent === 'dsh'))
             ? 'global'
             : 'scoped'
         this.profile = config.profile
@@ -373,6 +386,7 @@ export class AgentClient implements GroupAgentExecutor {
         this.model = String(config.model || '').trim()
         this.apiMode = this.agent === 'hermes' ? '' : String(config.apiMode || '').trim()
         this.reasoningEffort = String(config.reasoningEffort || '').trim()
+        this.agentPreset = config.agentPreset
         this.name = config.name
         this.description = config.description
         this.backgroundDelegationEnabled = config.backgroundDelegationEnabled ?? false
@@ -413,6 +427,9 @@ export class AgentClient implements GroupAgentExecutor {
         const token = await getToken()
 
         this.socket = io(`http://127.0.0.1:${actualPort}/group-chat`, {
+            // A relay namespace can close its entire transport. Do not let it
+            // share this Agent's connection and permanently disconnect it.
+            forceNew: true,
             auth: {
                 token: token || undefined,
                 userId: this.agentId,
@@ -1135,6 +1152,8 @@ export class AgentClient implements GroupAgentExecutor {
     ): Promise<void> {
         if (!this.chatRunService) throw new Error('Chat run service is not ready')
         const responseRunId = groupMessageId(roomId, this.profile, this.name)
+        const pushRoot = findPushRunLink('group_root', roomId, msg.handoffChainId || msg.messageId || '')
+        if (pushRoot) linkPushRun('group_runtime', roomId, responseRunId, pushRoot)
         const runMessageId = groupMessagePartId(responseRunId, 0)
         const sessionId = groupRuntimeSessionId(roomId, this.profile, this.name)
         this.activeSessions.set(roomId, sessionId)
@@ -1184,7 +1203,7 @@ export class AgentClient implements GroupAgentExecutor {
                         ? 'pi'
                         : this.agent === 'grok'
                             ? 'grok'
-                            : this.agent === 'opencode'
+                            : this.agent === 'dsh' ? 'dsh' : this.agent === 'opencode'
                                 ? 'opencode'
                                 : 'codex'
             const usesGlobalCodingAgent = this.agentMode === 'global' && codingAgentId !== 'ekko-agent'
@@ -1207,6 +1226,7 @@ export class AgentClient implements GroupAgentExecutor {
                 coding_agent_id: codingAgentId,
                 mode: usesGlobalCodingAgent ? 'global' : 'scoped',
                 profile: this.profile,
+                ...(this.agentPreset ? { agent_preset: this.agentPreset } : {}),
                 ...(!usesGlobalCodingAgent && this.reasoningEffort
                     ? { reasoning_effort: this.reasoningEffort }
                     : {}),
@@ -1240,7 +1260,13 @@ export class AgentClient implements GroupAgentExecutor {
                     : {}),
             }, {
                 profile: this.profile,
+                ...(pushRoot ? { pushRoot: { kind: pushRoot.kind, profile: pushRoot.profile, runId: pushRoot.run_id } } : {}),
                 onEvent: (event, payload = {}) => {
+                    // Keep the terminal card after a user interrupt, while still rejecting an old room session.
+                    if (event === 'plan.updated' && payload.execution_state !== 'running' && this.roomSessionIsCurrent(roomId, sessionId)) {
+                        queueToolEventWrite(() => this.recordTaskPlan(roomId, sessionId, responseRunId, payload))
+                        return
+                    }
                     if (!isCurrent()) {
                         if (!abortRequested) {
                             abortRequested = true
@@ -1255,6 +1281,8 @@ export class AgentClient implements GroupAgentExecutor {
                         sawReasoningDelta = true
                         reasoningContent += payload.delta
                         this.emitMessageReasoningDelta(roomId, runMessageId, payload.delta, sessionId)
+                    } else if (event === 'plan.updated') {
+                        queueToolEventWrite(() => this.recordTaskPlan(roomId, sessionId, responseRunId, payload))
                     } else if (event === 'tool.started') {
                         const toolReasoning = reasoningContent
                         reasoningContent = ''
@@ -1355,6 +1383,8 @@ export class AgentClient implements GroupAgentExecutor {
             return
         }
         const runMessageId = groupMessageId(roomId, this.profile, this.name)
+        const pushRoot = findPushRunLink('group_root', roomId, msg.handoffChainId || msg.messageId || '')
+        if (pushRoot) linkPushRun('group_runtime', roomId, runMessageId, pushRoot)
         let partIndex = 0
         let streamMessageId = groupMessagePartId(runMessageId, partIndex)
         let currentContent = ''
@@ -1365,6 +1395,9 @@ export class AgentClient implements GroupAgentExecutor {
         let workspaceRunState: WorkspaceDiffRunState | null = null
         let activeSessionId = ''
         let activeReplyInterruptVersion = 0
+        let groupPlan: ReturnType<NonNullable<GroupChatRunService['beginGroupTaskPlanRun']>> | undefined
+        let planWrites = Promise.resolve()
+        let planFailed = false
         let staleStartedRunStopped = false
         let stopStaleStartedRun: ((reason?: string) => Promise<void>) | null = null
         try {
@@ -1440,9 +1473,13 @@ export class AgentClient implements GroupAgentExecutor {
                 : `${routedPrefix}\n\nOriginal message: ${stripMentionRoutingTokens(msg.content, this.name) || msg.content}`
             const runPrompt = 'When calling Hermes Web UI endpoints from tools or skills, include the current Hermes profile as the X-Hermes-Profile header if the endpoint supports profile-scoped behavior.'
             instructions = `${instructions}\n\n${runPrompt}`
-            const bridgeInput: GroupPrimaryAgentBridgeMessage = isContentBlockArray(input)
-                ? await convertContentBlocksForAgent(input)
-                : input
+            groupPlan = this.chatRunService?.beginGroupTaskPlanRun?.(sessionId, this.profile, runMessageId,
+                () => this.replySessionIsCurrent(roomId, sessionId, replyInterruptVersion),
+                snapshot => { planWrites = planWrites.then(() => this.recordTaskPlan(roomId, sessionId, runMessageId, snapshot)).catch(error => { logger.warn(error, '[GroupChat] task plan delivery failed') }) })
+            const planInput = withTaskPlanTurnContext(input, groupPlan?.contextId)
+            const bridgeInput: GroupPrimaryAgentBridgeMessage = isContentBlockArray(planInput)
+                ? await convertContentBlocksForAgent(planInput)
+                : planInput as string
             if (!this.replySessionIsCurrent(roomId, sessionId, replyInterruptVersion)) {
                 await stopStaleStartedRun?.()
                 return
@@ -1594,6 +1631,7 @@ export class AgentClient implements GroupAgentExecutor {
             this.stopTyping(roomId)
             reportStatus('ready')
         } catch (err: any) {
+            planFailed = true
             logger.error(`[AgentClients] ${this.name}: error handling message: ${err.message}`)
             if (activeSessionId && !this.replySessionIsCurrent(roomId, activeSessionId, activeReplyInterruptVersion)) {
                 await stopStaleStartedRun?.()
@@ -1620,6 +1658,10 @@ export class AgentClient implements GroupAgentExecutor {
                 onStatus?.('ready', { runId: runMessageId })
             }
         } finally {
+            try {
+                groupPlan?.finish(!this.replySessionIsCurrent(roomId, activeSessionId, activeReplyInterruptVersion) ? 'interrupted' : planFailed ? 'failed' : 'ended')
+                await planWrites
+            } catch (error) { logger.warn(error, '[GroupChat] task plan finalization failed') }
             if (activeSessionId) {
                 if (this.activeSessions.get(roomId) === activeSessionId) this.activeSessions.delete(roomId)
                 await createGroupPrimaryAgentBridge().destroy(activeSessionId, this.profile).catch((err: any) => {
@@ -1704,6 +1746,8 @@ export class AgentClient implements GroupAgentExecutor {
                 this.emitClarifyRequested(roomId, {
                     event: 'clarify.requested',
                     agentSessionId: sessionId,
+                    runId: responseRunId,
+                    runtimeRunId: String((ev as any).run_id || ''),
                     clarify_id: (ev as any).clarify_id,
                     question: (ev as any).question,
                     choices: Array.isArray((ev as any).choices) ? (ev as any).choices : null,
@@ -1728,6 +1772,11 @@ export class AgentClient implements GroupAgentExecutor {
             }
         }
         return reasoning
+    }
+
+    private async recordTaskPlan(roomId: string, sessionId: string, runId: string, snapshot: unknown): Promise<void> {
+        const message = groupTaskPlanMessage(roomId, sessionId, runId, snapshot)
+        if (message) await this.sendMessage(roomId, message.content, message.id, message.extra, sessionId)
     }
 
     private recordToolStarted(
@@ -1981,8 +2030,14 @@ export class AgentClient implements GroupAgentExecutor {
             this.handlers.onRoomUpdated?.(data)
         })
 
-        // Auto rejoin rooms on reconnect
-        s.io.on('reconnect', async () => {
+        s.on('disconnect', (reason) => {
+            logger.info({ agentId: this.agentId, reason, willReconnect: s.active }, '[AgentClient] group socket disconnected')
+        })
+
+        // Manager reconnect fires before this namespace is connected, when
+        // joinRoom still fails ensureConnected(). Rejoin after socket connect.
+        s.on('connect', async () => {
+            if (s !== this.socket || this.joinedRooms.size === 0) return
             if (this._reconnecting) return
             this._reconnecting = true
             logger.info(`[AgentClients] ${this.name} reconnecting, rejoining ${this.joinedRooms.size} rooms...`)
@@ -2016,7 +2071,8 @@ export function groupBridgeSessionId(
     const runtimeKey = agent !== 'hermes' || provider || model || apiMode || reasoningEffort || modeKey
         ? `_${agent}${modeKey}_${provider}_${model}_${apiMode}_${reasoningEffort}`
         : ''
-    const rawKey = `gc_${roomId}_${profile}_${name}_${sessionSeed || '0'}${runtimeKey}`
+    const presetKey = runtimeConfig.agentPreset ? `_preset_${runtimeConfig.agentPreset}` : ''
+    const rawKey = `gc_${roomId}_${profile}_${name}_${sessionSeed || '0'}${runtimeKey}${presetKey}`
     const safePrefix = rawKey.replace(/[^a-zA-Z0-9_-]/g, '_')
     const keyHash = createHash('sha256').update(rawKey).digest('hex').slice(0, 16)
     const suffix = `_h_${keyHash}`
@@ -2588,6 +2644,7 @@ export class AgentClients {
             model: String(agent.model || ''),
             apiMode: String(agent.apiMode || ''),
             reasoningEffort: String(agent.reasoningEffort || ''),
+            agentPreset: String(agent.agentPreset || ''),
             name: String(agent.name || ''),
             description: String(agent.description || ''),
         }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import { io, type Socket } from 'socket.io-client'
-import { config, socketIoClientPath } from '../../public/config'
+import { config } from '../../public/config'
+import { socketIoClientPath } from '../../public/socket-io-path'
 import {
   assignLegacyCloudAppConnectionUser,
   listAppConnections,
@@ -39,11 +40,14 @@ const ALLOWED_REQUEST_HEADERS = new Set([
   'x-group-agent-request-secret',
   'x-expected-sha256',
 ])
-const ALLOWED_SOCKET_NAMESPACES = new Set(['/chat-run', '/group-chat', '/workflow', '/group-chat-agent-relay'])
+const ALLOWED_TERMINAL_CLIENT_EVENTS = new Set(['terminal.capabilities', 'terminal.list', 'terminal.create', 'terminal.attach', 'terminal.read', 'terminal.input', 'terminal.resize', 'terminal.detach', 'terminal.close'])
+const ALLOWED_SOCKET_NAMESPACES = new Set(['/terminal', '/chat-run', '/group-chat', '/workflow', '/group-chat-agent-relay'])
 const ALLOWED_GROUP_AGENT_CLIENT_EVENTS = new Set([
-  'run.accepted', 'run.completed', 'run.failed', 'agent.event', 'agent.config.update', 'attachment.read', 'connector.revoke',
+  'run.accepted', 'run.completed', 'run.failed', 'agent.event', 'agent.events', 'agent.config.update', 'attachment.read', 'connector.revoke',
 ])
 const ALLOWED_CHAT_RUN_CLIENT_EVENTS = new Set([
+  'app.events.subscribe',
+  'app.events.unsubscribe',
   'run',
   'resume',
   'app.resume',
@@ -52,11 +56,15 @@ const ALLOWED_CHAT_RUN_CLIENT_EVENTS = new Set([
   'cancel_queued_run',
   'approval.respond',
   'clarify.respond',
+  'calendar.respond',
+  'reminder.respond',
   'location.respond',
+  'health.respond',
 ])
 const ALLOWED_GROUP_CHAT_CLIENT_EVENTS = new Set([
   'join',
   'load_pending_approvals',
+  'load_room_agent_activities',
   'load_messages',
   'update_member_profile',
   'message',
@@ -353,7 +361,8 @@ export class AppRelayClient {
       void this.emitLocalSocketEvent(request).then(response => ack?.(response))
     })
     this.socket.on('app.socket.close', (request: AppRelaySocketCloseRequest, ack?: (response: AppRelaySocketResponse) => void) => {
-      ack?.(this.closeLocalSocket(request))
+      const response = this.closeLocalSocket(request)
+      ack?.(response)
     })
   }
 
@@ -1196,6 +1205,7 @@ function isMediaHttpRequest(request: AppRelayHttpRequest): boolean {
 }
 
 function isAllowedSocketEvent(namespace: string, event: string): boolean {
+  if (namespace === '/terminal') return ALLOWED_TERMINAL_CLIENT_EVENTS.has(event)
   if (namespace === '/group-chat-agent-relay') return ALLOWED_GROUP_AGENT_CLIENT_EVENTS.has(event)
   if (namespace === '/chat-run') return ALLOWED_CHAT_RUN_CLIENT_EVENTS.has(event)
   if (namespace === '/group-chat') return ALLOWED_GROUP_CHAT_CLIENT_EVENTS.has(event)

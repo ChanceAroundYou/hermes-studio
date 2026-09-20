@@ -16,11 +16,13 @@ const getUsageStatsFromDbMock = vi.fn()
 const getSessionMock = vi.fn()
 const deleteHermesSessionForProfileMock = vi.fn()
 const localListSessionsMock = vi.fn()
+const localCountSessionsMock = vi.fn()
 const localGetSessionDetailMock = vi.fn()
 const localSearchSessionsMock = vi.fn()
 const localDeleteSessionMock = vi.fn()
 const localRenameSessionMock = vi.fn()
 const localSetSessionArchivedMock = vi.fn()
+const localSetSessionPinnedMock = vi.fn()
 const localSetSessionPushEnabledMock = vi.fn()
 const localCreateSessionMock = vi.fn()
 const localUpdateSessionMock = vi.fn()
@@ -46,9 +48,11 @@ const bridgeSwitchSessionModelMock = vi.fn()
 const bridgeGetRuntimeStateMock = vi.fn()
 const emitSessionSettingsUpdatedMock = vi.fn()
 const getChatRunServerMock = vi.fn()
+const agentStatusMocks = vi.hoisted(() => ({ hermesAvailable: true }))
 const codingAgentRunManagerMock = vi.hoisted(() => ({
   stop: vi.fn(),
 }))
+const invalidateCodingAgentSessionRuntimeMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../../packages/server/src/modules/hermes/services/history/conversations-db', () => ({
   listConversationSummariesFromDb: listConversationSummariesFromDbMock,
@@ -94,12 +98,14 @@ vi.mock('../../packages/server/src/modules/hermes/services/history/sessions-db',
 
 vi.mock('../../packages/server/src/modules/studio/repositories/session-store', () => ({
   listSessions: localListSessionsMock,
+  countSessions: localCountSessionsMock,
   searchSessions: localSearchSessionsMock,
   getSessionDetail: localGetSessionDetailMock,
   deleteSession: localDeleteSessionMock,
   renameSession: localRenameSessionMock,
   setSessionArchived: localSetSessionArchivedMock,
   setSessionPushEnabled: localSetSessionPushEnabledMock,
+  setSessionPinned: localSetSessionPinnedMock,
   createSession: localCreateSessionMock,
   addMessages: localAddMessagesMock,
   getSession: getSessionMock,
@@ -234,11 +240,17 @@ vi.mock('../../packages/server/src/modules/studio/public/session-agent-runtime',
     )
   },
   stopCodingAgentSessionRun: codingAgentRunManagerMock.stop,
+  invalidateCodingAgentSessionRuntime: invalidateCodingAgentSessionRuntimeMock,
+}))
+
+vi.mock('../../packages/server/src/modules/studio/public/agent-status-registry', () => ({
+  isHermesAgentAvailable: vi.fn(() => agentStatusMocks.hermesAvailable),
 }))
 
 describe('session conversations controller', () => {
   beforeEach(() => {
     vi.resetModules()
+    agentStatusMocks.hermesAvailable = true
     listConversationSummariesFromDbMock.mockReset()
     getConversationDetailFromDbMock.mockReset()
     listConversationSummariesMock.mockReset()
@@ -252,11 +264,13 @@ describe('session conversations controller', () => {
     getSessionMock.mockReset()
     deleteHermesSessionForProfileMock.mockReset()
     localListSessionsMock.mockReset()
+    localCountSessionsMock.mockReset().mockReturnValue(0)
     localGetSessionDetailMock.mockReset()
     localSearchSessionsMock.mockReset()
     localDeleteSessionMock.mockReset()
     localRenameSessionMock.mockReset()
     localSetSessionArchivedMock.mockReset()
+    localSetSessionPinnedMock.mockReset()
     localSetSessionPushEnabledMock.mockReset()
     localCreateSessionMock.mockReset()
     localUpdateSessionMock.mockReset()
@@ -307,6 +321,7 @@ describe('session conversations controller', () => {
     bridgeGetRuntimeStateMock.mockReset()
     bridgeGetRuntimeStateMock.mockReturnValue({ ready: false, running: false, endpoint: 'ipc:///tmp/hermes-agent-bridge.sock' })
     codingAgentRunManagerMock.stop.mockReset()
+    invalidateCodingAgentSessionRuntimeMock.mockReset()
   })
 
   it('lists conversations from the local session store', async () => {
@@ -988,6 +1003,85 @@ describe('session conversations controller', () => {
     })
   })
 
+  it('returns a single-chat page with a lookahead row without changing legacy list responses', async () => {
+    localCountSessionsMock.mockReturnValue(5)
+    localListSessionsMock.mockReturnValue([
+      { id: 'chat-3', profile: 'travel', source: 'cli' },
+      { id: 'chat-2', profile: 'travel', source: 'cli' },
+      { id: 'chat-1', profile: 'travel', source: 'cli' },
+    ])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { profile: 'travel', offset: '2', limit: '2' }, state: {}, body: null }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenCalledWith('travel', undefined, 3, expect.objectContaining({ offset: 2 }))
+    expect(ctx.body).toEqual({
+      sessions: [
+        expect.objectContaining({ id: 'chat-3' }),
+        expect.objectContaining({ id: 'chat-2' }),
+      ],
+      hasMore: true, offset: 2, limit: 2, total: 5,
+    })
+    localListSessionsMock.mockReturnValue([{ id: 'chat-1', profile: 'travel', source: 'cli' }])
+    ctx.query.offset = '4'
+    await mod.list(ctx)
+    expect(ctx.body).toMatchObject({ hasMore: false, offset: 4, limit: 2, total: 5 })
+    localCountSessionsMock.mockClear()
+    delete ctx.query.offset
+    await mod.list(ctx)
+    expect(ctx.body).not.toHaveProperty('hasMore')
+    expect(ctx.body).not.toHaveProperty('total')
+    expect(localCountSessionsMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['-1', 'NaN', '1.5'])('normalizes invalid single-chat offsets (%s)', async (offset) => {
+    localListSessionsMock.mockReturnValue([])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { offset, limit: '10' }, state: {}, body: null }
+    await mod.list(ctx)
+    expect(ctx.body).toEqual({ sessions: [], hasMore: false, offset: 0, limit: 10, total: 0 })
+  })
+
+  it.each([['7', 7], ['none', null]])('passes category %s and pin filters into the paginated query', async (category, categoryId) => {
+    localListSessionsMock.mockReturnValue([])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { category, offset: '10', limit: '10', exclude: ['pin-a', 'pin-b'] }, state: {}, body: null }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, 11, expect.objectContaining({
+      categoryId, offset: 10, excludeSessionIds: ['pin-a', 'pin-b'],
+    }))
+    expect(localCountSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, expect.objectContaining({
+      categoryId, excludeSessionIds: ['pin-a', 'pin-b'], includeArchived: false,
+    }))
+    ctx.query = { include: 'pin-a', offset: '0', limit: '10' }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, 11, expect.objectContaining({ includeSessionIds: ['pin-a'] }))
+    expect(localCountSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, expect.objectContaining({ includeSessionIds: ['pin-a'] }))
+  })
+
+  it('counts only accessible profiles and does not reveal totals for a forbidden explicit profile', async () => {
+    localListSessionsMock.mockReturnValue([])
+    localCountSessionsMock.mockReturnValue(27)
+    listUserProfilesMock.mockReturnValue([{ profile_name: 'default' }])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { offset: '0', limit: '10' }, state: { user: { id: 'user-1', role: 'user' } } }
+    await mod.list(ctx)
+    expect(ctx.body.total).toBe(27)
+    expect(localCountSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, expect.objectContaining({ profiles: ['default'] }))
+    localCountSessionsMock.mockClear()
+    ctx.query.profile = 'travel'
+    await mod.list(ctx)
+    expect(ctx.body.total).toBe(0)
+    expect(localCountSessionsMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['invalid', '-1', '1.5'])('rejects invalid session category %s', async category => {
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { category, offset: '0' }, state: {}, body: null }
+    await mod.list(ctx)
+    expect(ctx.status).toBe(400)
+    expect(localListSessionsMock).not.toHaveBeenCalled()
+  })
+
   it('lists only global-agent sessions when requested by source', async () => {
     localListSessionsMock.mockReturnValue([
       { id: 'global-1', profile: 'default', source: 'global_agent' },
@@ -1332,6 +1426,51 @@ describe('session conversations controller', () => {
     expect(ctx.body).toEqual({ ok: true })
   })
 
+  it('updates the database pin flag and validates input and profile access', async () => {
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    getSessionMock.mockReturnValue({ id: 'session-1', profile: 'default' })
+    localSetSessionPinnedMock.mockReturnValue(true)
+    const ctx: any = { params: { id: 'session-1' }, request: { body: { is_pinned: true } }, state: {} }
+    await mod.setPinned(ctx)
+    expect(localSetSessionPinnedMock).toHaveBeenCalledWith('session-1', true)
+    expect(ctx.body).toEqual({ ok: true, is_pinned: true })
+
+    localSetSessionPinnedMock.mockClear()
+    ctx.request.body.is_pinned = 'true'
+    await mod.setPinned(ctx)
+    expect(ctx.status).toBe(400)
+    expect(localSetSessionPinnedMock).not.toHaveBeenCalled()
+
+    ctx.request.body.is_pinned = false
+    ctx.state = { user: { id: 7, role: 'admin' } }
+    listUserProfilesMock.mockReturnValue([{ profile_name: 'other' }])
+    await mod.setPinned(ctx)
+    expect(ctx.status).toBe(403)
+    expect(localSetSessionPinnedMock).not.toHaveBeenCalled()
+
+    getSessionMock.mockReturnValue(null)
+    await mod.setPinned(ctx)
+    expect(ctx.status).toBe(404)
+  })
+
+  it('supports the pinned category without treating it as a numeric category', async () => {
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    localListSessionsMock.mockReturnValue([])
+    const ctx: any = { query: { category: 'pinned' }, state: {} }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenCalledWith(undefined, undefined, 2000, expect.objectContaining({ pinned: true }))
+    expect(ctx.body).toEqual({ sessions: [] })
+  })
+
+  it('excludes database pins from both category pages and their totals', async () => {
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    localListSessionsMock.mockReturnValue([])
+    const ctx: any = { query: { category: '1', pinned: 'false', offset: '0', limit: '10' }, state: {} }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenCalledWith(undefined, undefined, 11, expect.objectContaining({ categoryId: 1, pinned: false, offset: 0 }))
+    expect(localCountSessionsMock).toHaveBeenCalledWith(undefined, undefined, expect.objectContaining({ categoryId: 1, pinned: false }))
+  })
+
   it('updates whether an accessible session should be pushed', async () => {
     getSessionMock.mockReturnValue({ id: 'session-1', profile: 'default', push_enabled: 0 })
     localSetSessionPushEnabledMock.mockReturnValue(true)
@@ -1647,6 +1786,75 @@ describe('session conversations controller', () => {
       title: 'Hermes detail',
       messages: [{ content: 'from hermes' }],
     })
+  })
+
+  it('returns 404 without reading state.db or spawning Hermes when local history is missing', async () => {
+    agentStatusMocks.hermesAvailable = false
+    localGetSessionDetailMock.mockReturnValue(null)
+    getSessionDetailFromDbMock.mockResolvedValue(null)
+
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { params: { id: 'missing-session' }, body: null }
+    await mod.getHermesSession(ctx)
+
+    expect(getSessionDetailFromDbMock).not.toHaveBeenCalled()
+    expect(getSessionMock).not.toHaveBeenCalled()
+    expect(ctx.status).toBe(404)
+    expect(ctx.body).toEqual({ error: 'Session not found' })
+  })
+
+  it('lists only Studio-local history when Hermes is unavailable', async () => {
+    agentStatusMocks.hermesAvailable = false
+    localListSessionsMock.mockReturnValue([{
+      id: 'local-history',
+      profile: 'default',
+      source: 'api_server',
+      title: 'Local history',
+      last_active: 10,
+    }])
+
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: {}, body: null }
+    await mod.listHermesSessions(ctx)
+
+    expect(listSessionSummariesMock).not.toHaveBeenCalled()
+    expect(ctx.body.sessions).toEqual([expect.objectContaining({ id: 'local-history' })])
+  })
+
+  it('includes database-pinned history even when it falls outside the source page', async () => {
+    agentStatusMocks.hermesAvailable = false
+    localListSessionsMock.mockReturnValue([
+      { id: 'old-pin', profile: 'default', source: 'api_server', last_active: 1, is_pinned: 1 },
+      { id: 'new', profile: 'default', source: 'api_server', last_active: 100, is_pinned: 0 },
+    ])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { limit: '1' }, state: {} }
+    await mod.listHermesSessionGroups(ctx)
+    expect(ctx.body.groups[0].sessions.map((s: any) => s.id)).toEqual(['new'])
+    expect(ctx.body.included).toEqual([expect.objectContaining({ id: 'old-pin', is_pinned: 1 })])
+  })
+
+  it('groups only Studio-local history when Hermes is unavailable', async () => {
+    agentStatusMocks.hermesAvailable = false
+    localListSessionsMock.mockReturnValue([{
+      id: 'local-history',
+      profile: 'default',
+      source: 'api_server',
+      title: 'Local history',
+      last_active: 10,
+    }])
+
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { limit: '20' }, body: null }
+    await mod.listHermesSessionGroups(ctx)
+
+    expect(listSessionSummaryGroupsMock).not.toHaveBeenCalled()
+    expect(ctx.body.groups).toEqual([
+      expect.objectContaining({
+        source: 'api_server',
+        sessions: [expect.objectContaining({ id: 'local-history' })],
+      }),
+    ])
   })
 
   it('reads Hermes history detail from the requested profile database', async () => {
@@ -1968,6 +2176,19 @@ describe('session conversations controller', () => {
       reasoning_effort: 'high',
     })
     expect(ctx.body).toEqual({ ok: true, reasoning_effort: 'high' })
+  })
+
+  it('restarts a Grok runtime after changing session reasoning effort', async () => {
+    getSessionMock.mockReturnValue({ id: 'grok-session', profile: 'default', agent: 'grok' })
+
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    await mod.setReasoningEffort({
+      params: { id: 'grok-session' },
+      request: { body: { reasoningEffort: 'max' } },
+      body: null,
+    } as any)
+
+    expect(invalidateCodingAgentSessionRuntimeMock).toHaveBeenCalledWith('grok-session')
   })
 
   it('deletes a current-profile Hermes history session even when no local Web UI session exists', async () => {

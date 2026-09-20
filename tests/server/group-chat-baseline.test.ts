@@ -254,6 +254,24 @@ describe('group chat baseline behavior', () => {
     })).resolves.toBe('Unauthorized')
   })
 
+  it('atomically binds mobile human messages to separate group roots', async () => {
+    const storage = groupServer.getStorage()
+    storage.saveRoom('push-room', 'Push Room', 'PUSH')
+    const phone = await connectGroupChatClient(port, 'owner', 'Owner')
+    harness.sockets.push(phone)
+    await emitAck(phone, 'join', { roomId: 'push-room', name: 'Owner', inviteCode: 'PUSH' })
+    const serverSocket = groupServer.getIO().of('/group-chat').sockets.get(phone.id!)!
+    serverSocket.data.pushActor = { userId: 7, deviceId: 'phone-a', studioDeviceId: 'studio-a' }
+    const first = await emitAck<any>(phone, 'message', { roomId: 'push-room', content: 'First', handoffChainId: 'spoof' })
+    const second = await emitAck<any>(phone, 'message', { roomId: 'push-room', content: 'Second' })
+    expect(first.error).toBeUndefined()
+    expect(second.error).toBeUndefined()
+    const targets = harness.db.prepare('SELECT * FROM run_push_targets ORDER BY created_at').all() as any[]
+    expect(targets.map(target => target.run_id)).toEqual([first.id, second.id])
+    expect(targets.every(target => target.device_id === 'phone-a' && target.studio_device_id === 'studio-a' && target.kind === 'group')).toBe(true)
+    expect(storage.getRecentMessagesForUI('push-room')).toHaveLength(2)
+  })
+
   it('allows only the room owner to broadcast with @all', async () => {
     const storage = groupServer.getStorage()
     storage.saveRoom('room-1', 'Shared Room', 'ROOM1')
@@ -842,6 +860,43 @@ describe('group chat baseline behavior', () => {
         }),
       ],
     })
+
+    const { OutboundRelayEventSink, supportsAgentEventBatching } = await import('../../packages/server/src/modules/studio/services/group-chat/agent-relay-event-sink')
+    const streamStart = vi.spyOn(AgentClient.prototype, 'emitMessageStreamStart').mockImplementation(() => {})
+    const streamDelta = vi.spyOn(AgentClient.prototype, 'emitMessageStreamDelta').mockImplementation(() => {})
+    const reasoningDelta = vi.spyOn(AgentClient.prototype, 'emitMessageReasoningDelta').mockImplementation(() => {})
+    const streamEnd = vi.spyOn(AgentClient.prototype, 'emitMessageStreamEnd').mockImplementation(() => {})
+    const batchRunRequested = once<any>(intendedTarget as any, 'run.request', 2_000)
+    const batchReply = executor.replyToMention('room-relay', {
+      messageId: 'batch-source', content: 'burst output', senderName: 'Relay Guest',
+      senderId: 'guest-relay', timestamp: Date.now(), role: 'user',
+    })
+    const batchRun = await batchRunRequested
+    intendedTarget.emit('run.accepted', { runId: batchRun.runId })
+    expect(supportsAgentEventBatching(readyPayload, false)).toBe(true)
+    const sink = new OutboundRelayEventSink(intendedTarget, data => data)
+    sink.setBatching(true)
+    sink.begin(batchRun.runId)
+    sink.emit('message_stream_start', { id: 'batch-message' })
+    for (let i = 0; i < 200; i++) {
+      sink.emit('message_reasoning_delta', { id: 'batch-message', delta: '思考' })
+      sink.emit('message_stream_delta', { id: 'batch-message', delta: String(i) })
+    }
+    await sink.sendMessage('room-relay', 'complete batch answer', 'batch-message', { role: 'assistant' })
+    sink.emit('message_stream_end', { id: 'batch-message' })
+    await sink.drain()
+    intendedTarget.emit('run.completed', { runId: batchRun.runId })
+    await batchReply
+    sink.end(batchRun.runId)
+    const mappedMessageId = streamStart.mock.calls[0][1]
+    expect(reasoningDelta).toHaveBeenCalledTimes(200)
+    expect(streamDelta.mock.calls.map(call => call[2])).toEqual(Array.from({ length: 200 }, (_, i) => String(i)))
+    expect(streamDelta.mock.calls.every(call => call[1] === mappedMessageId)).toBe(true)
+    expect(proxySendMessage).toHaveBeenCalledWith('room-relay', 'complete batch answer', mappedMessageId, expect.objectContaining({ role: 'assistant' }), undefined)
+    expect(streamEnd).toHaveBeenCalledWith('room-relay', mappedMessageId, undefined)
+    for (const events of [[], Array.from({ length: 65 }, () => ({ runId: 'invalid', seq: 1 })), [{ runId: 'invalid', seq: 1, data: { delta: 'x'.repeat(16 * 1024) } }]]) {
+      await expect(emitAck<any>(intendedTarget as any, 'agent.events', { events })).resolves.toEqual({ error: 'Invalid remote Agent event batch' })
+    }
 
     const interactionRunRequested = once<any>(intendedTarget as any, 'run.request', 2_000)
     const interactionReply = executor.replyToMention('room-relay', {

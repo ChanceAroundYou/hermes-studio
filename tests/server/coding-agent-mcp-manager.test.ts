@@ -76,6 +76,37 @@ afterEach(() => {
 })
 
 describe('coding Agent MCP manager', () => {
+  it.each(['claude-code', 'codex', 'pi', 'grok', 'opencode', 'dsh'] as const)('gives %s a shared plan/clarification MCP with enough time for a user answer', async agent => {
+    makeHome()
+    const { servers } = await listCodingAgentMcpServers(agent)
+    expect(servers.some(server => server.name === 'ekko-studio-plan')).toBe(false)
+    const interaction = servers.find(server => server.name === 'ekko-studio-interaction')!
+    expect(interaction.managed).toBe(true)
+    const config = interaction.raw_config
+    if (agent === 'codex' || agent === 'grok') expect(config.tool_timeout_sec).toBeGreaterThanOrEqual(360)
+    else if (agent === 'pi') expect(config.requestTimeoutMs).toBeGreaterThanOrEqual(360_000)
+    else if (agent === 'dsh') expect(config.toolCallTimeoutMs).toBeGreaterThanOrEqual(360_000)
+    else expect(config.timeout).toBeGreaterThanOrEqual(360_000)
+    expect((config.env || config.environment).ELECTRON_RUN_AS_NODE).toBe('1')
+    expect((config.env || config.environment).HERMES_MCP_USER_CLARIFICATION).toBe('1')
+  })
+
+  it('manages DSH native patches without persisting Studio-managed entries', async () => {
+    const home = makeHome()
+    await upsertCodingAgentMcpServer('dsh', 'docs', { command: 'node', args: ['docs.mjs'] })
+    const listed = await listCodingAgentMcpServers('dsh')
+    expect(listed.servers.find(server => server.name === 'docs')).toMatchObject({ raw_config: { enabled: true }, managed: false })
+    const managed = listed.servers.filter(server => server.managed)
+    expect(managed).toHaveLength(5)
+    for (const server of managed) expect(server.raw_config.env.ELECTRON_RUN_AS_NODE).toBe('1')
+    const path = join(home, '.dsh', 'cordis.patch.yml')
+    expect(readFileSync(path, 'utf8')).not.toContain('ekko-studio-api')
+    await upsertCodingAgentMcpServer('dsh', 'ekko-studio-api', { enabled: false })
+    expect((await listCodingAgentMcpServers('dsh')).servers.find(server => server.name === 'ekko-studio-api')?.raw_config.enabled).toBe(false)
+    await removeCodingAgentMcpServer('dsh', 'docs')
+    expect((await listCodingAgentMcpServers('dsh')).servers.some(server => server.name === 'docs')).toBe(false)
+  })
+
   it('manages Claude JSON while preserving unrelated root configuration', async () => {
     const home = makeHome()
     const path = join(home, '.claude', 'mcp.json')
@@ -90,12 +121,13 @@ describe('coding Agent MCP manager', () => {
     const initial = await listCodingAgentMcpServers('claude-code')
     expect(initial.servers.map(server => server.name)).toEqual(expect.arrayContaining([
       'docs',
-      'hermes-studio-api',
-      'hermes-studio-browser',
-      'hermes-studio-devices',
-      'hermes-studio-use',
+      'ekko-studio-api',
+      'ekko-studio-browser',
+      'ekko-studio-devices',
+      'ekko-studio-use',
+      'ekko-studio-interaction',
     ]))
-    expect(initial.servers.find(server => server.name === 'hermes-studio-api')).toMatchObject({
+    expect(initial.servers.find(server => server.name === 'ekko-studio-api')).toMatchObject({
       managed: true,
       connected: false,
       tools_registered: 0,
@@ -113,7 +145,7 @@ describe('coding Agent MCP manager', () => {
     expect(persisted.mcpServers).toEqual({
       search: { command: 'node', args: ['search.mjs'], enabled: true },
     })
-    expect(persisted.mcpServers['hermes-studio-api']).toBeUndefined()
+    expect(persisted.mcpServers['ekko-studio-api']).toBeUndefined()
   })
 
   it('preserves Pi MCP settings and rejects malformed JSON instead of overwriting it', async () => {
@@ -176,7 +208,7 @@ describe('coding Agent MCP manager', () => {
     expect(persisted).toContain('[mcp_servers.remote-tools]')
     expect(persisted).toContain('[mcp_servers.remote-tools.http_headers]')
     expect(persisted).not.toContain('[mcp_servers."docs.search"]')
-    expect(persisted).not.toContain('[mcp_servers.hermes-studio-api]')
+    expect(persisted).not.toContain('[mcp_servers.ekko-studio-api]')
   })
 
   it('manages and probes OpenCode MCP using its native config shape', async () => {
@@ -225,7 +257,7 @@ describe('coding Agent MCP manager', () => {
       enabled: true,
       environment: { SEARCH_MODE: 'local' },
     })
-    expect(persisted.mcp['hermes-studio-api']).toBeUndefined()
+    expect(persisted.mcp['ekko-studio-api']).toBeUndefined()
   })
 
   it('prunes a manually removed Codex MCP server from persisted scoped runtimes', async () => {
@@ -330,21 +362,56 @@ describe('coding Agent MCP manager', () => {
       .toEqual(['-y', '@example/docs-mcp'])
   })
 
+  it('migrates legacy plan overrides and disables the renamed interaction server without duplicates', async () => {
+    const home = makeHome()
+    const path = join(home, 'coding-agent', 'mcp-overrides.json')
+    mkdirSync(join(home, 'coding-agent'), { recursive: true })
+    writeFileSync(path, JSON.stringify({
+      disabled: { codex: { default: ['ekko-studio-plan'] } },
+      configs: { codex: { default: { 'ekko-studio-plan': { command: 'custom-plan' } } } },
+    }))
+    const listed = await listCodingAgentMcpServers('codex')
+    expect(listed.servers.some(server => server.name === 'ekko-studio-plan')).toBe(false)
+    expect(listed.servers.find(server => server.name === 'ekko-studio-interaction')?.raw_config).toMatchObject({ command: 'custom-plan', enabled: false })
+    await upsertCodingAgentMcpServer('codex', 'ekko-studio-plan', { enabled: true })
+    expect((await listCodingAgentMcpServers('codex')).servers.find(server => server.name === 'ekko-studio-interaction')?.raw_config.enabled).not.toBe(false)
+  })
+
+  it('migrates persisted managed overrides and allows enabling an old disabled entry', async () => {
+    const home = makeHome()
+    const path = join(home, 'coding-agent', 'mcp-overrides.json')
+    mkdirSync(join(home, 'coding-agent'), { recursive: true })
+    writeFileSync(path, JSON.stringify({
+      disabled: { 'claude-code': { default: ['hermes-studio-api'] } },
+      configs: { 'claude-code': { default: { 'hermes-studio-use': { command: 'custom-use' } } } },
+    }))
+    const listed = await listCodingAgentMcpServers('claude-code')
+    expect(listed.servers.find(server => server.name === 'ekko-studio-api')?.raw_config.enabled).toBe(false)
+    expect(listed.servers.find(server => server.name === 'ekko-studio-use')?.raw_config.command).toBe('custom-use')
+    await upsertCodingAgentMcpServer('claude-code', 'hermes-studio-api', { enabled: true })
+    expect((await listCodingAgentMcpServers('claude-code')).servers
+      .find(server => server.name === 'ekko-studio-api')?.raw_config.enabled).not.toBe(false)
+    const saved = JSON.parse(readFileSync(path, 'utf-8'))
+    expect(saved.disabled).toBeUndefined()
+    expect(saved.configs['claude-code'].default['ekko-studio-use']).toEqual({ command: 'custom-use' })
+    expect(saved.configs['claude-code'].default['hermes-studio-use']).toBeUndefined()
+  })
+
   it('uses per-Agent enable overrides for Studio-managed servers and directly tests custom servers', async () => {
     const home = makeHome()
     expect(existsSync(join(home, '.claude', 'mcp.json'))).toBe(false)
 
     const managed = (await listCodingAgentMcpServers('claude-code')).servers
-      .find(server => server.name === 'hermes-studio-api')!
-    await upsertCodingAgentMcpServer('claude-code', 'hermes-studio-api', {
+      .find(server => server.name === 'ekko-studio-api')!
+    await upsertCodingAgentMcpServer('claude-code', 'ekko-studio-api', {
       ...managed.raw_config,
       enabled: false,
     })
     expect((await listCodingAgentMcpServers('claude-code')).servers
-      .find(server => server.name === 'hermes-studio-api')?.raw_config.enabled).toBe(false)
-    await upsertCodingAgentMcpServer('claude-code', 'hermes-studio-api', { enabled: true })
+      .find(server => server.name === 'ekko-studio-api')?.raw_config.enabled).toBe(false)
+    await upsertCodingAgentMcpServer('claude-code', 'ekko-studio-api', { enabled: true })
     expect((await listCodingAgentMcpServers('claude-code')).servers
-      .find(server => server.name === 'hermes-studio-api')?.raw_config.enabled).not.toBe(false)
+      .find(server => server.name === 'ekko-studio-api')?.raw_config.enabled).not.toBe(false)
     expect(existsSync(join(home, '.claude', 'mcp.json'))).toBe(false)
     expect(JSON.parse(readFileSync(join(home, 'coding-agent', 'mcp-overrides.json'), 'utf-8')).configs)
       .toBeUndefined()
@@ -379,7 +446,7 @@ describe('coding Agent MCP manager', () => {
       return { invalidated: matched.length, deferred: 0 }
     })
 
-    await upsertCodingAgentMcpServer('codex', 'hermes-studio-api', {
+    await upsertCodingAgentMcpServer('codex', 'ekko-studio-api', {
       url: 'https://mcp.example.com/api',
       enabled: true,
     }, { profile: 'default', provider: 'custom:first' })

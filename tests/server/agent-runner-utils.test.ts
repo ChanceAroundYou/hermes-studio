@@ -38,7 +38,7 @@ describe('agent runner endpoint resolver', () => {
       'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
     )
     expect(chatCompletionsUrl('https://api.z.ai/api/paas/v4')).toBe('https://api.z.ai/api/paas/v4/chat/completions')
-    expect(responsesUrl('https://api.apikey.fun/v1/')).toBe('https://api.apikey.fun/v1/responses')
+    expect(responsesUrl('https://api.apikey.fan/v1/')).toBe('https://api.apikey.fan/v1/responses')
   })
 
   it('does not duplicate existing endpoint paths', () => {
@@ -50,7 +50,7 @@ describe('agent runner endpoint resolver', () => {
   })
 
   it('handles Anthropic-compatible roots', () => {
-    expect(anthropicMessagesUrl('https://api.apikey.fun')).toBe('https://api.apikey.fun/v1/messages')
+    expect(anthropicMessagesUrl('https://api.apikey.fan')).toBe('https://api.apikey.fan/v1/messages')
     expect(anthropicMessagesUrl('https://api.z.ai/api/anthropic')).toBe('https://api.z.ai/api/anthropic/v1/messages')
     expect(providerEndpointUrl('anthropic_messages', 'https://api.example.com/v1')).toBe('https://api.example.com/v1/messages')
   })
@@ -583,7 +583,7 @@ describe('coding agent run state', () => {
     manager.shutdown()
   })
 
-  it('marks existing scoped Codex runners incompatible when Hermes MCP config is missing', () => {
+  it.each(['scoped', 'global'] as const)('marks existing %s Codex runners incompatible when Studio MCP config is missing', mode => {
     const codexHome = mkdtempSync(join(tmpdir(), 'hwui-codex-mcp-compat-'))
     try {
       writeFileSync(join(codexHome, 'config.toml'), 'model = "gpt-test"\n')
@@ -594,7 +594,7 @@ describe('coding agent run state', () => {
       manager.start({
         agentSessionId: 'agent-session-1',
         agentId: 'codex',
-        mode: 'scoped',
+        mode,
         profile: 'default',
         provider: 'test-provider',
         model: 'gpt-test',
@@ -609,15 +609,15 @@ describe('coding agent run state', () => {
 
       expect(manager.isSessionLaunchCompatible('chat-session-1', {
         agentId: 'codex',
-        mode: 'scoped',
+        mode,
         provider: 'test-provider',
         model: 'gpt-test',
       })).toBe(false)
 
-      writeFileSync(join(codexHome, 'config.toml'), '[mcp_servers.hermes-studio]\ncommand = "node"\n')
+      writeFileSync(join(codexHome, 'config.toml'), ['api', 'browser', 'devices', 'use', 'interaction'].map(toolset => `[mcp_servers.ekko-studio-${toolset}]\ncommand = "node"\n`).join('\n'))
       expect(manager.isSessionLaunchCompatible('chat-session-1', {
         agentId: 'codex',
-        mode: 'scoped',
+        mode,
         provider: 'test-provider',
         model: 'gpt-test',
       })).toBe(true)
@@ -625,6 +625,25 @@ describe('coding agent run state', () => {
       manager.shutdown()
     } finally {
       rmSync(codexHome, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['claude-code', 'pi'])('refreshes global %s runners that lack the private MCP launch argument', agentId => {
+    const root = mkdtempSync(join(tmpdir(), 'hwui-global-mcp-compat-'))
+    const manager = new CodingAgentRunManager()
+    try {
+      const mcpPath = join(root, 'mcp.json')
+      writeFileSync(mcpPath, '{"mcpServers":{}}')
+      const launch = { agentId, mode: 'global', args: [] as string[], reasoningEffort: '' }
+      ;(manager as any).getBySession = () => ({ exited: false, launch })
+      expect(manager.isSessionLaunchCompatible('session', { agentId, mode: 'global' })).toBe(false)
+      launch.args = ['--mcp-config', mcpPath]
+      expect(manager.isSessionLaunchCompatible('session', { agentId, mode: 'global' })).toBe(true)
+      rmSync(mcpPath)
+      expect(manager.isSessionLaunchCompatible('session', { agentId, mode: 'global' })).toBe(false)
+    } finally {
+      manager.shutdown()
+      rmSync(root, { recursive: true, force: true })
     }
   })
 

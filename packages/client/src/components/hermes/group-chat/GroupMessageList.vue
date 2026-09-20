@@ -36,6 +36,7 @@ const emptyStateAgents = [
     { name: 'Pi', src: `${base}/coding-agents/pi.svg` },
     { name: 'Grok', src: `${base}/coding-agents/grok.svg` },
     { name: 'OpenCode', src: `${base}/coding-agents/opencode.png` },
+    { name: 'DeepSeek Harness', src: `${base}/coding-agents/deepseek.svg` },
 ]
 const displayMessages = computed(() => groupAgentRunMessages(store.sortedMessages.filter(msg =>
     msg.role !== 'tool' ||
