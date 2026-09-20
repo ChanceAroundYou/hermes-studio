@@ -37,6 +37,8 @@ const ALLOWED_REQUEST_HEADERS = new Set([
   'range',
   'x-hermes-profile',
   'x-request-id',
+  'x-app-access-token',
+  'x-session-share-token',
   'x-group-agent-request-secret',
   'x-expected-sha256',
 ])
