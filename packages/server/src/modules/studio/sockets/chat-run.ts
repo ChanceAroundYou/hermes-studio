@@ -432,6 +432,9 @@ export class ChatRunSocket {
     if (event === 'clarify.resolved') this.clearClarifyEventState(sessionId, String(payload.clarify_id))
   })
   private bridgeResumePolls = new Set<string>()
+  /** A run that produced no bridge activity for this long is presumed dead. */
+  private static readonly RUN_RECONCILE_STALE_MS = 10 * 60 * 1000
+  private static readonly RUN_RECONCILE_INTERVAL_MS = 30 * 1000
   private readonly runWaiters = new Map<string, Set<(event: string, payload: any) => void>>()
   private readonly pendingMobileLocations = new Map<string, PendingMobileLocationRequest>()
   private readonly mobileRunTargets = new Map<string, MobileDeviceTarget>()
@@ -439,6 +442,15 @@ export class ChatRunSocket {
   private readonly pendingMobileHealth = new Map<string, PendingMobileHealthRequest>()
   private backgroundPollTimer?: NodeJS.Timeout
   private backgroundPollInFlight = false
+  /**
+   * Reconciliation watchdog. Local run state can outlive the real run when a
+   * terminal event is lost (dropped chunks after a resume, a killed socket, a
+   * crashed worker). Every such leak made the session look busy forever and
+   * queued the user's next message instead of dispatching it, so the state is
+   * periodically verified against the bridge rather than trusted.
+   */
+  private runReconcileTimer?: NodeJS.Timeout
+  private runReconcileInFlight = false
   private backgroundRecoveryNeeded = true
   private backgroundBrokerId?: string
   private backgroundPollRetryAt = 0
@@ -705,6 +717,8 @@ export class ChatRunSocket {
     this.backgroundPollTimer = setInterval(() => void this.pollBackgroundWork(), 500)
     this.backgroundPollTimer.unref?.()
     void this.pollBackgroundWork()
+    this.runReconcileTimer = setInterval(() => void this.reconcileStaleRuns(), ChatRunSocket.RUN_RECONCILE_INTERVAL_MS)
+    this.runReconcileTimer.unref?.()
     logger.info('[chat-run-socket] Socket.IO ready at /chat-run')
   }
 
@@ -1995,6 +2009,90 @@ export class ChatRunSocket {
     }
   }
 
+  /**
+   * Reconcile local run state against the bridge for sessions that claim to be
+   * working but have not produced activity for a long time.
+   *
+   * This is the safety net that does not depend on any single delivery path:
+   * whatever drops a terminal event (stale-guarded chunks, a resume replacing
+   * the active run, a dead worker, a killed socket), the leaked `isWorking` is
+   * corrected within one interval instead of persisting for hours. Without it a
+   * stuck session keeps answering `isWorking: true`, so the client shows
+   * "thinking" forever and the user's next message is queued instead of sent.
+   */
+  private async reconcileStaleRuns() {
+    if (this.closing || this.runReconcileInFlight) return
+    this.runReconcileInFlight = true
+    try {
+      const now = Date.now()
+      const suspects: Array<{ sid: string; state: SessionState; profile: string }> = []
+      for (const [sid, state] of this.sessionMap) {
+        if (!state.isWorking) continue
+        // A live run has an abort handle / recorded start; without any signal
+        // we cannot judge age, so leave it to the run's own lifecycle.
+        const startedAt = state.runStartedAt || 0
+        if (!startedAt || now - startedAt < ChatRunSocket.RUN_RECONCILE_STALE_MS) continue
+        const session = getSession(sid)
+        if (!isHermesWorkerBackedSession({ source: state.source || session?.source, agent: session?.agent, agent_session_id: session?.agent_session_id })) continue
+        // The run's own profile is the reliable routing key: a lookup under the
+        // wrong profile resolves to "worker not loaded", which reads as
+        // `running: false` and would wrongly clear a live run.
+        const profile = state.profile || session?.profile || ''
+        if (!profile) continue
+        suspects.push({ sid, state, profile })
+      }
+      for (const { sid, state, profile } of suspects) {
+        if (this.closing || this.sessionMap.get(sid) !== state || !state.isWorking) continue
+        let running = false
+        let answerTrusted = false
+        try {
+          const status = await this.bridge.statusIfLoaded(sid, profile, { timeoutMs: 5000 }) as Record<string, unknown>
+          // Only a successful response is authoritative. `status_if_loaded`
+          // reports running:false for a session whose worker is not loaded, which
+          // is exactly what a finished run looks like — so a non-error answer is
+          // trusted here, matching reattachBridgeRun's existing use of this call.
+          if (status.ok === true) {
+            running = status.running === true
+            answerTrusted = true
+          }
+        } catch (err) {
+          logger.debug(err, '[chat-run-socket] run reconcile skipped for session %s (bridge status unavailable)', sid)
+        }
+        // A failed/untrusted lookup must never clear a run that may still be alive.
+        if (!answerTrusted || running) continue
+        const staleMs = now - (state.runStartedAt || now)
+        state.isWorking = false
+        state.isAborting = false
+        state.runStartedAt = undefined
+        state.runId = undefined
+        state.activeRunMarker = undefined
+        state.profile = undefined
+        state.events = []
+        logger.warn(
+          '[chat-run-socket] reconciled stuck run for session %s (no bridge run after %ds); cleared leaked isWorking',
+          sid,
+          Math.round(staleMs / 1000),
+        )
+        // Tell attached clients to stop showing a run that no longer exists.
+        this.emitExternalEvent(sid, 'run.completed', {
+          event: 'run.completed',
+          run_id: '',
+          reconciled: true,
+          queue_remaining: state.queue?.length || 0,
+          background_pending: this.backgroundPendingCount(state),
+        })
+        if (state.queue.length > 0) {
+          const socket = this.socketForQueuedRun(sid, state.queue[0])
+          if (socket) this.dequeueNextQueuedRun(socket, sid)
+        }
+      }
+    } catch (err) {
+      logger.debug(err, '[chat-run-socket] run reconcile pass failed')
+    } finally {
+      this.runReconcileInFlight = false
+    }
+  }
+
   // --- Resume ---
 
   private async resumeSession(
@@ -2085,7 +2183,27 @@ export class ChatRunSocket {
       const status = await this.bridge.statusIfLoaded(sid, profile, { timeoutMs: 5000 }) as Record<string, unknown>
       const running = status.running === true
       const runId = typeof status.current_run_id === 'string' ? status.current_run_id : ''
-      if (!running || !runId) return
+      if (!running || !runId) {
+        // The bridge is authoritative and says nothing is running, yet local
+        // memory still claims a run is live. That happens when a terminal event
+        // was dropped (e.g. the run's chunks were discarded as stale after a
+        // resume replaced the active marker). Clear it here, otherwise every
+        // resume keeps answering `isWorking: true` and the client can never
+        // converge — the session shows "thinking" and new sends get queued.
+        // Only clear when this really looks like a leak: a run was started (we
+        // recorded when) and nothing is running now. A brand-new session with
+        // isWorking=true but no start time is likely mid-setup, not leaked.
+        if (state.isWorking && !state.activeRunMarker && state.runStartedAt && state.runStartedAt > 0) {
+          state.isWorking = false
+          state.isAborting = false
+          state.runStartedAt = undefined
+          state.profile = undefined
+          state.runId = undefined
+          state.events = []
+          logger.info('[chat-run-socket] bridge reports no running run for session %s; cleared leaked isWorking', sid)
+        }
+        return
+      }
       pollKey = `${sid}:${runId}`
       if (this.bridgeResumePolls.has(pollKey)) return
       this.bridgeResumePolls.add(pollKey)
@@ -3075,6 +3193,10 @@ export class ChatRunSocket {
     if (this.backgroundPollTimer) {
       clearInterval(this.backgroundPollTimer)
       this.backgroundPollTimer = undefined
+    }
+    if (this.runReconcileTimer) {
+      clearInterval(this.runReconcileTimer)
+      this.runReconcileTimer = undefined
     }
     for (const requestId of [...this.pendingMobileLocations.keys()]) {
       this.finishMobileLocationRequest(requestId, {

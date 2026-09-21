@@ -1479,6 +1479,40 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
+   * Converge every local "this run is still active" signal to idle, using the
+   * authoritative answer from the server.
+   *
+   * `isStreaming` is an OR over several independent sources
+   * (streamStates, serverWorking, live subagent streams), so clearing only one
+   * of them leaves the session permanently busy: the header keeps showing
+   * "thinking", and the next send is treated as live and gets queued instead of
+   * dispatched. This is the single idempotent place that clears all of them.
+   *
+   * Safe to call repeatedly and from any resume path.
+   */
+  function reconcileSessionIdle(sessionId: string | null | undefined) {
+    const sid = sessionId || ''
+    if (!sid) return
+    serverWorking.value.delete(sid)
+    streamStates.value.delete(sid)
+    clearRunStartedAt(sid)
+    setAbortState(sid, null)
+    // Clear per-message spinner state even when the payload carried no messages
+    // (short runs), and settle any tool row left mid-flight.
+    const msgs = getSessionMsgs(sid)
+    msgs.forEach(m => {
+      if (m.role === 'assistant' && m.isStreaming) {
+        updateMessage(sid, m.id, { isStreaming: false })
+      }
+    })
+    msgs.forEach((m, i) => {
+      if (m.role === 'tool' && m.toolStatus === 'running' && !m.toolCallId?.startsWith('subagent:')) {
+        msgs[i] = { ...m, toolStatus: 'done' }
+      }
+    })
+  }
+
+  /**
    * Every resume path has to agree about the run clock, and every terminal path
    * has to forget it — otherwise the next run in the same session inherits the
    * previous run's start and reports a far larger elapsed time.
@@ -2306,7 +2340,10 @@ export const useChatStore = defineStore('chat', () => {
           if (data.isWorking) {
             serverWorking.value.add(sessionId)
           } else {
-            serverWorking.value.delete(sessionId)
+            // Clearing only serverWorking left streamStartedAt/streamStates and
+            // per-message isStreaming set, so the session stayed "thinking" and
+            // the next send got queued. Reconcile every source at once.
+            reconcileSessionIdle(sessionId)
           }
           backgroundPendingOnResume = Number(data.backgroundPending || 0)
           if (data.queueLength && data.queueLength > 0) {
@@ -4821,7 +4858,16 @@ export const useChatStore = defineStore('chat', () => {
    */
   function resumeServerWorkingRun(sid: string, force = false, passive = false) {
     const generation = runtimeGeneration
-    // Don't register duplicate listeners if already streaming
+    // Don't register duplicate listeners if already streaming.
+    //
+    // A leftover streamStates entry used to make this bail out forever, so a
+    // leaked flag could never be repaired: every later resume re-attached,
+    // saw the entry, returned, and the session stayed "thinking" indefinitely.
+    // When the caller says the run is NOT active, clear local residue first and
+    // re-evaluate, so this path can heal instead of deadlock.
+    if (!force && !passive && !serverWorking.value.has(sid) && streamStates.value.has(sid)) {
+      reconcileSessionIdle(sid)
+    }
     if (streamStates.value.has(sid)) return
     // Only set up listeners if the server reported an active run during resume.
     if (!force && !serverWorking.value.has(sid)) return
@@ -5548,18 +5594,9 @@ export const useChatStore = defineStore('chat', () => {
             if (data.isWorking) {
               serverWorking.value.add(sid)
             } else {
-              serverWorking.value.delete(sid)
-              streamStates.value.delete(sid)
-              // Clear per-message isStreaming so the header indicator turns off
-              // even when data.messages is empty (short tasks).
-              const msgs = getSessionMsgs(sid)
-              msgs.forEach(m => {
-                if (m.role === 'assistant' && m.isStreaming) {
-                  updateMessage(sid, m.id, { isStreaming: false })
-                }
-              })
-              setAbortState(sid, null)
-              // keep compression completed visible
+              // Shared with the switchSession path so the two can never drift.
+              // (This block used to be the only correct one.)
+              reconcileSessionIdle(sid)
             }
             applyResumedRunActivity(sid, data as any)
             if (data.isAborting) {
@@ -5814,7 +5851,12 @@ export const useChatStore = defineStore('chat', () => {
     isRunActive,
     isSessionLive,
     isSessionWorking,
+    reconcileSessionIdle,
     runStartedAt,
+    // Exposed alongside runStartedAt/abortState so the independent sources that
+    // feed `isStreaming` can be inspected and asserted on directly.
+    serverWorking,
+    streamStates,
     isSessionCompletedUnread,
     clearSessionCompletedUnread,
     sessionProfileFilter,

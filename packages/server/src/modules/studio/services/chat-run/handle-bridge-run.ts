@@ -858,10 +858,20 @@ export async function handleBridgeRun(
         break
       }
     }
-    if (!sawTerminalChunk && state.activeRunMarker === runMarker && state.isWorking) {
+    // A terminal chunk can be consumed by ANOTHER owner of this session (a
+    // resume replaces `activeRunMarker`), which makes this loop's own chunks
+    // stale and leaves its local run state stuck at isWorking=true forever.
+    // Accept either identity so the fallback still fires in that case — the
+    // previous `activeRunMarker === runMarker`-only test could never be true
+    // once a resume had taken over, so this safety net never ran.
+    const stillOwnsRun = state.activeRunMarker === runMarker
+      || (state.runId != null && state.runId === started.run_id)
+    if (!sawTerminalChunk && stillOwnsRun && state.isWorking) {
       bridgeLogger.warn({
         sessionId: session_id,
         runId: started.run_id,
+        runMarker,
+        activeRunMarker: state.activeRunMarker,
       }, '[chat-run-socket] bridge stream ended without terminal chunk; completing local run state')
       const terminalChunk: AgentBridgeOutput = {
         ok: true,
@@ -1287,6 +1297,24 @@ async function applyBridgeChunkAsync(
   runMetadata?: BridgeRunMetadata,
 ): Promise<void> {
   if (state.activeRunMarker !== runMarker) {
+    // This loop was superseded (typically by a resume that claimed the session),
+    // so its chunks are stale and must not write messages. A TERMINAL chunk for
+    // the tracked run is still proof the run ended, but we must NOT clear
+    // `state.isWorking` here: the current owner may be processing the same
+    // terminal chunk right now, and it checks `if (!state.isWorking) return`
+    // before persisting the final message — clearing state from this stale loop
+    // could race it and drop the final assistant message from the DB.
+    // The current owner (or, failing that, the reconcile watchdog) clears the
+    // run state; this stale loop only observes and logs.
+    if (chunk.done && chunk.run_id && state.runId != null && chunk.run_id === state.runId && state.isWorking) {
+      bridgeLogger.info({
+        sessionId,
+        runId: chunk.run_id,
+        runMarker,
+        activeRunMarker: state.activeRunMarker,
+      }, '[chat-run-socket] stale loop observed terminal chunk for tracked run; deferring to current owner')
+      return
+    }
     bridgeLogger.info({
       sessionId,
       runId: chunk.run_id,
