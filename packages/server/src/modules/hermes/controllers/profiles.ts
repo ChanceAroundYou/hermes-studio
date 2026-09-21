@@ -29,6 +29,13 @@ import type { HermesProfile } from '../services/runtime/cli'
 import { listUserProfiles } from '../../studio/public/users'
 import { isHermesAgentAvailable } from '../../studio/public/agent-status-registry'
 import { readAppProfileAvatar } from '../services/profiles/app-profile-avatar'
+import {
+  forgetProfileDisplayName,
+  profileDisplayName,
+  readProfileDisplayName,
+  removeProfileAvatarFiles,
+  writeProfileDisplayName,
+} from '../services/profiles/profile-display-name'
 
 const bridgeCleanupClient = () => new AgentBridgeClient({ connectRetryMs: 0, timeoutMs: 5000 })
 const bridgeProfileRestartClient = () => new AgentBridgeClient({ connectRetryMs: 0 })
@@ -203,19 +210,21 @@ function readProfileAvatar(name: string): ProfileAvatarResponse | null {
   return null
 }
 
-function attachProfileAvatars<T extends HermesProfile>(profiles: T[]): Array<T & { avatar: ProfileAvatarResponse | null }> {
+function attachProfileAvatars<T extends HermesProfile>(profiles: T[]): Array<T & { avatar: ProfileAvatarResponse | null; displayName: string }> {
   return profiles.map(profile => ({
     ...profile,
     avatar: readProfileAvatar(profile.name),
+    displayName: profileDisplayName(profile.name),
   }))
 }
 
 async function attachAppProfileAvatars<T extends HermesProfile>(
   profiles: T[],
-): Promise<Array<T & { avatar: ProfileAvatarResponse | null }>> {
+): Promise<Array<T & { avatar: ProfileAvatarResponse | null; displayName: string }>> {
   return Promise.all(profiles.map(async profile => ({
     ...profile,
     avatar: await readAppProfileAvatar(profile.name),
+    displayName: profileDisplayName(profile.name),
   })))
 }
 
@@ -507,7 +516,13 @@ export async function get(ctx: any) {
   if (denyProfile(ctx, name)) return
   try {
     const profile = await hermesCli.getProfile(name)
-    ctx.body = { profile: { ...profile, avatar: readProfileAvatar(profile.name) } }
+    ctx.body = {
+      profile: {
+        ...profile,
+        avatar: readProfileAvatar(profile.name),
+        displayName: profileDisplayName(profile.name),
+      },
+    }
   } catch (err: any) {
     ctx.status = err.message.includes('not found') ? 404 : 500
     ctx.body = { error: err.message }
@@ -558,10 +573,34 @@ export async function deleteAvatar(ctx: any) {
   const name = String(ctx.params.name || '').trim() || 'default'
   if (denyProfile(ctx, name)) return
   try {
-    removeProfileMetadata(name)
+    // Remove only the avatar files: the metadata directory also holds the
+    // custom display name, which must survive an avatar reset.
+    removeProfileAvatarFiles(name)
     ctx.body = { success: true }
   } catch (err: any) {
     ctx.status = 500
+    ctx.body = { error: err.message }
+  }
+}
+
+/**
+ * Set (or clear) the per-profile custom display name shown across the UI.
+ * An empty/blank value clears it so the profile falls back to its real name.
+ */
+export async function updateDisplayName(ctx: any) {
+  const name = String(ctx.params.name || '').trim() || 'default'
+  if (denyProfile(ctx, name)) return
+  if (isForbiddenProfileName(name)) {
+    ctx.status = 400
+    ctx.body = { error: `Profile name '${name}' is reserved` }
+    return
+  }
+  const body = ctx.request.body as { displayName?: string | null }
+  try {
+    const saved = writeProfileDisplayName(name, body?.displayName)
+    ctx.body = { displayName: saved ?? name, custom: saved !== null }
+  } catch (err: any) {
+    ctx.status = 400
     ctx.body = { error: err.message }
   }
 }
@@ -753,6 +792,10 @@ export async function rename(ctx: any) {
     const ok = await hermesCli.renameProfile(ctx.params.name, new_name)
     if (ok) {
       renameProfileMetadata(ctx.params.name, new_name)
+      // The metadata directory moved, so the cached display name must follow
+      // the profile to its new name.
+      forgetProfileDisplayName(ctx.params.name)
+      forgetProfileDisplayName(new_name)
       ctx.body = { success: true }
     } else {
       ctx.status = 500

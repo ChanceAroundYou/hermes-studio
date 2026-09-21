@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import type { Session } from '@/stores/hermes/chat'
 import { useAppStore } from '@/stores/hermes/app'
 import { useProfilesStore } from '@/stores/hermes/profiles'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import ProfileAvatar from '@/components/hermes/profiles/ProfileAvatar.vue'
 import { formatTimestampMs } from '@/shared/session-display'
 import { chatSessionAgentAvatar } from '@/utils/chat-agent-avatar'
@@ -39,6 +40,10 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const profilesStore = useProfilesStore()
 const profileName = computed(() => props.session.profile || 'default')
+// Real profile name (used for API lookups); the chip shows the display name.
+const profileDisplayName = computed(() => (
+  resolveProfileDisplayName(profilesStore.profiles, profileName.value)
+))
 const profileAvatar = computed(() => profilesStore.profiles.find(profile => profile.name === profileName.value)?.avatar)
 const profileHasModels = computed(() => {
   const profileModels = appStore.profileModelGroups.find(profile => profile.profile === profileName.value)
@@ -155,7 +160,7 @@ onUnmounted(() => {
         </span>
         <span v-if="props.showProfile" class="session-item-profile">
           <ProfileAvatar class="session-item-profile-avatar" :name="profileName" :avatar="profileAvatar" :size="16" />
-          <span class="session-item-profile-name">{{ profileName }}</span>
+          <span class="session-item-profile-name">{{ profileDisplayName }}</span>
         </span>
         <span
           v-if="props.categoryLabel"

@@ -100,6 +100,28 @@ export const useProfilesStore = defineStore('profiles', () => {
     return saved
   }
 
+  // Display-name RESOLUTION lives in `@/utils/hermes/profile-display-name` as a
+  // pure function over the profile list: ~19 client tests mock this store with a
+  // minimal object, so store methods would break them at render time.
+  function applyDisplayName(name: string, displayName: string) {
+    profiles.value = profiles.value.map(profile => (
+      profile.name === name ? { ...profile, displayName } : profile
+    ))
+    if (detailMap.value[name]) {
+      detailMap.value[name] = { ...detailMap.value[name], displayName }
+    }
+    if (activeProfile.value?.name === name) {
+      activeProfile.value = { ...activeProfile.value, displayName }
+    }
+  }
+
+  async function updateDisplayName(name: string, displayName: string | null) {
+    const res = await profilesApi.updateProfileDisplayName(name, displayName)
+    // Server echoes the resolved name (custom value, or the profile name when cleared).
+    applyDisplayName(name, res.custom ? res.displayName : '')
+    return res
+  }
+
   async function deleteAvatar(name: string) {
     await profilesApi.deleteProfileAvatar(name)
     profiles.value = profiles.value.map(profile => (
@@ -207,6 +229,7 @@ export const useProfilesStore = defineStore('profiles', () => {
     importProfile,
     updateAvatar,
     deleteAvatar,
+    updateDisplayName,
     clearAllSessionCaches,
   }
 })

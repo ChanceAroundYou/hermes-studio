@@ -54,7 +54,7 @@ const historyProfileFilterOptions = computed<
 >(() => [
   { label: t('chat.allProfiles'), value: 'all' },
   ...profilesStore.profiles.map(profile => ({
-    label: profile.alias || profile.name,
+    label: profile.displayName || profile.alias || profile.name,
     value: profile.name,
   })),
 ])

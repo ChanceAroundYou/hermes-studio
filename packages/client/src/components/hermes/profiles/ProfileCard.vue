@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NTag, NSpin, useMessage, useDialog } from 'naive-ui'
 import type { HermesProfile, HermesProfileDetail } from '@/api/hermes/profiles'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import { useI18n } from 'vue-i18n'
 import ProfileAvatar from './ProfileAvatar.vue'
+// Loaded lazily: ProfileCard is rendered by tests whose naive-ui mock only
+// stubs NButton/NTag/NSpin, so importing NModal eagerly would throw.
+const ProfileDisplayNameModal = defineAsyncComponent(() => import('./ProfileDisplayNameModal.vue'))
+import { hasCustomProfileDisplayName, resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 
 const props = defineProps<{ profile: HermesProfile }>()
 const emit = defineEmits<{}>()
@@ -23,6 +27,15 @@ const switching = ref(false)
 const detail = ref<HermesProfileDetail | null>(null)
 
 const isDefault = computed(() => props.profile.name === 'default')
+const showDisplayNameModal = ref(false)
+
+// Prefer the custom display name; fall back to the real profile name.
+const displayName = computed(() => resolveProfileDisplayName(profilesStore.profiles, props.profile.name))
+const hasCustomDisplayName = computed(() => hasCustomProfileDisplayName(profilesStore.profiles, props.profile.name))
+
+function handleEditDisplayName() {
+  showDisplayNameModal.value = true
+}
 
 async function toggleDetail() {
   if (expanded.value) {
@@ -122,7 +135,10 @@ function handleEditConfig() {
     <div class="card-header">
       <div class="profile-title">
         <ProfileAvatar :name="profile.name" :avatar="profile.avatar" :size="28" />
-        <h3 class="profile-name">{{ profile.name }}</h3>
+        <h3 class="profile-name" data-testid="profile-card-name">
+          {{ displayName }}
+          <span v-if="hasCustomDisplayName" class="profile-real-name">{{ profile.name }}</span>
+        </h3>
       </div>
       <NTag v-if="profile.active" size="tiny" type="primary" :bordered="false">
         {{ t('profiles.active') }}
@@ -179,6 +195,9 @@ function handleEditConfig() {
       <NButton size="tiny" quaternary @click="handleEditConfig">
         {{ t('profiles.editConfig') }}
       </NButton>
+      <NButton size="tiny" quaternary data-testid="edit-profile-display-name" @click="handleEditDisplayName">
+        {{ t('profiles.displayName.customize') }}
+      </NButton>
       <NButton
         v-if="profilesStore.hermesAvailable && !profile.active"
         data-testid="switch-hermes-profile"
@@ -203,6 +222,13 @@ function handleEditConfig() {
         {{ t('profiles.export') }}
       </NButton>
     </div>
+
+    <ProfileDisplayNameModal
+      v-if="showDisplayNameModal"
+      :profile-name="profile.name"
+      @close="showDisplayNameModal = false"
+      @saved="showDisplayNameModal = false"
+    />
   </div>
 </template>
 
@@ -238,6 +264,13 @@ function handleEditConfig() {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.profile-real-name {
+  margin-inline-start: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: $text-muted;
 }
 
 .profile-name {

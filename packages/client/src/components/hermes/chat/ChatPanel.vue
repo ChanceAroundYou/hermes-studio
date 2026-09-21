@@ -677,7 +677,8 @@ function toggleCategoryGroup(key: string) {
 const profileFilterOptions = computed(() => [
   { label: t("chat.allProfiles"), value: "__all__" },
   ...profilesStore.profiles.map((profile) => ({
-    label: profile.name,
+    // Show the custom display name; the value stays the real profile name.
+    label: profile.displayName || profile.name,
     value: profile.name,
   })),
 ]);

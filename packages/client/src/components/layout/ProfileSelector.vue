@@ -12,6 +12,8 @@ import {
   type ProfileRuntimeStatus,
 } from '@/api/hermes/profiles'
 import ProfileAvatarView from '@/components/hermes/profiles/ProfileAvatar.vue'
+import ProfileDisplayNameModal from '@/components/hermes/profiles/ProfileDisplayNameModal.vue'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { useI18n } from 'vue-i18n'
 
 const emit = defineEmits<{
@@ -24,8 +26,18 @@ const router = useRouter()
 const profilesStore = useProfilesStore()
 
 const activeName = computed(() => profilesStore.activeProfileName ?? '')
-const displayName = computed(() => activeName.value || 'default')
-const activeProfile = computed(() => profilesStore.profiles.find(profile => profile.name === displayName.value))
+/** Real profile name — the identifier used for every API call. */
+const activeProfileKey = computed(() => activeName.value || 'default')
+/** What the UI shows: custom display name when set, else the profile name. */
+const displayName = computed(() => resolveProfileDisplayName(profilesStore.profiles, activeProfileKey.value))
+const activeProfile = computed(() => profilesStore.profiles.find(profile => profile.name === activeProfileKey.value))
+const showDisplayNameModal = ref(false)
+const displayNameTarget = ref<HermesProfile | null>(null)
+
+function openDisplayNameModal(profile: HermesProfile) {
+  displayNameTarget.value = profile
+  showDisplayNameModal.value = true
+}
 const runtimeStatuses = ref<ProfileRuntimeStatus[]>([])
 const runtimeLoading = ref(false)
 const showProfileModal = ref(false)
@@ -262,14 +274,16 @@ onMounted(() => {
             v-for="profile in profilesStore.profiles"
             :key="profile.name"
             class="profile-runtime-item"
-            :class="{ active: profile.name === displayName }"
+            :class="{ active: profile.name === activeProfileKey }"
           >
             <div class="profile-runtime-main">
               <ProfileAvatarView class="profile-runtime-avatar" :name="profile.name" :avatar="profile.avatar" :size="34" />
               <div class="profile-runtime-info">
                 <div class="profile-runtime-name-row">
-                  <span class="profile-runtime-name">{{ profile.name }}</span>
-                  <span v-if="profile.name === displayName" class="active-badge">{{ t('profiles.runtime.activeTag') }}</span>
+                  <span class="profile-runtime-name" :title="profile.name">
+                    {{ profile.displayName || profile.name }}
+                  </span>
+                  <span v-if="profile.name === activeProfileKey" class="active-badge">{{ t('profiles.runtime.activeTag') }}</span>
                 </div>
                 <div class="runtime-status-grid">
                   <div class="runtime-row compact">
@@ -296,6 +310,14 @@ onMounted(() => {
               </div>
             </div>
             <div class="profile-runtime-actions">
+              <NButton
+                size="small"
+                type="primary"
+                data-testid="edit-profile-display-name"
+                @click="openDisplayNameModal(profile)"
+              >
+                {{ t('profiles.displayName.customize') }}
+              </NButton>
               <NButton
                 size="small"
                 type="primary"
@@ -367,6 +389,13 @@ onMounted(() => {
         </div>
       </div>
     </NModal>
+
+    <ProfileDisplayNameModal
+      v-if="showDisplayNameModal && displayNameTarget"
+      :profile-name="displayNameTarget.name"
+      @close="showDisplayNameModal = false"
+      @saved="showDisplayNameModal = false"
+    />
   </div>
 </template>
 

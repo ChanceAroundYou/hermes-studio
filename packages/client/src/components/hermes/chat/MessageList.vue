@@ -21,7 +21,8 @@ import ToolRunCard from "./ToolRunCard.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
 import PendingInteractionCountdown from "./PendingInteractionCountdown.vue";
 import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message } from "@/stores/hermes/chat";
-import { useProfilesStore } from "@/stores/hermes/profiles";
+import { useProfilesStore } from '@/stores/hermes/profiles'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { useToolTraceVisibility } from "@/composables/useToolTraceVisibility";
 import { openSubagentStream, subagentIdFromToolCall } from "@/utils/hermes/subagent-stream";
 import { messageScrollPositionKey, rememberMessageScrollPosition } from "./message-scroll-position";
@@ -188,7 +189,8 @@ const activeSessionProfile = computed(() => (
   profilesStore.profiles.find(profile => profile.name === activeSessionProfileName.value) || null
 ));
 const userProfileName = computed(() => (
-  activeSessionProfile.value?.alias?.trim() || activeSessionProfileName.value
+  // Custom display name when configured; falls back to the profile name.
+  resolveProfileDisplayName(profilesStore.profiles, activeSessionProfileName.value)
 ));
 const userProfileAvatar = computed(() => activeSessionProfile.value?.avatar || null);
 

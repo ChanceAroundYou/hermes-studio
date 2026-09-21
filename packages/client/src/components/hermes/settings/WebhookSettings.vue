@@ -134,7 +134,7 @@ function eventLabel(event: ChatWebhookEventType): string {
 }
 
 const profileOptions = computed(() => profilesStore.profiles.map(profile => ({
-  label: profile.alias || profile.name,
+  label: profile.displayName || profile.alias || profile.name,
   value: profile.name,
 })))
 

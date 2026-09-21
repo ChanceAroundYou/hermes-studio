@@ -7,6 +7,8 @@ export interface HermesProfile {
   gatewayStatus?: string
   alias: string
   avatar?: ProfileAvatar | null
+  /** Custom name shown in the UI; falls back to `name` when unset. */
+  displayName?: string
 }
 
 export interface HermesProfileDetail {
@@ -18,6 +20,8 @@ export interface HermesProfileDetail {
   hasEnv: boolean
   hasSoulMd: boolean
   avatar?: ProfileAvatar | null
+  /** Custom name shown in the UI; falls back to `name` when unset. */
+  displayName?: string
 }
 
 export interface ProfileAvatar {
@@ -93,6 +97,23 @@ export async function updateProfileAvatar(name: string, avatar: ProfileAvatar): 
 
 export async function deleteProfileAvatar(name: string): Promise<void> {
   await request(`/api/hermes/profiles/${encodeURIComponent(name)}/avatar`, { method: 'DELETE' })
+}
+
+/**
+ * Set the per-profile custom display name. Pass null/empty to clear it and fall
+ * back to the real profile name.
+ */
+export async function updateProfileDisplayName(
+  name: string,
+  displayName: string | null,
+): Promise<{ displayName: string; custom: boolean }> {
+  return request<{ displayName: string; custom: boolean }>(
+    `/api/hermes/profiles/${encodeURIComponent(name)}/display-name`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ displayName }),
+    },
+  )
 }
 
 export async function restartProfileGateway(name: string): Promise<ProfileRuntimeStatus['gateway']> {
