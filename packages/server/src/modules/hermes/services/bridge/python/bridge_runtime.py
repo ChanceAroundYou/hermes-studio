@@ -508,6 +508,9 @@ def _ensure_agent_imports() -> None:
             raise
         # Older Hermes runtimes do not have a bootstrap module.
     _apply_openrouter_attribution_override()
+    from bridge_mcp import install_studio_mcp_env
+
+    install_studio_mcp_env()
 
 
 def _apply_openrouter_attribution_override() -> None:
