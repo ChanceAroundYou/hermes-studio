@@ -36,8 +36,13 @@ describe('GroupChatPanel workspace save handling', () => {
     }
 
     const card = readFileSync('packages/client/src/components/hermes/chat/PendingInteractionCard.vue', 'utf8')
-    expect(card).toContain('<div class="clarify-float-input-row">')
+    expect(card).toContain('class="clarify-float-input-row"')
     expect(card).toContain('<NInput')
+
+    // Approval, clarification and agent pairing all go through the same card.
+    const panel = readFileSync('packages/client/src/components/hermes/group-chat/GroupChatPanel.vue', 'utf8')
+    expect(panel.match(/<PendingInteractionCard/g)).toHaveLength(3)
+    expect(panel).not.toContain('class="approval-float-header"')
   })
 
   it('coerces null picker values before trimming so clearing the input saves an empty workspace', () => {

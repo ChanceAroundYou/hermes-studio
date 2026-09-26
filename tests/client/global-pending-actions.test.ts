@@ -429,11 +429,12 @@ describe('GlobalPendingActions', () => {
 
     expect(notificationTitleText(created[0])).toBe('branch: Build scripts · chat.approvalTitle')
     const content = await render(created[0].options.content)
-    expect(content.classes()).toContain('global-approval-content')
-    expect(content.get('.global-approval-description').text()).toBe('Security scan')
-    expect(content.get('.global-approval-command').classes()).toContain('studio-surface')
-    const preview = content.get('.global-approval-command')
-    expect(preview.get('.global-approval-command-label').text()).toBe('chat.approvalCommand')
+    // The same card the chat and group chat render, without the host surface.
+    expect(content.classes()).toContain('pending-interaction-card--notification')
+    expect(content.get('.approval-float-desc').text()).toBe('Security scan')
+    const preview = content.get('.approval-float-command')
+    expect(preview.classes()).toContain('studio-surface')
+    expect(preview.get('.approval-float-command-label').text()).toBe('chat.approvalCommand')
     expect(preview.get('pre > code').text()).toBe(command)
     expect(preview.get('pre').attributes('tabindex')).toBe('0')
 
@@ -452,12 +453,12 @@ describe('GlobalPendingActions', () => {
     await nextTick()
 
     const content = await render(created[0].options.content)
-    const copyButton = content.get('.global-approval-command button')
+    const copyButton = content.get('.approval-float-command button')
     await copyButton.trigger('click')
 
     expect(copyToClipboard).toHaveBeenCalledWith('npm run build')
     expect(uiMock.messageError).toHaveBeenCalledWith('chat.copyFailed')
-    expect(copyButton.text()).toBe('common.copy')
+    expect(copyButton.text()).toBe('chat.copyFailed')
   })
 
   it('shows and directly handles an approval from an inactive chat session', async () => {
@@ -476,8 +477,8 @@ describe('GlobalPendingActions', () => {
     const title = await render(approvalNotification.options.title)
     await title.get('button').trigger('click')
     expect(routerPush).toHaveBeenCalledWith({ name: 'hermes.session', params: { sessionId: 'session-b' } })
-    const action = await render(approvalNotification.options.action)
-    await action.get('button').trigger('click')
+    const content = await render(approvalNotification.options.content)
+    await clickButtonByText(content, 'chat.approvalAllowOnce')
     expect(chatState.respondApprovalFor).toHaveBeenCalledWith('session-b', 'approval-b', 'once')
   })
 
@@ -622,8 +623,8 @@ describe('GlobalPendingActions', () => {
     const title = await render(created[0].options.title)
     await title.get('button').trigger('click')
     expect(routerPush).toHaveBeenCalledWith({ name: 'hermes.groupChatRoom', params: { roomId: 'room-b' } })
-    const action = await render(created[0].options.action)
-    await action.get('button').trigger('click')
+    const content = await render(created[0].options.content)
+    await clickButtonByText(content, 'chat.approvalAllowOnce')
     expect(groupState.respondApprovalFor).toHaveBeenCalledWith('room-b', 'approval-b', 'once')
   })
 
@@ -681,8 +682,8 @@ describe('GlobalPendingActions', () => {
 
     const workflowNotification = created.find(entry => notificationTitleText(entry).includes('Workflow B'))
     expect(workflowNotification).toBeTruthy()
-    const action = await render(workflowNotification.options.action)
-    const buttons = action.findAll('button')
+    const card = await render(workflowNotification.options.content)
+    const buttons = card.findAll('button')
     await buttons[buttons.length - 1].trigger('click')
     expect(workflowMock.approveWorkflowNode).toHaveBeenCalledWith('workflow-b', 'run-b', 'build', true, 'exec-b')
   })
@@ -702,8 +703,8 @@ describe('GlobalPendingActions', () => {
 
     const workflowNotifications = created.filter(entry => notificationTitleText(entry).includes('Workflow B'))
     expect(workflowNotifications).toHaveLength(2)
-    const secondAction = await render(workflowNotifications[1].options.action)
-    const buttons = secondAction.findAll('button')
+    const secondCard = await render(workflowNotifications[1].options.content)
+    const buttons = secondCard.findAll('button')
     await buttons[buttons.length - 1].trigger('click')
     expect(workflowMock.approveWorkflowNode).toHaveBeenCalledWith('workflow-b', 'run-b', 'build', true, 'exec-2')
   })

@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import { h, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { NButton, useMessage, useNotification, type NotificationReactive } from 'naive-ui'
+import { useMessage, useNotification, type NotificationReactive } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { getBaseUrlValue } from '@/api/client'
 import { useRoute, useRouter } from 'vue-router'
 import { useChatStore, type PendingApproval, type PendingClarify } from '@/stores/hermes/chat'
 import { useGroupChatStore, type GroupPendingApproval, type GroupPendingClarify } from '@/stores/hermes/group-chat'
-import PendingInteractionCountdown from '@/components/hermes/chat/PendingInteractionCountdown.vue'
 import PendingInteractionCard from '@/components/hermes/chat/PendingInteractionCard.vue'
+import type { PendingCardAction } from '@/utils/hermes/pending-card-action'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import { useSettingsStore } from '@/stores/hermes/settings'
-import { copyToClipboard } from '@/utils/clipboard'
 import { playCompletionSound } from '@/utils/completion-sound'
 import { showSystemNotification } from '@/utils/completion-notification'
 import { workflowApprovalKey } from '@/utils/workflow-approval-key'
@@ -34,7 +33,6 @@ const pendingSoundKeys = new Set<string>()
 const pendingNotificationKeys = new Set<string>()
 const clarifyDrafts = reactive<Record<string, string>>({})
 const submitting = reactive<Record<string, boolean>>({})
-const copiedCommandKey = ref<string | null>(null)
 const workflows = ref<WorkflowRecord[]>([])
 const workflowStatuses = reactive<Record<string, WorkflowRuntimeStatus>>({})
 const visibleWorkflowApprovalKeys = reactive(new Set<string>())
@@ -194,50 +192,35 @@ function pendingActions(suppressVisibleSources = true): GlobalPendingAction[] {
   return actions
 }
 
-async function copyApprovalCommand(action: Extract<GlobalPendingAction, { kind: 'chat-approval' | 'group-approval' }>) {
-  const copied = await copyToClipboard(action.pending.command)
-  if (!copied) {
-    message.error(t('chat.copyFailed'))
-    return
+/** The same card the chat and group chat render, so approvals cannot drift either. */
+function approvalCard(action: GlobalPendingAction) {
+  if (action.kind === 'workflow-approval') {
+    return h(PendingInteractionCard, {
+      variant: 'notification',
+      kind: 'custom',
+      description: t('workflow.status.pending_approval'),
+      actions: [
+        { key: 'deny', label: t('chat.approvalDeny'), variant: 'error' },
+        { key: 'confirm', label: t('common.confirm'), variant: 'primary' },
+      ] satisfies PendingCardAction[],
+      submitting: !!submitting[action.key],
+      onSelect: (key: string) => { void submitWorkflowApproval(action, key === 'confirm') },
+    })
   }
-  copiedCommandKey.value = action.key
-}
-
-function approvalCommand(action: Extract<GlobalPendingAction, { kind: 'chat-approval' | 'group-approval' }>) {
-  if (!action.pending.command) return null
-  return h('div', { class: 'global-approval-command studio-surface' }, [
-    h('div', { class: 'global-approval-command-header' }, [
-      h('span', { class: 'global-approval-command-label' }, t('chat.approvalCommand')),
-      h(NButton, {
-        size: 'tiny',
-        quaternary: true,
-        onClick: () => void copyApprovalCommand(action),
-      }, { default: () => copiedCommandKey.value === action.key ? t('common.copied') : t('common.copy') }),
-    ]),
-    h('pre', { tabindex: 0 }, [h('code', action.pending.command)]),
-  ])
-}
-
-function interactionCountdown(action: Extract<GlobalPendingAction, { kind: 'chat-approval' | 'chat-clarify' | 'group-approval' | 'group-clarify' }>) {
-  return h(PendingInteractionCountdown, { deadline: action.pending.countdownDeadline })
-}
-
-function approvalButtons(action: Extract<GlobalPendingAction, { kind: 'chat-approval' | 'group-approval' }>) {
+  if (action.kind !== 'chat-approval' && action.kind !== 'group-approval') return null
   const pending = action.pending
-  const choices: ApprovalChoice[] = pending.isMemoryWrite ? ['once', 'deny'] : pending.choices
-  const labels: Record<ApprovalChoice, string> = {
-    once: pending.isMemoryWrite ? t('chat.approvalAgree') : t('chat.approvalAllowOnce'),
-    session: t('chat.approvalAllowSession'),
-    always: t('chat.approvalAlways'),
-    deny: t('chat.approvalDeny'),
-  }
-  return h('div', { class: 'global-pending-actions' }, choices.map(choice => h(NButton, {
-    size: 'small',
-    type: choice === 'deny' ? 'error' : choice === 'once' ? 'primary' : 'default',
-    secondary: choice !== 'once',
-    loading: submitting[action.key],
-    onClick: () => void submitApproval(action, choice),
-  }, { default: () => labels[choice] })))
+  return h(PendingInteractionCard, {
+    variant: 'notification',
+    kind: 'approval',
+    approvalChoices: pending.choices,
+    isMemoryWrite: !!pending.isMemoryWrite,
+    description: pending.description,
+    command: pending.command,
+    countdownDeadline: pending.countdownDeadline,
+    submitting: !!submitting[action.key],
+    onSelect: (key: string) => { void submitApproval(action, key as ApprovalChoice) },
+    onCopyFailed: () => { message.error(t('chat.copyFailed')) },
+  })
 }
 
 async function submitApproval(action: Extract<GlobalPendingAction, { kind: 'chat-approval' | 'group-approval' }>, choice: ApprovalChoice) {
@@ -391,27 +374,8 @@ function createGlobalNotification(action: GlobalPendingAction): NotificationReac
   const clarify = action.kind === 'chat-clarify' || action.kind === 'group-clarify'
   return notification.create({
     title: () => notificationTitle(action, clarify),
-    content: clarify
-      ? () => clarifyContent(action)
-      : action.kind === 'workflow-approval'
-        ? () => h('div', { class: 'global-approval-content' }, t('workflow.status.pending_approval'))
-        : () => h('div', { class: 'global-approval-content' }, [
-            interactionCountdown(action),
-            action.pending.description
-              ? h('div', { class: 'global-approval-description' }, action.pending.description)
-              : null,
-            approvalCommand(action),
-          ]),
-    // The clarify card brings its own input + submit + dismiss row; the
-    // notification footer is only used by the approval variants.
-    action: clarify
-      ? undefined
-      : action.kind === 'workflow-approval'
-        ? () => h('div', { class: 'global-pending-actions' }, [
-            h(NButton, { size: 'small', type: 'error', secondary: true, loading: submitting[action.key], onClick: () => void submitWorkflowApproval(action, false) }, { default: () => t('chat.approvalDeny') }),
-            h(NButton, { size: 'small', type: 'primary', loading: submitting[action.key], onClick: () => void submitWorkflowApproval(action, true) }, { default: () => t('common.confirm') }),
-          ])
-        : () => approvalButtons(action),
+    // Both cards carry their own action row, so the notification footer is unused.
+    content: clarify ? () => clarifyContent(action) : () => approvalCard(action),
     duration: 0,
     closable: false,
   })
@@ -493,29 +457,21 @@ onUnmounted(() => {
 
 <style scoped>.global-pending-actions-host { display: none; }</style>
 <style>
-.n-notification:has(.global-approval-content, .pending-interaction-card--notification) {
+.n-notification:has(.pending-interaction-card--notification) {
   width: min(560px, calc(100vw - 32px));
   border: 1px solid var(--border-color);
   border-radius: 14px;
   background: var(--bg-main-surface);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14);
 }
-.n-notification:has(.global-approval-content, .pending-interaction-card--notification) .n-notification-main { margin-inline-start: 0; }
-.n-notification:has(.global-approval-content, .pending-interaction-card--notification) .n-notification-main__header { color: var(--text-primary); font-size: 15px; font-weight: 600; }
-.n-notification:has(.global-approval-content, .pending-interaction-card--notification) .n-notification-main-footer { padding-top: 12px; border-top: 1px solid var(--border-light); }
+.n-notification:has(.pending-interaction-card--notification) .n-notification-main { margin-inline-start: 0; }
+.n-notification:has(.pending-interaction-card--notification) .n-notification-main__header { color: var(--text-primary); font-size: 15px; font-weight: 600; }
+.n-notification:has(.pending-interaction-card--notification) .n-notification-main-footer { padding-top: 12px; border-top: 1px solid var(--border-light); }
 .global-pending-title { appearance: none; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }
 .global-pending-title:hover { text-decoration-color: currentcolor; }
 .global-pending-title:focus-visible { border-radius: 2px; outline: 2px solid var(--accent-info); outline-offset: 3px; }
-.global-pending-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.global-approval-content { display: grid; gap: 12px; max-width: 520px; max-height: min(420px, calc(100dvh - 190px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
-.global-approval-description { padding: 10px 12px; border: 1px solid rgba(var(--warning-rgb), 0.28); border-radius: 10px; background: rgba(var(--warning-rgb), 0.08); color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
-.global-approval-command { min-width: 0; overflow: hidden; border: 1px solid rgba(var(--text-primary-rgb), 0.1); border-radius: 10px; background: rgba(var(--accent-primary-rgb), 0.055); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.035); }
-.global-approval-command-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; padding: 4px 6px 4px 12px; border-bottom: 1px solid rgba(var(--text-primary-rgb), 0.08); }
-.global-approval-command-label { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
-.global-approval-command pre { max-height: 240px; margin: 0; padding: 12px; overflow: auto; overscroll-behavior: contain; white-space: pre; }
-.global-approval-command code { display: block; width: max-content; min-width: 100%; color: var(--text-primary); font-family: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace; font-size: 12px; line-height: 1.55; }
 
 @media (max-width: 600px) {
-  .n-notification:has(.global-approval-content, .pending-interaction-card--notification) { width: calc(100vw - 24px); }
+  .n-notification:has(.pending-interaction-card--notification) { width: calc(100vw - 24px); }
 }
 </style>

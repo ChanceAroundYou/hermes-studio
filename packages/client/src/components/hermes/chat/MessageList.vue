@@ -12,14 +12,12 @@ const sessionScrollPositions = new Map<string, MessageViewportScrollSnapshot>();
 <script setup lang="ts">
 import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { NButton } from "naive-ui";
 import VirtualMessageList from "./VirtualMessageList.vue";
 import MessageItem from "./MessageItem.vue";
 import { positionTaskPlansAtTurnEnd } from "@/utils/task-plan";
 import LiveReasoningStatus from "./LiveReasoningStatus.vue";
 import ToolRunCard from "./ToolRunCard.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
-import PendingInteractionCountdown from "./PendingInteractionCountdown.vue";
 import PendingInteractionCard from "./PendingInteractionCard.vue";
 import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message } from "@/stores/hermes/chat";
 import { useProfilesStore } from '@/stores/hermes/profiles'
@@ -426,8 +424,9 @@ async function openForkParent(event?: MouseEvent) {
   window.location.hash = lineage.parentHref.replace(/^#/, "");
 }
 
-function handleApproval(choice: "once" | "session" | "always" | "deny") {
-  chatStore.respondApproval(choice);
+function handleApproval(choice: string) {
+  // The card only ever emits the grant codes the server offered.
+  chatStore.respondApproval(choice as "once" | "session" | "always" | "deny");
 }
 
 function handleClarify(response?: string) {
@@ -847,77 +846,17 @@ defineExpose({
     >
     <Teleport to="body" :disabled="!props.approvalPortalToBody">
       <Transition name="queue-float">
-        <div
+        <PendingInteractionCard
           v-if="visibleApproval"
-          class="approval-float-panel"
-          :class="{ 'approval-float-panel--global': props.approvalPortalToBody }"
-        >
-          <div class="float-panel-header">
-            <span class="approval-float-icon" aria-hidden="true">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
-                <path d="m9 12 2 2 4-4" />
-              </svg>
-            </span>
-            <span>{{ t("chat.approvalKicker") }}</span>
-            <PendingInteractionCountdown :deadline="visibleApproval.countdownDeadline" />
-          </div>
-          <div class="approval-float-title">{{ t("chat.approvalTitle") }}</div>
-          <div class="approval-float-desc">{{ visibleApproval.description }}</div>
-          <code class="approval-float-command">{{ visibleApproval.command }}</code>
-          <div class="approval-float-actions">
-            <NButton
-              v-if="visibleApproval.isMemoryWrite"
-              size="small"
-              type="primary"
-              @click="handleApproval('once')"
-            >
-              {{ t("chat.approvalAgree") }}
-            </NButton>
-            <NButton
-              v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('once')"
-              size="small"
-              type="primary"
-              @click="handleApproval('once')"
-            >
-              {{ t("chat.approvalAllowOnce") }}
-            </NButton>
-            <NButton
-              v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('session')"
-              size="small"
-              secondary
-              @click="handleApproval('session')"
-            >
-              {{ t("chat.approvalAllowSession") }}
-            </NButton>
-            <NButton
-              v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('always')"
-              size="small"
-              secondary
-              @click="handleApproval('always')"
-            >
-              {{ t("chat.approvalAlways") }}
-            </NButton>
-            <NButton
-              v-if="visibleApproval.isMemoryWrite || visibleApproval.choices.includes('deny')"
-              size="small"
-              type="error"
-              secondary
-              @click="handleApproval('deny')"
-            >
-              {{ t("chat.approvalDeny") }}
-            </NButton>
-          </div>
-        </div>
+          kind="approval"
+          :variant="props.approvalPortalToBody ? 'portal' : 'inline'"
+          :approval-choices="visibleApproval.choices"
+          :is-memory-write="visibleApproval.isMemoryWrite"
+          :description="visibleApproval.description"
+          :command="visibleApproval.command"
+          :countdown-deadline="visibleApproval.countdownDeadline"
+          @select="handleApproval"
+        />
       </Transition>
     </Teleport>
     <Teleport to="body" :disabled="!props.approvalPortalToBody">
