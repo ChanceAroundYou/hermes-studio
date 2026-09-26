@@ -439,13 +439,25 @@ export class ChatRunSocket {
    * probing each session, so the sidebar can show "thinking" for a session
    * without opening it first.
    */
-  listWorkingSessions(): Array<{ sessionId: string; runStartedAt: number; source?: string }> {
+  listWorkingSessions(): Array<{
+    sessionId: string
+    runStartedAt: number
+    source?: string
+    compression?: SessionState['compression']
+  }> {
     const now = Date.now()
-    const list: Array<{ sessionId: string; runStartedAt: number; source?: string }> = []
+    const list: Array<{
+      sessionId: string
+      runStartedAt: number
+      source?: string
+      compression?: SessionState['compression']
+    }> = []
     for (const [sid, state] of this.sessionMap) {
       if (!state.isWorking) continue
       const startedAt = Number(state.runStartedAt) || 0
-      list.push({ sessionId: sid, runStartedAt: startedAt || now, source: state.source })
+      // The compression snapshot rides along so the periodic poll can heal a
+      // client that missed `compression.completed`, not just the run flags.
+      list.push({ sessionId: sid, runStartedAt: startedAt || now, source: state.source, compression: state.compression ?? null })
     }
     return list
   }
@@ -2162,6 +2174,7 @@ export class ChatRunSocket {
       isWorking: state.isWorking,
       runStartedAt: state.runStartedAt,
       isAborting: state.isAborting || false,
+      compression: state.compression ?? null,
       events: buildResumeEvents(resumeEvents.filter(entry =>
         !['calendar.requested', 'reminder.requested', 'calendar.resolved', 'reminder.resolved', 'health.requested', 'health.resolved'].includes(entry.event)
         || mobileEventAllowed(entry.data, socket.data.mobileDeviceTarget))),

@@ -304,6 +304,21 @@ export interface WorkingSessionSnapshot {
   session_id: string
   run_started_at: number
   source?: string | null
+  /**
+   * Authoritative compression snapshot for the live run. Riding on the periodic
+   * poll is what lets a client that missed `compression.completed` heal itself.
+   */
+  compression?: {
+    stage: 'started' | 'completed'
+    messageCount: number
+    beforeTokens: number
+    afterTokens: number
+    compressed: boolean | null
+    error?: string
+    source?: 'run' | 'command'
+    startedAt: number
+    finishedAt?: number
+  } | null
 }
 
 /**

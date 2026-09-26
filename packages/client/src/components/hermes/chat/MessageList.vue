@@ -29,6 +29,7 @@ import { messageScrollPositionKey, rememberMessageScrollPosition } from "./messa
 import { chatSessionAgentAvatar } from "@/utils/chat-agent-avatar";
 import { parseThinking } from "@/utils/thinking-parser";
 import { groupCompletedToolsByRun } from "./tool-run-grouping";
+import { insertByTimestamp } from "@/utils/hermes/transcript-order";
 
 const props = withDefaults(defineProps<{
   approvalPortalToBody?: boolean
@@ -227,12 +228,19 @@ const compressionMessage = computed<Message | null>(() => {
       ? `Compression failed: ${s.error}`
       : s.compressed === false
         ? `Compression skipped`
-        : `Compression completed: ${s.messageCount} msgs, ${formatTokens(s.beforeTokens)} → ${formatTokens(s.afterTokens)} tokens.`
+        : s.compressed === null
+          // Terminal but unreported: the completion event was lost (the client
+          // switched away mid-compression or reconnected). Never claim it is
+          // still running, and never invent token numbers.
+          ? `Compression finished`
+          : `Compression completed: ${s.messageCount} msgs, ${formatTokens(s.beforeTokens)} → ${formatTokens(s.afterTokens)} tokens.`
   return {
     id: `compression:${sid}`,
     role: 'command',
     content: text,
-    timestamp: Date.now(),
+    // The compression's own start time, not "now": the entry has to sort and
+    // read as the event it represents.
+    timestamp: s.startedAt || Date.now(),
     systemType: 'command',
   } as Message
 })
@@ -262,35 +270,11 @@ const displayMessages = computed(() => {
     });
   let out = groupCompletedToolsByRun(positionTaskPlansAtTurnEnd(renderedMessages));
   if (compressionMessage.value) {
-    const s = chatStore.compressionState
-    // Sticky fix: anchor the synthetic compress card right after the triggering
-    // `/compress` command instead of tailing the list. This keeps it inline in
-    // the conversation flow and prevents it from drifting behind later user
-    // messages (e.g. "压缩完成后..." complaint) at the bottom.
-    let anchorIdx = -1
-    for (let i = out.length - 1; i >= 0; i--) {
-      const m = out[i]
-      if (m.role === 'command' && typeof m.content === 'string' && /^\/(compress|compact)(\s|$)/i.test(m.content.trim())) {
-        // Prefer the most recent /compress; if we have startedAt, ensure it's
-        // the one that triggered this compression (within 60s window).
-        if (s?.startedAt) {
-          if (m.timestamp <= s.startedAt + 60_000 && m.timestamp >= s.startedAt - 300_000) { anchorIdx = i; break }
-          // Fallback: if timestamp mismatch (clock skew), still take the last
-          // /compress as anchor rather than leaving it at tail.
-          anchorIdx = i; break
-        } else {
-          anchorIdx = i; break
-        }
-      }
-    }
-    // Also consider the synthetic hiding the real persisted
-    // "Compression completed: ..." command duplicate — the last /compress is
-    // still visible (filter only hides Compression...), so anchor will be found.
-    if (anchorIdx >= 0) {
-      out = [...out.slice(0, anchorIdx + 1), compressionMessage.value, ...out.slice(anchorIdx + 1)]
-    } else {
-      out = [...out, compressionMessage.value]
-    }
+    // Place the card by time, where the compression actually happened. The card
+    // carries the compression's own start time, so auto-compression (which
+    // leaves no `/compress` command row behind) lands inline instead of drifting
+    // below messages that came later.
+    out = insertByTimestamp(out, compressionMessage.value)
   }
   // Embed consecutive tool cards into the preceding assistant's bubble,
   // so the tool sits directly under the bubble and above message-meta

@@ -173,6 +173,24 @@ export interface ResumeSessionPayload {
   hasMoreBefore?: boolean
   isWorking: boolean
   isAborting?: boolean
+  /**
+   * Authoritative compression snapshot. `events` only carries compression
+   * transitions while the run is live, so a client that missed the completion
+   * has no other way to reconcile. Absent on servers that predate it.
+   */
+  compression?: {
+    stage: 'started' | 'completed'
+    messageCount: number
+    beforeTokens: number
+    afterTokens: number
+    compressed: boolean | null
+    error?: string
+    /** 'command' = idle `/compress`; anything else is scoped to a run. */
+    source?: 'run' | 'command'
+    /** Epoch ms the compression began — where the transcript entry belongs. */
+    startedAt: number
+    finishedAt?: number
+  } | null
   /** Epoch ms the active run began; absent on servers that predate it. */
   runStartedAt?: number
   events: Array<{ event: string; data: RunEvent }>

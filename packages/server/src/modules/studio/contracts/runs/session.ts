@@ -175,11 +175,37 @@ export interface SessionState {
     arguments: string
     startedAt: number
   }>
+  /**
+   * Authoritative snapshot of the latest context compression. `events` carries
+   * the same information as replayable run events, but it is reset at run
+   * boundaries and is not replayed for idle sessions, so a client that missed
+   * the live `compression.completed` (switched session mid-compression,
+   * reconnect) has no way to reconcile. This survives both and is serialized on
+   * resume, so the UI can stop claiming a finished compression is still running.
+   */
+  compression?: CompressionProgress | null
   bridgeCompressionResults?: Record<string, BridgeCompressionResult>
   backgroundTasks?: Record<string, Record<string, unknown>>
   backgroundDelegations?: Record<string, BackgroundDelegationState>
   /** Process-local by design; callbacks after a Studio restart are rejected instead of using live history. */
   backgroundContinuationContexts?: Record<string, BackgroundContinuationContext>
+}
+
+/**
+ * Latest compression fact for a session: `stage: 'started'` means a compression
+ * is in flight *for the current run*, any other stage means it has finished and
+ * must never be rendered as running again.
+ */
+export interface CompressionProgress {
+  stage: 'started' | 'completed'
+  messageCount: number
+  beforeTokens: number
+  afterTokens: number
+  compressed: boolean | null
+  error?: string
+  /** Epoch ms the compression began — the time the transcript entry belongs at. */
+  startedAt: number
+  finishedAt?: number
 }
 
 export interface ResponseRunState {

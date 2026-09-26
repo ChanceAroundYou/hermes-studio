@@ -4,7 +4,7 @@ import { logger } from '../../public/logging'
 import type { PrimaryAgentBridgeClient as AgentBridgeClient } from '../../public/chat-agent-runtime'
 import { readConfigYamlForProfile } from '../../public/profile-config'
 import { flushBridgePendingToDb } from './bridge-message'
-import { buildDbSnapshotAwareHistory, forceCompressBridgeHistory, getOrCreateSession, replaceState } from './compression'
+import { buildDbSnapshotAwareHistory, forceCompressBridgeHistory, getOrCreateSession, replaceState, setCompressionProgress } from './compression'
 import { handleAbort } from './abort'
 import { calcAndUpdateUsage, contextTokensWithCachedOverhead, estimateUsageTokensFromMessages, updateMessageContextTokenUsage } from './usage'
 import { contentBlocksToString } from './content-blocks'
@@ -159,11 +159,28 @@ if (state.isWorking) {
     const historyUsage = estimateUsageTokensFromMessages(history)
     const beforeMessageTokens = historyUsage.inputTokens + historyUsage.outputTokens
     const beforeContextTokens = contextTokensWithCachedOverhead(state, beforeMessageTokens)
+    const startedAt = Date.now()
     emit('compression.started', {
       event: 'compression.started',
       message_count: history.length,
       token_count: beforeContextTokens,
       source: 'command',
+      started_at: startedAt,
+    })
+    replaceState(ctx.sessionMap, sessionId, 'compression.started', {
+      event: 'compression.started',
+      message_count: history.length,
+      token_count: beforeContextTokens,
+      source: 'command',
+      started_at: startedAt,
+    })
+    setCompressionProgress(ctx.sessionMap, sessionId, {
+      stage: 'started',
+      messageCount: history.length,
+      beforeTokens: beforeContextTokens,
+      afterTokens: 0,
+      compressed: null,
+      startedAt,
     })
     const result = await forceCompressBridgeHistory(
       sessionId,
@@ -186,6 +203,17 @@ if (state.isWorking) {
       compressedStartIndex: result.compressedStartIndex,
       contextTokens: afterContextTokens,
       source: 'command',
+      started_at: startedAt,
+      completed_at: Date.now(),
+    })
+    setCompressionProgress(ctx.sessionMap, sessionId, {
+      stage: 'completed',
+      messageCount: result.beforeMessages,
+      beforeTokens: beforeContextTokens,
+      afterTokens: afterContextTokens,
+      compressed: result.compressed ?? null,
+      startedAt,
+      finishedAt: Date.now(),
     })
     updateMessageContextTokenUsage(sessionId, state, emit, result.afterTokens, usage)
     emitCommand({
@@ -201,6 +229,7 @@ if (state.isWorking) {
     })
   } catch (err) {
     logger.warn(err, '[chat-run-socket] /compress failed for session %s', sessionId)
+    const failureMessage = err instanceof Error ? err.message : String(err)
     emit('compression.completed', {
       event: 'compression.completed',
       compressed: false,
@@ -208,8 +237,19 @@ if (state.isWorking) {
       resultMessages: 0,
       beforeTokens: 0,
       afterTokens: 0,
-      error: err instanceof Error ? err.message : String(err),
+      error: failureMessage,
       source: 'command',
+      completed_at: Date.now(),
+    })
+    setCompressionProgress(ctx.sessionMap, sessionId, {
+      stage: 'completed',
+      messageCount: 0,
+      beforeTokens: 0,
+      afterTokens: 0,
+      compressed: false,
+      error: failureMessage,
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
     })
     emitCommand({
       ok: false,

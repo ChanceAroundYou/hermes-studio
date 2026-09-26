@@ -506,7 +506,13 @@ interface CompressionState {
   afterTokens: number
   compressed: boolean | null
   error?: string
+  /** Epoch ms the compression began; used as the transcript entry's time. */
   startedAt?: number
+  /**
+   * What the compression belongs to. A run-scoped compression cannot outlive
+   * its run; an idle `/compress` command reports its own completion.
+   */
+  source?: 'run' | 'command'
 }
 
 interface AbortState {
@@ -1602,6 +1608,9 @@ export const useChatStore = defineStore('chat', () => {
         msgs[i] = { ...m, toolStatus: 'done' }
       }
     })
+    // A run-scoped compression cannot outlive its run, so an idle session is
+    // proof that a lingering "Compressing..." banner lost its completion event.
+    settleStaleCompression(sid)
   }
 
   /**
@@ -1802,6 +1811,53 @@ export const useChatStore = defineStore('chat', () => {
     if (state) next.set(sessionId, state)
     else next.delete(sessionId)
     compressionStates.value = next
+  }
+
+  /**
+   * Stops claiming a run-scoped compression is still running once its run is
+   * over. `compression.completed` is a single socket event: when it is lost
+   * (session switched away mid-compression, reconnect, dropped frame) the
+   * banner used to say "Compressing..." forever. The compression did happen, so
+   * keep that fact but drop the live claim (`compressed: null` renders as
+   * "Compression finished").
+   */
+  function settleStaleCompression(sessionId: string | null | undefined) {
+    const sid = sessionId || ''
+    if (!sid) return
+    const current = compressionStates.value.get(sid)
+    if (!current?.compressing) return
+    // `/compress` runs while the session is idle, so an idle session says
+    // nothing about it; it reports completion on its own.
+    if (current.source === 'command') return
+    setCompressionState(sid, { ...current, compressing: false, compressed: null })
+  }
+
+  /**
+   * Reconciles the local banner with the server's authoritative snapshot. This
+   * is what makes the state self-healing: every attach/refresh replaces whatever
+   * the client believed with what actually happened.
+   */
+  function reconcileCompressionState(
+    sessionId: string,
+    snapshot: ResumeSessionPayload['compression'],
+    isWorking: boolean,
+  ) {
+    if (snapshot) {
+      const source = snapshot.source === 'command' ? 'command' : 'run'
+      const live = snapshot.stage === 'started' && (source === 'command' || isWorking)
+      setCompressionState(sessionId, {
+        compressing: live,
+        messageCount: snapshot.messageCount || 0,
+        beforeTokens: snapshot.beforeTokens || 0,
+        afterTokens: snapshot.afterTokens || 0,
+        compressed: live ? null : (snapshot.compressed ?? null),
+        error: snapshot.error,
+        source,
+        startedAt: snapshot.startedAt || Date.now(),
+      })
+      return
+    }
+    if (!isWorking) settleStaleCompression(sessionId)
   }
 
   // Abort state is scoped per session because background sockets remain active
@@ -2219,6 +2275,17 @@ export const useChatStore = defineStore('chat', () => {
         serverWorking.value.add(entry.session_id)
         if (Number(entry.run_started_at) > 0) setRunStartedAt(entry.session_id, Number(entry.run_started_at))
       }
+      // The same snapshot is the authoritative word on compression: a run-scoped
+      // compression cannot outlive its run, so this heals a banner whose
+      // `compression.completed` event was lost, for every session, every poll.
+      const liveWorking = new Set(snapshot.map(entry => String(entry.session_id)))
+      for (const entry of snapshot) {
+        reconcileCompressionState(String(entry.session_id), entry.compression ?? null, true)
+      }
+      for (const sid of [...compressionStates.value.keys()]) {
+        if (liveWorking.has(sid) || streamStates.value.has(sid)) continue
+        settleStaleCompression(sid)
+      }
     } catch (err) {
       console.warn('Failed to refresh working sessions snapshot:', err)
     }
@@ -2484,7 +2551,9 @@ export const useChatStore = defineStore('chat', () => {
           } else if (!data.isWorking) {
             setAbortState(sessionId, null)
           }
-          // keep compression visible (no auto-clear on !isWorking)
+          // The server snapshot is authoritative: it is the only thing that can
+          // correct a compression whose completion event we never received.
+          reconcileCompressionState(sessionId, data.compression, !!data.isWorking)
           if (data.inputTokens != null) target.inputTokens = data.inputTokens
           if (data.outputTokens != null) target.outputTokens = data.outputTokens
           if ((data as any).contextTokens != null) target.contextTokens = (data as any).contextTokens
@@ -2531,10 +2600,12 @@ export const useChatStore = defineStore('chat', () => {
                   beforeTokens: e.token_count || 0,
                   afterTokens: 0,
                   compressed: null,
-                  startedAt: Date.now(),
+                  source: e.source === 'command' ? 'command' : 'run',
+                  startedAt: Number(e.started_at) || Date.now(),
                 })
               } else if (e.event === 'compression.completed') {
                 const afterTokens = e.contextTokens || e.afterTokens || 0
+                const previous = compressionStates.value.get(sessionId)
                 setCompressionState(sessionId, {
                   compressing: false,
                   messageCount: e.totalMessages || 0,
@@ -2542,7 +2613,8 @@ export const useChatStore = defineStore('chat', () => {
                   afterTokens,
                   compressed: e.compressed ?? false,
                   error: e.error,
-                  startedAt: compressionStates.value.get(sessionId)?.startedAt || Date.now(),
+                  source: e.source === 'command' ? 'command' : (previous?.source || 'run'),
+                  startedAt: Number(e.started_at) || previous?.startedAt || Date.now(),
                 })
                 if (e.contextTokens != null) target.contextTokens = e.contextTokens
               } else if (e.event === 'abort.started') {
@@ -4363,6 +4435,7 @@ export const useChatStore = defineStore('chat', () => {
         if (data.isWorking) serverWorking.value.add(sid)
         else serverWorking.value.delete(sid)
         applyResumedRunActivity(sid, data as any)
+        reconcileCompressionState(sid, data.compression, !!data.isWorking)
 
         if (data.queueLength && data.queueLength > 0) {
           queueLengths.value.set(sid, data.queueLength)
@@ -4444,11 +4517,13 @@ export const useChatStore = defineStore('chat', () => {
                   beforeTokens: (e as any).token_count || 0,
                   afterTokens: 0,
                   compressed: null,
-                  startedAt: Date.now(),
+                  source: (e as any).source === 'command' ? 'command' : 'run',
+                  startedAt: Number((e as any).started_at) || Date.now(),
                 })
                 break
               case 'compression.completed': {
                 const afterTokens = (e as any).contextTokens || (e as any).afterTokens || 0
+                const previous = compressionStates.value.get(sid)
                 setCompressionState(sid, {
                   compressing: false,
                   messageCount: (e as any).totalMessages || 0,
@@ -4456,7 +4531,8 @@ export const useChatStore = defineStore('chat', () => {
                   afterTokens,
                   compressed: (e as any).compressed ?? false,
                   error: (e as any).error,
-                  startedAt: compressionStates.value.get(sid)?.startedAt || Date.now(),
+                  source: (e as any).source === 'command' ? 'command' : (previous?.source || 'run'),
+                  startedAt: Number((e as any).started_at) || previous?.startedAt || Date.now(),
                 })
                 if ((e as any).contextTokens != null) target.contextTokens = (e as any).contextTokens
                 break
@@ -4576,13 +4652,15 @@ export const useChatStore = defineStore('chat', () => {
                 beforeTokens: (evt as any).token_count || 0,
                 afterTokens: 0,
                 compressed: null,
-                startedAt: Date.now(),
+                source: (evt as any).source === 'command' ? 'command' : 'run',
+                startedAt: Number((evt as any).started_at) || Date.now(),
               })
               break
             }
 
             case 'compression.completed': {
               const afterTokens = (evt as any).contextTokens || (evt as any).afterTokens || 0
+              const previous = compressionStates.value.get(sid)
               setCompressionState(sid, {
                 compressing: false,
                 messageCount: (evt as any).totalMessages || 0,
@@ -4590,7 +4668,8 @@ export const useChatStore = defineStore('chat', () => {
                 afterTokens,
                 compressed: (evt as any).compressed ?? false,
                 error: (evt as any).error,
-                startedAt: compressionStates.value.get(sid)?.startedAt || Date.now(),
+                source: (evt as any).source === 'command' ? 'command' : (previous?.source || 'run'),
+                startedAt: Number((evt as any).started_at) || previous?.startedAt || Date.now(),
               })
               if ((evt as any).contextTokens != null) {
                 const target = sessions.value.find(s => s.id === sid)
@@ -4786,6 +4865,7 @@ export const useChatStore = defineStore('chat', () => {
                 updateMessage(sid, lastMsg.id, { isStreaming: false })
               }
               settleRunningTools(sid, 'done')
+              settleStaleCompression(sid)
               // Server-computed usage (local countTokens, snapshot-aware)
               if ((evt as any).inputTokens != null) {
                 const target = sessions.value.find(s => s.id === sid)
@@ -4935,6 +5015,7 @@ export const useChatStore = defineStore('chat', () => {
 
             case 'run.failed': {
               clearRunStartedAt(sid)
+              settleStaleCompression(sid)
               clearPendingInteractions(sid)
               const failedMessages = getSessionMsgs(sid)
               const failedAssistant = activeAssistantMessageId
@@ -5197,13 +5278,15 @@ export const useChatStore = defineStore('chat', () => {
             beforeTokens: (evt as any).token_count || 0,
             afterTokens: 0,
             compressed: null,
-            startedAt: Date.now(),
+            source: (evt as any).source === 'command' ? 'command' : 'run',
+            startedAt: Number((evt as any).started_at) || Date.now(),
           })
           break
         }
 
         case 'compression.completed': {
           const afterTokens = (evt as any).contextTokens || (evt as any).afterTokens || 0
+          const previous = compressionStates.value.get(sid)
           setCompressionState(sid, {
             compressing: false,
             messageCount: (evt as any).totalMessages || 0,
@@ -5211,7 +5294,8 @@ export const useChatStore = defineStore('chat', () => {
             afterTokens,
             compressed: (evt as any).compressed ?? false,
             error: (evt as any).error,
-            startedAt: compressionStates.value.get(sid)?.startedAt || Date.now(),
+            source: (evt as any).source === 'command' ? 'command' : (previous?.source || 'run'),
+            startedAt: Number((evt as any).started_at) || previous?.startedAt || Date.now(),
           })
           if ((evt as any).contextTokens != null) {
             const target = sessions.value.find(s => s.id === sid)
@@ -5784,7 +5868,9 @@ export const useChatStore = defineStore('chat', () => {
             } else if (!data.isWorking) {
               setAbortState(sid, null)
             }
-            // keep compression completed visible on resume
+            // The server snapshot is authoritative: it is the only thing that can
+            // correct a compression whose terminal event we never received.
+            reconcileCompressionState(sid, data.compression, !!data.isWorking)
             applyResumedSessionSettings(data)
             if (Array.isArray(data.messages) && activeSession.value) {
               if (typeof data.workspace === 'string') {

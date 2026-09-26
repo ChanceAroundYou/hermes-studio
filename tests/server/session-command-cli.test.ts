@@ -30,6 +30,7 @@ vi.mock('../../packages/server/src/modules/studio/services/chat-run/compression'
   forceCompressBridgeHistory: forceCompressBridgeHistoryMock,
   getOrCreateSession: vi.fn(() => ({ messages: [], isWorking: false })),
   replaceState: vi.fn(),
+  setCompressionProgress: vi.fn(),
 }))
 
 vi.mock('../../packages/server/src/modules/studio/services/chat-run/usage', () => ({

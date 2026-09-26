@@ -72,12 +72,18 @@ const MAX_RECORDED_EVENTS = 1000
 export async function workingSessions(ctx: Context) {
   const server = getChatRunServer()
   const sessions = server && typeof server.listWorkingSessions === 'function'
-    ? (server.listWorkingSessions() as Array<{ sessionId: string; runStartedAt: number; source?: string }>)
+    ? (server.listWorkingSessions() as Array<{
+        sessionId: string
+        runStartedAt: number
+        source?: string
+        compression?: unknown
+      }>)
     : []
   ctx.body = { sessions: sessions.map(session => ({
     session_id: session.sessionId,
     run_started_at: session.runStartedAt,
     source: session.source || null,
+    compression: session.compression ?? null,
   })) }
 }
 

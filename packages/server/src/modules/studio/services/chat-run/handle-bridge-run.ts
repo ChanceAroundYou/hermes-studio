@@ -16,7 +16,7 @@ import type {
   PrimaryAgentBridgeOutput as AgentBridgeOutput,
 } from '../../public/chat-agent-runtime'
 import { contentBlocksToString, convertContentBlocksForAgent, extractTextForPreview, isContentBlockArray } from './content-blocks'
-import { buildCompressedHistory, buildDbSnapshotAwareHistory, forceCompressBridgeHistory, pushState, replaceState } from './compression'
+import { buildCompressedHistory, buildDbSnapshotAwareHistory, forceCompressBridgeHistory, pushState, replaceState, setCompressionProgress } from './compression'
 import {
   calcAndUpdateUsage,
   contextTokensWithCachedOverhead,
@@ -1617,9 +1617,18 @@ async function applyBridgeChunkAsync(
         message_count: bridgeHistory.length || ev.message_count,
         token_count: tokenCount,
         source: 'bridge',
+        started_at: Date.now(),
       }
       replaceState(sessionMap, sessionId, 'compression.started', payload)
       emit('compression.started', payload)
+      setCompressionProgress(sessionMap, sessionId, {
+        stage: 'started',
+        messageCount: payload.message_count || 0,
+        beforeTokens: payload.token_count || 0,
+        afterTokens: 0,
+        compressed: null,
+        startedAt: payload.started_at,
+      })
       if (ev.request_id && Array.isArray(ev.messages)) {
         try {
           const compressed = await forceCompressBridgeHistory(
@@ -1666,12 +1675,23 @@ async function applyBridgeChunkAsync(
         verbatimCount: compressionResult?.verbatimCount,
         compressedStartIndex: compressionResult?.compressedStartIndex,
         source: 'bridge',
+        started_at: state.compression?.stage === 'started' ? state.compression.startedAt : undefined,
+        completed_at: Date.now(),
       }
       if (ev.request_id && state.bridgeCompressionResults) {
         delete state.bridgeCompressionResults[String(ev.request_id)]
       }
       replaceState(sessionMap, sessionId, 'compression.completed', payload)
       emit('compression.completed', payload)
+      setCompressionProgress(sessionMap, sessionId, {
+        stage: 'completed',
+        messageCount: payload.totalMessages || 0,
+        beforeTokens: payload.beforeTokens || 0,
+        afterTokens: payload.afterTokens || 0,
+        compressed: payload.compressed ?? null,
+        startedAt: payload.started_at || payload.completed_at,
+        finishedAt: payload.completed_at,
+      })
       const usage = await calcAndUpdateUsage(sessionId, state, emit)
       if (messageAfterTokensWithInput != null) {
         updateMessageContextTokenUsage(sessionId, state, emit, messageAfterTokensWithInput, usage)
@@ -1687,12 +1707,24 @@ async function applyBridgeChunkAsync(
         beforeTokens: ev.approx_tokens,
         error: ev.error,
         source: 'bridge',
+        started_at: state.compression?.stage === 'started' ? state.compression.startedAt : undefined,
+        completed_at: Date.now(),
       }
       if (ev.request_id && state.bridgeCompressionResults) {
         delete state.bridgeCompressionResults[String(ev.request_id)]
       }
       replaceState(sessionMap, sessionId, 'compression.completed', payload)
       emit('compression.completed', payload)
+      setCompressionProgress(sessionMap, sessionId, {
+        stage: 'completed',
+        messageCount: payload.totalMessages || 0,
+        beforeTokens: payload.beforeTokens || 0,
+        afterTokens: payload.beforeTokens || 0,
+        compressed: false,
+        error: payload.error,
+        startedAt: payload.started_at || payload.completed_at,
+        finishedAt: payload.completed_at,
+      })
     } else if (evType === 'status') {
       const payload = {
         ...ev,

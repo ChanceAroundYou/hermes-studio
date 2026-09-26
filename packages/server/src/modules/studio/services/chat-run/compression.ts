@@ -18,7 +18,7 @@ import {
   type CursorSnapshotParts,
 } from './context-history'
 import type { ChatMessage, CompressionConfig as CompressorConfig } from '../context-compressor'
-import type { SessionState, BridgeCompressionResult } from './types'
+import type { SessionState, BridgeCompressionResult, CompressionProgress } from './types'
 
 interface RunChatCompressionConfig {
   enabled: boolean
@@ -463,11 +463,23 @@ export async function compressHistory(
   const currentRunInputTokens = typeof currentInputTokens === 'number' && Number.isFinite(currentInputTokens) && currentInputTokens > 0
     ? Math.floor(currentInputTokens)
     : 0
-  pushState(sessionMap, sessionId, 'compression.started', {
-    event: 'compression.started', message_count: msgCount, token_count: totalTokens,
+  const startedAt = Date.now()
+  // `replaceState` (keyed upsert) rather than `pushState`: the events array is a
+  // latest-state ring, so appending a second `compression.started` lets a stale
+  // start outlive the completion, which `replaceState` rewrites in place.
+  replaceState(sessionMap, sessionId, 'compression.started', {
+    event: 'compression.started', message_count: msgCount, token_count: totalTokens, started_at: startedAt,
+  })
+  setCompressionProgress(sessionMap, sessionId, {
+    stage: 'started',
+    messageCount: msgCount,
+    beforeTokens: totalTokens,
+    afterTokens: 0,
+    compressed: null,
+    startedAt,
   })
   emit('compression.started', {
-    event: 'compression.started', message_count: msgCount, token_count: totalTokens,
+    event: 'compression.started', message_count: msgCount, token_count: totalTokens, started_at: startedAt,
   })
 
   try {
@@ -510,8 +522,19 @@ export async function compressHistory(
       summaryTokens: result.meta.summaryTokenEstimate,
       verbatimCount: result.meta.verbatimCount,
       compressedStartIndex: result.meta.compressedStartIndex,
+      started_at: startedAt,
+      completed_at: Date.now(),
     }
     replaceState(sessionMap, sessionId, 'compression.completed', compressedMeta)
+    setCompressionProgress(sessionMap, sessionId, {
+      stage: 'completed',
+      messageCount: compressedMeta.totalMessages || 0,
+      beforeTokens: compressedMeta.beforeTokens || 0,
+      afterTokens: compressedMeta.afterTokens || 0,
+      compressed: compressedMeta.compressed ?? null,
+      startedAt,
+      finishedAt: compressedMeta.completed_at,
+    })
     logger.info('[context-compress] AFTER  session=%s: %d messages, ~%d tokens (was %d)',
       sessionId, result.messages.length, compressedRunMessageTokens, totalTokens)
     const compressedContextTokens = updateMessageContextTokenUsage(sessionId, cState, emit, compressedRunMessageTokens, afterTokens)
@@ -547,8 +570,20 @@ export async function compressHistory(
       verbatimCount: msgCount,
       compressedStartIndex: -1,
       error: err.message,
+      started_at: startedAt,
+      completed_at: Date.now(),
     }
     replaceState(sessionMap, sessionId, 'compression.completed', failedMeta)
+    setCompressionProgress(sessionMap, sessionId, {
+      stage: 'completed',
+      messageCount: msgCount,
+      beforeTokens: totalTokens,
+      afterTokens: totalTokens,
+      compressed: false,
+      error: err.message,
+      startedAt,
+      finishedAt: failedMeta.completed_at,
+    })
     logger.warn(err, '[chat-run-socket] compression failed for session %s, using assembled context', sessionId)
     emit('compression.completed', failedMeta)
     return history
@@ -703,4 +738,17 @@ export function replaceState(sessionMap: Map<string, SessionState>, sessionId: s
     }
   }
   pushState(sessionMap, sessionId, event, data)
+}
+
+/**
+ * Stores the authoritative compression snapshot for a session. Unlike the
+ * `events` ring (reset at run boundaries, dropped from idle resume payloads)
+ * this survives both, so a re-attaching client can always reconcile.
+ */
+export function setCompressionProgress(
+  sessionMap: Map<string, SessionState>,
+  sessionId: string,
+  progress: CompressionProgress,
+) {
+  getOrCreateSession(sessionMap, sessionId).compression = progress
 }
