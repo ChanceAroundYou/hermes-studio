@@ -174,6 +174,9 @@ export class OpenAICompatibleModelClient implements ModelClient {
     let producedOutput = false
     let responseId: string | undefined
     let responseModel: string | undefined
+    // True once a `finish_reason: "tool_calls"` event has been acted on, so a
+    // second one arriving on an empty delta is recognised as a duplicate.
+    let sawToolCallFinish = false
     const reasoningDetails = new Map<string, Record<string, unknown>>()
 
     try {
@@ -245,6 +248,15 @@ export class OpenAICompatibleModelClient implements ModelClient {
           }
 
           if (choice.finish_reason === 'tool_calls') {
+            // Some upstreams (stealth/space-bunny-alpha sends 279/279) close a
+            // stream with TWO consecutive `finish_reason: "tool_calls"` events on
+            // empty deltas. The first one already flushed and cleared the buffer,
+            // so the second one finds it empty and used to be reported as
+            // "tool_calls without a complete id and function name" — a message
+            // that names a defect we never actually received. An empty buffer on a
+            // repeat is a duplicate terminator, not a malformed call: skip it.
+            if (toolCalls.size === 0 && !sawToolCallFinish) continue
+            sawToolCallFinish = true
             let validToolCalls = 0
             for (const toolCall of toolCalls.values()) {
               const normalized = normalizeToolCall(toolCall.id, toolCall.name, toolCall.argumentsText)
