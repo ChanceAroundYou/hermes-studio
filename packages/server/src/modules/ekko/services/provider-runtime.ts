@@ -45,7 +45,11 @@ export async function resolveEkkoProviderRuntimeConfig(input: {
     input.model,
     input.forceRefresh === true,
   )
-  const authorizedValuesFirst = !!authorized.apiKey
+  // Explicit connection values are user-managed overrides and win for API-key
+  // providers. OAuth-managed providers (<name>-oauth) resolve their
+  // region/token from the Hermes authorization store on every launch, so the
+  // stored credentials must win over stale explicit values there.
+  const authorizedValuesFirst = !!authorized.apiKey && providerKey.endsWith('-oauth')
   let baseUrl = String(
     authorizedValuesFirst
       ? authorized.baseUrl || input.baseUrl || ''

@@ -433,6 +433,23 @@ export class ChatRunSocket {
   })
   private bridgeResumePolls = new Set<string>()
   /** A run that produced no bridge activity for this long is presumed dead. */
+  /**
+   * Authoritative snapshot of sessions that currently hold a live run in this
+   * process. The client polls one aggregate endpoint on page load instead of
+   * probing each session, so the sidebar can show "thinking" for a session
+   * without opening it first.
+   */
+  listWorkingSessions(): Array<{ sessionId: string; runStartedAt: number; source?: string }> {
+    const now = Date.now()
+    const list: Array<{ sessionId: string; runStartedAt: number; source?: string }> = []
+    for (const [sid, state] of this.sessionMap) {
+      if (!state.isWorking) continue
+      const startedAt = Number(state.runStartedAt) || 0
+      list.push({ sessionId: sid, runStartedAt: startedAt || now, source: state.source })
+    }
+    return list
+  }
+
   private static readonly RUN_RECONCILE_STALE_MS = 10 * 60 * 1000
   private static readonly RUN_RECONCILE_INTERVAL_MS = 30 * 1000
   private readonly runWaiters = new Map<string, Set<(event: string, payload: any) => void>>()

@@ -300,6 +300,24 @@ export async function downloadSessionWorkspaceFile(
   saveBlob(blob, fileName)
 }
 
+export interface WorkingSessionSnapshot {
+  session_id: string
+  run_started_at: number
+  source?: string | null
+}
+
+/**
+ * Authoritative snapshot of sessions with live runs, used by the sidebar so a
+ * freshly-opened Studio shows "thinking" for every session that is actually
+ * still running, not only for sessions the user opens.
+ */
+export async function fetchWorkingSessions(): Promise<WorkingSessionSnapshot[]> {
+  const response = await request<{ sessions: WorkingSessionSnapshot[] }>('/api/studio/chat-run/working-sessions')
+  return (response && Array.isArray(response.sessions) ? response.sessions : []).filter(session =>
+    Boolean(session && session.session_id),
+  )
+}
+
 export async function listSessionWorkspaceFiles(
   sessionId: string,
   path: string = '',

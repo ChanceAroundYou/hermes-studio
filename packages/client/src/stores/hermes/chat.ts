@@ -1,6 +1,6 @@
 import { mergeTaskPlanMessages, type TaskPlanSnapshot } from '@/utils/task-plan'
 import { connectChatRun, startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, onSessionSettingsUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport } from '@/api/studio/chat'
-import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchSessions, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/studio/sessions'
+import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchWorkingSessions, fetchSessions, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/studio/sessions'
 import { getActiveProfileName, getBaseUrlValue } from '@/api/client'
 import { onAuthInvalidated } from '@/api/auth-invalidation'
 import { inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId } from '@/api/coding-agents'
@@ -2088,6 +2088,7 @@ export const useChatStore = defineStore('chat', () => {
         sessions.value = next
         pruneCompletedUnreadSessions(new Set(next.map(s => s.id)))
       }
+      await applyWorkingSessionsSnapshot()
 
       // Defensive: re-bind activeSession to the (same) object now in the array,
       // by id, in case anything above changed array membership.
@@ -2100,6 +2101,34 @@ export const useChatStore = defineStore('chat', () => {
       console.error('Failed to refresh session list:', err)
     } finally {
       sessionListRefreshInFlight = false
+    }
+  }
+
+  /**
+   * Converge the sidebar to the authoritative server state of "which sessions
+   * are still running" without opening each conversation. Called by
+   * refreshSessionListOnly so a freshly opened Studio repairs the working
+   * flags of all listed sessions in one request.
+   */
+  async function applyWorkingSessionsSnapshot(): Promise<void> {
+    try {
+      const snapshot = await fetchWorkingSessions()
+      const live = new Set(snapshot.map(session => String(session.session_id)))
+      // A session this client is actively streaming re-asserts its own working
+      // state via socket events; never relax it from a snapshot that may lag a
+      // just-started or just-finished run.
+      const streamingIds = streamStates.value
+      const authoritativeRemove = [...serverWorking.value].filter(id => !live.has(id) && !streamingIds.has(id))
+      // Only relax flags for sessions this client has not observed a terminal
+      // event for since the snapshot may lag behind a just-finished run.
+      for (const id of authoritativeRemove) serverWorking.value.delete(id)
+      for (const entry of snapshot) {
+        if (serverWorking.value.has(entry.session_id)) continue
+        serverWorking.value.add(entry.session_id)
+        if (Number(entry.run_started_at) > 0) setRunStartedAt(entry.session_id, Number(entry.run_started_at))
+      }
+    } catch (err) {
+      console.warn('Failed to refresh working sessions snapshot:', err)
     }
   }
 
@@ -2830,6 +2859,8 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleToolCompletedEvent(sessionId: string, evt: RunEvent) {
+    // One bump per finished tool — structural enough for the sidebar order.
+    bumpSessionUpdatedAt(sessionId)
     const toolCallId = typeof (evt as any).tool_call_id === 'string'
       ? String((evt as any).tool_call_id)
       : undefined
@@ -3872,7 +3903,8 @@ export const useChatStore = defineStore('chat', () => {
     const text = (evt as any).text || (evt as any).delta || ''
     if (!text) return
     ctx.runProducedAssistantText = true
-    bumpSessionUpdatedAt(ctx.sid)
+    // Sidebar order should not jitter on every streamed reasoning character;
+    // it is bumped on structural events (tool finished / sentence settled) instead.
     const msgs = getSessionMsgs(ctx.sid)
     const reasoningTargetId = ctx.reasoningAssistantMessageId || ctx.activeAssistantMessageId
     const last = reasoningTargetId ? msgs.find(m => m.id === reasoningTargetId) : null
@@ -3903,6 +3935,9 @@ export const useChatStore = defineStore('chat', () => {
       noteThinkingDelta(last.id, prev, next)
       if (last.reasoning) noteReasoningEnd(last.id)
       last.content = next
+      // Only promote the sidebar order once a full sentence has settled, so
+      // concurrent streaming sessions do not rapidly trade places per token.
+      if (/[.。!！?？;；\n]\s*$/.test(next)) bumpSessionUpdatedAt(ctx.sid)
     } else {
       const nextContent = (evt as any).delta || ''
       if (isDuplicateAssistantContent(msgs, 'assistant', nextContent, Date.now())) return
@@ -3928,6 +3963,8 @@ export const useChatStore = defineStore('chat', () => {
       if (isDuplicateAssistantContent(msgs, 'assistant', text, Date.now())) return
       addMessage(ctx.sid, { id: uid(), role: 'assistant', content: text, timestamp: Date.now(), isStreaming: false } as Message)
     }
+    // A fully-settled sentence (interim payload) is a reorder-worthy event.
+    bumpSessionUpdatedAt(ctx.sid)
     ctx.activeAssistantMessageId = null
     ctx.reasoningAssistantMessageId = null
   }
@@ -5634,7 +5671,12 @@ export const useChatStore = defineStore('chat', () => {
   if (typeof window !== 'undefined' && !(typeof process !== 'undefined' && process.env.VITEST) && !(globalThis as any).__vitest_worker__) {
     window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
-      if (isStreaming.value) return
+      // Deliberately NOT gated on isStreaming: while the user watches a session
+      // that is currently running (the common case), the sidebar must still
+      // see other sessions' working flags and last-activity changes. The list
+      // refresh is a metadata-only HTTP read and cannot disrupt the active
+      // run; the active session's own live state keeps coming from socket
+      // events / streamStates below.
       void refreshSessionListOnly()
       // Live-sync NEW messages only. The server paginates newest-first
       // (offset=0 = latest page). We re-fetch the latest page and prepend any

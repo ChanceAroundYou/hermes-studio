@@ -121,6 +121,104 @@ export function isSessionCommand(input: string | ContentBlock[]): boolean {
   return parseSessionCommand(input) !== null
 }
 
+/**
+ * Shared compression runner for `/compress` (and the /compact alias inside
+ * Ekko/DSH sessions). Kept separate so non-bridge session types can reuse the
+ * exact same Studio-managed compression path.
+ */
+export async function handleCompressSessionCommand(
+  sessionId: string,
+  ctx: Pick<SessionCommandContext, 'nsp' | 'socket' | 'sessionMap' | 'profile'>,
+): Promise<void> {
+  const state = getOrCreateSession(ctx.sessionMap, sessionId)
+  const emitCommand = (payload: Record<string, unknown>) => {
+    const message = typeof payload.message === 'string' ? payload.message : ''
+    if (message) persistCommandMessage(sessionId, state, message)
+    emitToSession(ctx.nsp, ctx.socket, sessionId, 'session.command', {
+      event: 'session.command',
+      session_id: sessionId,
+      command: 'compress',
+      ok: true,
+      ...payload,
+    })
+  }
+if (state.isWorking) {
+    emitCommand({ ok: false, action: 'compress', terminal: false, message: 'Compression can only run while the session is idle.' })
+    return
+  }
+  clearTransientRunState(state)
+  const emit = (event: string, payload: any) => emitToSession(ctx.nsp, ctx.socket, sessionId, event, payload)
+  try {
+    const session = getSession(sessionId)
+    const history = await buildDbSnapshotAwareHistory(
+      sessionId,
+      ctx.profile,
+      { excludeLastUser: true },
+      { model: session?.model, provider: session?.provider },
+    )
+    const historyUsage = estimateUsageTokensFromMessages(history)
+    const beforeMessageTokens = historyUsage.inputTokens + historyUsage.outputTokens
+    const beforeContextTokens = contextTokensWithCachedOverhead(state, beforeMessageTokens)
+    emit('compression.started', {
+      event: 'compression.started',
+      message_count: history.length,
+      token_count: beforeContextTokens,
+      source: 'command',
+    })
+    const result = await forceCompressBridgeHistory(
+      sessionId,
+      ctx.profile,
+      [],
+    )
+    state.bridgeCompressionResults = state.bridgeCompressionResults || {}
+    const usage = await calcAndUpdateUsage(sessionId, state, emit)
+    const afterContextTokens = contextTokensWithCachedOverhead(state, result.afterTokens)
+    emit('compression.completed', {
+      event: 'compression.completed',
+      compressed: result.compressed,
+      llmCompressed: result.llmCompressed,
+      totalMessages: result.beforeMessages,
+      resultMessages: result.resultMessages,
+      beforeTokens: beforeContextTokens,
+      afterTokens: result.afterTokens,
+      summaryTokens: result.summaryTokens,
+      verbatimCount: result.verbatimCount,
+      compressedStartIndex: result.compressedStartIndex,
+      contextTokens: afterContextTokens,
+      source: 'command',
+    })
+    updateMessageContextTokenUsage(sessionId, state, emit, result.afterTokens, usage)
+    emitCommand({
+      action: 'compress',
+      message: `Compression completed: ${result.beforeMessages} -> ${result.resultMessages} messages, ${beforeContextTokens} -> ${afterContextTokens} tokens.`,
+      beforeMessages: result.beforeMessages,
+      resultMessages: result.resultMessages,
+      beforeTokens: beforeContextTokens,
+      afterTokens: afterContextTokens,
+      messageBeforeTokens: result.beforeTokens,
+      messageAfterTokens: result.afterTokens,
+      compressed: result.compressed,
+    })
+  } catch (err) {
+    logger.warn(err, '[chat-run-socket] /compress failed for session %s', sessionId)
+    emit('compression.completed', {
+      event: 'compression.completed',
+      compressed: false,
+      totalMessages: 0,
+      resultMessages: 0,
+      beforeTokens: 0,
+      afterTokens: 0,
+      error: err instanceof Error ? err.message : String(err),
+      source: 'command',
+    })
+    emitCommand({
+      ok: false,
+      action: 'compress',
+      message: `Compression failed: ${err instanceof Error ? err.message : String(err)}`,
+    })
+  }
+}
+
 export async function handleSessionCommand(
   sessionId: string,
   command: ParsedSessionCommand,
@@ -736,76 +834,7 @@ export async function handleSessionCommand(
         return
       }
       clearTransientRunState(state)
-      const emit = (event: string, payload: any) => emitToSession(ctx.nsp, ctx.socket, sessionId, event, payload)
-      try {
-        const session = getSession(sessionId)
-        const history = await buildDbSnapshotAwareHistory(
-          sessionId,
-          ctx.profile,
-          { excludeLastUser: true },
-          { model: session?.model, provider: session?.provider },
-        )
-        const historyUsage = estimateUsageTokensFromMessages(history)
-        const beforeMessageTokens = historyUsage.inputTokens + historyUsage.outputTokens
-        const beforeContextTokens = contextTokensWithCachedOverhead(state, beforeMessageTokens)
-        emit('compression.started', {
-          event: 'compression.started',
-          message_count: history.length,
-          token_count: beforeContextTokens,
-          source: 'command',
-        })
-        const result = await forceCompressBridgeHistory(
-          sessionId,
-          ctx.profile,
-          [],
-        )
-        state.bridgeCompressionResults = state.bridgeCompressionResults || {}
-        const usage = await calcAndUpdateUsage(sessionId, state, emit)
-        const afterContextTokens = contextTokensWithCachedOverhead(state, result.afterTokens)
-        emit('compression.completed', {
-          event: 'compression.completed',
-          compressed: result.compressed,
-          llmCompressed: result.llmCompressed,
-          totalMessages: result.beforeMessages,
-          resultMessages: result.resultMessages,
-          beforeTokens: beforeContextTokens,
-          afterTokens: result.afterTokens,
-          summaryTokens: result.summaryTokens,
-          verbatimCount: result.verbatimCount,
-          compressedStartIndex: result.compressedStartIndex,
-          contextTokens: afterContextTokens,
-          source: 'command',
-        })
-        updateMessageContextTokenUsage(sessionId, state, emit, result.afterTokens, usage)
-        emitCommand({
-          action: 'compress',
-          message: `Compression completed: ${result.beforeMessages} -> ${result.resultMessages} messages, ${beforeContextTokens} -> ${afterContextTokens} tokens.`,
-          beforeMessages: result.beforeMessages,
-          resultMessages: result.resultMessages,
-          beforeTokens: beforeContextTokens,
-          afterTokens: afterContextTokens,
-          messageBeforeTokens: result.beforeTokens,
-          messageAfterTokens: result.afterTokens,
-          compressed: result.compressed,
-        })
-      } catch (err) {
-        logger.warn(err, '[chat-run-socket] /compress failed for session %s', sessionId)
-        emit('compression.completed', {
-          event: 'compression.completed',
-          compressed: false,
-          totalMessages: 0,
-          resultMessages: 0,
-          beforeTokens: 0,
-          afterTokens: 0,
-          error: err instanceof Error ? err.message : String(err),
-          source: 'command',
-        })
-        emitCommand({
-          ok: false,
-          action: 'compress',
-          message: `Compression failed: ${err instanceof Error ? err.message : String(err)}`,
-        })
-      }
+      await handleCompressSessionCommand(sessionId, ctx)
       return
     }
 

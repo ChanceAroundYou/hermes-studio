@@ -13281,6 +13281,32 @@
         }
       }
     },
+    "/api/studio/chat-run/working-sessions": {
+      "get": {
+        "tags": [
+          "Chat Run"
+        ],
+        "summary": "Get working-sessions",
+        "description": "GET /api/studio/chat-run/working-sessions",
+        "operationId": "workingSessions",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/api/studio/files/copy": {
       "post": {
         "tags": [

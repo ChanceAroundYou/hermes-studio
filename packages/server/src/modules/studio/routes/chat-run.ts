@@ -9,6 +9,7 @@ export const chatRunRoutes = new Router()
 chatRunRoutes.post('/api/studio/task-plans/update', updateTaskPlan)
 chatRunRoutes.post('/api/studio/clarifications/request', requestClarification)
 
+chatRunRoutes.get('/api/studio/chat-run/working-sessions', ctrl.workingSessions)
 chatRunRoutes.post('/api/studio/chat-run/runs', ctrl.runOnce)
 chatRunRoutes.post('/api/studio/mobile-calendar/request', ctrl.requestMobileCalendar)
 chatRunRoutes.post('/api/studio/mobile-location/request', ctrl.requestMobileLocation)

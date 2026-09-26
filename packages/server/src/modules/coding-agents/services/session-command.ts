@@ -4,6 +4,7 @@ import { getModelContextLength } from '../../studio/public/provider-runtime'
 import { calcAndUpdateUsage, getOrCreateSession } from '../../studio/public/run-state'
 import type { SessionState } from '../../studio/contracts/runs/session'
 import { codingAgentRunManager } from './runtime/run-manager'
+import { handleCompressSessionCommand } from '../../studio/services/chat-run/session-command'
 import { compactStoredCodingAgentSession, startCodingAgentRun } from './index'
 
 export type CodingAgentCommandName = 'context' | 'compact' | 'usage' | 'status'
@@ -23,6 +24,7 @@ type CodingAgentCompactResult = { started: boolean } | {
 const CODING_AGENT_COMMAND_ALIASES: Record<string, CodingAgentCommandName> = {
   context: 'context',
   compact: 'compact',
+  compress: 'compact',
   usage: 'usage',
   status: 'status',
 }
@@ -227,6 +229,12 @@ export async function handleCodingAgentSessionCommand(
     const compactRow = getSession(sessionId)
     const compactInfo = codingAgentRunManager.getRunInfo(sessionId)
     const compactAgentId = compactRow?.agent || compactInfo?.agentId || ''
+    // Ekko and DSH hold no native CLI compaction: their context is managed by
+    // the Studio snapshot compressor, so forward to that shared path.
+    if (compactAgentId === 'ekko-agent' || compactAgentId === 'dsh') {
+      await handleCompressSessionCommand(sessionId, { nsp, socket, sessionMap, profile })
+      return
+    }
     if (compactAgentId === 'opencode') {
       emitCommand({
         ok: false,

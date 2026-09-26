@@ -69,6 +69,18 @@ const DEFAULT_TIMEOUT_MS = 300_000
 const MAX_TIMEOUT_MS = 1_800_000
 const MAX_RECORDED_EVENTS = 1000
 
+export async function workingSessions(ctx: Context) {
+  const server = getChatRunServer()
+  const sessions = server && typeof server.listWorkingSessions === 'function'
+    ? (server.listWorkingSessions() as Array<{ sessionId: string; runStartedAt: number; source?: string }>)
+    : []
+  ctx.body = { sessions: sessions.map(session => ({
+    session_id: session.sessionId,
+    run_started_at: session.runStartedAt,
+    source: session.source || null,
+  })) }
+}
+
 export async function requestMobileLocation(ctx: Context) {
   const body = (ctx.request.body || {}) as Record<string, unknown>
   const sessionId = String(body.session_id || '').trim()
