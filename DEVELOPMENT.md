@@ -97,6 +97,31 @@ Do **not** run `npx playwright install` on such a host: it empties the managed
 cache first and then fails, so browser tests stay down until the links above are
 recreated.
 
+### Local e2e status (fixture drift, not a product bug)
+
+On some hosts most of `tests/e2e` fails, and the failures are assertion
+mismatches rather than crashes: the page renders, but with the app's defaults
+instead of the values the fixture returned. `tests/e2e/theme.spec.ts` is the
+clearest example - the Theme view renders, `GET /api/theme` is mocked with
+`textColor: '#203040'`, and the colour input still shows the default
+`#1a1a1a` because the app seeds its theme at boot and the spec never drives that
+path.
+
+Two things make this pre-existing rather than caused by a change under review:
+
+- running the same specs against the commit before the change produces the same
+  failure set;
+- the same specs fail on files nobody touched (theme, terminal, task-plan,
+  social messages).
+
+So treat `npm run test:e2e` on such a host as a signal, not a gate. To triage it
+rather than guess, pick one spec, run it alone, and read
+`test-results/<spec>/error-context.md` (it contains the page snapshot at the
+failure). The first fix worth trying is making the bootstrap path in
+`tests/e2e/fixtures.ts` accept the same overrides as the per-endpoint mocks
+(theme, session, profile), because specs that override only `/api/theme` never
+reach the app's boot-time seed.
+
 ## npm Publishing
 
 The source package is `ekko-studio`. `npm run build` followed by
