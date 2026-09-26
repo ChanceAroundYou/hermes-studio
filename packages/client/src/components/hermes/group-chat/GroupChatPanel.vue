@@ -38,6 +38,7 @@ import FolderPicker from '@/components/hermes/chat/FolderPicker.vue'
 import ProfileAvatar from '@/components/hermes/profiles/ProfileAvatar.vue'
 import PageSidebarNav from '@/components/layout/PageSidebarNav.vue'
 import { copyToClipboard } from '@/utils/clipboard'
+import { useMobileChatInputViewport } from '@/composables/useMobileChatInputViewport'
 import type { Attachment } from '@/stores/hermes/chat'
 import type {
     GroupAgentPreset,
@@ -221,6 +222,7 @@ const toolPanelTransitionReady = ref(false)
 const activeWorkspacePanel = ref<'files' | 'terminal' | 'browser'>('files')
 const desktopBrowserAvailable = hasDesktopBrowserBridge()
 const workspacePanelMobile = ref(window.innerWidth <= 768)
+const isMobileViewport = useMobileChatInputViewport()
 const GROUP_CHAT_REFACTOR_NOTICE_STORAGE_KEY = 'hermes.groupChat.refactorNotice.v1.acknowledged'
 const WORKSPACE_PANEL_MIN_WIDTH = 360
 const WORKSPACE_PANEL_DEFAULT_WIDTH = 560
@@ -2089,6 +2091,8 @@ async function handleClarify(response?: string) {
 
 function handleClarifyKeydown(event: KeyboardEvent) {
     if (visibleClarify.value?.responseMode === 'editor') return
+    // 移动端：确认/换行键不提交，只有“提交”按钮生效（与聊天输入框保持一致）。
+    if (isMobileViewport.value) return
     event.preventDefault()
     void handleClarify()
 }

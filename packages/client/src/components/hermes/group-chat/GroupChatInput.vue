@@ -542,7 +542,13 @@ function handleKeydown(e: KeyboardEvent) {
         }
     }
 
-    if (e.key !== 'Enter' || e.shiftKey) return
+    if (e.key !== 'Enter') return
+
+    // 移动端：虚拟键盘上的确定/换行键一律执行换行，绝不发送消息。
+    // 移动端只有输入框右下角的发送按钮（箭头）才能发送。
+    if (isMobileViewport.value) return
+
+    if (e.shiftKey) return
     if (isComposing.value || e.isComposing || e.keyCode === 229) return
     e.preventDefault()
     handleSend()

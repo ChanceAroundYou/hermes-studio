@@ -498,4 +498,47 @@ describe('GroupChatInput mentions', () => {
     expect(remounted.find('.attachment-previews').exists()).toBe(false)
     expect(remounted.find('.message-reference-preview').exists()).toBe(false)
   })
+
+  it('keeps Enter-to-send on a desktop viewport', async () => {
+    window.innerWidth = 1024
+    const pinia = createTestingPinia({ stubActions: false, createSpy: vi.fn })
+    useSettingsStore().display = {}
+    const received: unknown[][] = []
+    const wrapper = mount(GroupChatInput, {
+      props: { roomId: 'room-enter-desktop', onSend: (...args: unknown[]) => { received.push(args) } },
+      global: { plugins: [pinia], stubs: { Transition: false } },
+    })
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('desktop group send')
+
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    textarea.element.dispatchEvent(event)
+    await nextTick()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(received).toHaveLength(1)
+    expect(received[0][0]).toBe('desktop group send')
+    wrapper.unmount()
+  })
+
+  it('inserts a newline instead of sending when Enter is pressed on a phone', async () => {
+    window.innerWidth = 640
+    const pinia = createTestingPinia({ stubActions: false, createSpy: vi.fn })
+    useSettingsStore().display = {}
+    const received: unknown[][] = []
+    const wrapper = mount(GroupChatInput, {
+      props: { roomId: 'room-enter-mobile', onSend: (...args: unknown[]) => { received.push(args) } },
+      global: { plugins: [pinia], stubs: { Transition: false } },
+    })
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('mobile group newline')
+
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    textarea.element.dispatchEvent(event)
+    await nextTick()
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(received).toHaveLength(0)
+    wrapper.unmount()
+  })
 })

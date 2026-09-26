@@ -508,6 +508,45 @@ describe('GlobalPendingActions', () => {
     expect(chatState.respondToClarifyFor).toHaveBeenCalledWith('session-b', 'clarify-b', 'staging')
   })
 
+  it('submits a clarify response with Enter on a desktop viewport', async () => {
+    window.innerWidth = 1024
+    chatState.sessions = [{ id: 'session-b', title: 'B' }]
+    chatState.pendingClarifies = new Map([['session-b', {
+      sessionId: 'session-b', clarifyId: 'clarify-b', question: 'Which environment?', choices: null,
+    }]])
+
+    mount(GlobalPendingActions)
+    await nextTick()
+
+    const content = await render(created[0].options.content)
+    await content.get('input').setValue('staging')
+    await content.get('input').trigger('keydown', { key: 'Enter' })
+
+    expect(chatState.respondToClarifyFor).toHaveBeenCalledWith('session-b', 'clarify-b', 'staging')
+  })
+
+  it('ignores Enter on a phone so only the clarify button submits', async () => {
+    window.innerWidth = 640
+    chatState.sessions = [{ id: 'session-b', title: 'B' }]
+    chatState.pendingClarifies = new Map([['session-b', {
+      sessionId: 'session-b', clarifyId: 'clarify-b', question: 'Which environment?', choices: null,
+    }]])
+
+    mount(GlobalPendingActions)
+    await nextTick()
+
+    const content = await render(created[0].options.content)
+    await content.get('input').setValue('staging')
+    await content.get('input').trigger('keydown', { key: 'Enter' })
+
+    expect(chatState.respondToClarifyFor).not.toHaveBeenCalled()
+
+    const action = await render(created[0].options.action)
+    await action.get('button').trigger('click')
+    expect(chatState.respondToClarifyFor).toHaveBeenCalledWith('session-b', 'clarify-b', 'staging')
+  })
+
+
   it('warns when a timed-out interaction is closed after an attempted response', async () => {
     mount(GlobalPendingActions)
     window.dispatchEvent(new CustomEvent('hermes:pending-interaction-expired'))

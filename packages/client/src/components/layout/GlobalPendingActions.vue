@@ -14,6 +14,7 @@ import { playCompletionSound } from '@/utils/completion-sound'
 import { showSystemNotification } from '@/utils/completion-notification'
 import { workflowApprovalKey } from '@/utils/workflow-approval-key'
 import { PENDING_INTERACTION_EXPIRED_EVENT } from '@/utils/pending-interaction'
+import { useMobileChatInputViewport } from '@/composables/useMobileChatInputViewport'
 import { approveWorkflowNode, type WorkflowRecord } from '@/api/studio/workflows'
 import { listWorkflowsSocket, onWorkflowStatusUpdated, subscribeWorkflowStatuses, disconnectWorkflowSocket, type WorkflowRuntimeStatus } from '@/api/studio/workflow-socket'
 
@@ -34,6 +35,7 @@ const pendingNotificationKeys = new Set<string>()
 const clarifyDrafts = reactive<Record<string, string>>({})
 const submitting = reactive<Record<string, boolean>>({})
 const copiedCommandKey = ref<string | null>(null)
+const isMobileViewport = useMobileChatInputViewport()
 const workflows = ref<WorkflowRecord[]>([])
 const workflowStatuses = reactive<Record<string, WorkflowRuntimeStatus>>({})
 const visibleWorkflowApprovalKeys = reactive(new Set<string>())
@@ -268,10 +270,11 @@ function clarifyContent(action: Extract<GlobalPendingAction, { kind: 'chat-clari
       placeholder: t('chat.clarifyPlaceholder'),
       'onUpdate:value': (value: string) => { clarifyDrafts[action.key] = value },
       onKeydown: (event: KeyboardEvent) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-          event.preventDefault()
-          void submitClarify(action)
-        }
+        if (event.key !== 'Enter' || event.shiftKey) return
+        // 移动端：确认/换行键不提交，只有按钮生效（与聊天输入框保持一致）。
+        if (isMobileViewport.value) return
+        event.preventDefault()
+        void submitClarify(action)
       },
     }),
   ])

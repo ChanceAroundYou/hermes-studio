@@ -1062,7 +1062,18 @@ function handleKeydown(e: KeyboardEvent) {
     }
   }
 
-  if (e.key !== 'Enter' || e.shiftKey) return
+  if (e.key !== 'Enter') return
+
+  if (isMobileViewport.value) {
+    // 移动端：虚拟键盘上的确定/换行键一律执行换行，绝不发送消息。
+    // 移动端只有输入框右下角的发送按钮（箭头）才能发送。
+    // 这里既不调用 handleSend() 也不 preventDefault()，把回车行为完全交还
+    // 浏览器默认实现（插入换行），避免输入法把确认键上报成 229/isComposing
+    // 时出现“有时发送、有时换行”的不确定行为。
+    return
+  }
+
+  if (e.shiftKey) return
   if (isImeEnter(e)) return
 
   e.preventDefault()
