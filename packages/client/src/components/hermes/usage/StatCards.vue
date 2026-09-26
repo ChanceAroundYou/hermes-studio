@@ -78,7 +78,7 @@ function formatCost(n: number): string {
   margin-top: 4px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $breakpoint-mobile) {
   .stat-cards {
     grid-template-columns: repeat(2, 1fr);
   }

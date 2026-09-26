@@ -8,6 +8,7 @@ const clipboard = vi.hoisted(() => ({ copyToClipboard: vi.fn(async () => true) }
 vi.mock('@/utils/clipboard', () => clipboard)
 
 import PendingInteractionCard from '@/components/hermes/chat/PendingInteractionCard.vue'
+import { setViewportWidth } from '../mocks/viewport'
 
 // `wrapper.emitted()` records nothing in this repo's vitest setup, so every
 // expectation goes through real listener props instead.
@@ -39,7 +40,7 @@ function buttonLabels(wrapper: ReturnType<typeof mountCard>['wrapper']) {
 
 describe('PendingInteractionCard', () => {
   beforeEach(() => {
-    window.innerWidth = 1024
+    setViewportWidth(1024)
     clipboard.copyToClipboard.mockClear()
     clipboard.copyToClipboard.mockResolvedValue(true)
   })
@@ -73,7 +74,7 @@ describe('PendingInteractionCard', () => {
   })
 
   it('keeps Enter as a plain newline on a phone so only the button answers', async () => {
-    window.innerWidth = 640
+    setViewportWidth(640)
     const { wrapper, onSubmit } = mountCard({ modelValue: 'staging' })
 
     await wrapper.get('input').trigger('keydown', { key: 'Enter' })

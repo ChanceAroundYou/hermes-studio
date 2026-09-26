@@ -6,6 +6,7 @@ import { nextTick } from 'vue'
 import GroupChatInput from '@/components/hermes/group-chat/GroupChatInput.vue'
 import { useGroupChatStore } from '@/stores/hermes/group-chat'
 import { useSettingsStore } from '@/stores/hermes/settings'
+import { setViewportWidth } from '../mocks/viewport'
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
@@ -25,7 +26,7 @@ vi.mock('@/composables/useToolTraceVisibility', () => ({
 describe('GroupChatInput mentions', () => {
   beforeEach(() => {
     localStorage.clear()
-    window.innerWidth = 1024
+    setViewportWidth(1024)
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn(() => 'blob:group-attachment'),
@@ -366,7 +367,7 @@ describe('GroupChatInput mentions', () => {
   })
 
   it('preserves mobile auto height when a desktop preference is configured', async () => {
-    window.innerWidth = 640
+    setViewportWidth(640)
     const pinia = createTestingPinia({ stubActions: false, createSpy: vi.fn })
     const settingsStore = useSettingsStore()
     settingsStore.display = { chat_input_height: 168 }
@@ -500,7 +501,7 @@ describe('GroupChatInput mentions', () => {
   })
 
   it('keeps Enter-to-send on a desktop viewport', async () => {
-    window.innerWidth = 1024
+    setViewportWidth(1024)
     const pinia = createTestingPinia({ stubActions: false, createSpy: vi.fn })
     useSettingsStore().display = {}
     const received: unknown[][] = []
@@ -522,7 +523,7 @@ describe('GroupChatInput mentions', () => {
   })
 
   it('inserts a newline instead of sending when Enter is pressed on a phone', async () => {
-    window.innerWidth = 640
+    setViewportWidth(640)
     const pinia = createTestingPinia({ stubActions: false, createSpy: vi.fn })
     useSettingsStore().display = {}
     const received: unknown[][] = []

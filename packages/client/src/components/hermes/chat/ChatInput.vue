@@ -17,7 +17,8 @@ import { extractClipboardFiles } from '@/utils/clipboard-files'
 import VoiceDialogueControls from './VoiceDialogueControls.vue'
 import BundleCreateModal from './BundleCreateModal.vue'
 import { BRIDGE_SESSION_COMMAND_DEFINITIONS } from '@/utils/hermes/bridge-session-commands'
-import { clampChatInputHeight, isMobileChatInputViewport } from '@/utils/chat-input-height'
+import { clampChatInputHeight } from '@/utils/chat-input-height'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 import { normalizeComposerVoiceTranscript, useComposerVoiceInput } from '@/composables/useComposerVoiceInput'
 import { extractRepresentativeVideoFrames, isVideoFile } from '@/utils/video-frame-extraction'
 import ImagePreviewOverlay from './ImagePreviewOverlay.vue'
@@ -134,7 +135,7 @@ const activeMessageReference = computed(() => chatStore.activeMessageReference)
 const messageReferencePreview = computed(() =>
   activeMessageReference.value?.content.replace(/\s+/g, ' ').trim() || '',
 )
-const isMobileViewport = ref(typeof window !== 'undefined' ? isMobileChatInputViewport(window.innerWidth) : false)
+const isMobileViewport = useMobileLayout()
 const manualTextareaResize = ref(false)
 const configuredTextareaHeight = computed(() =>
   isMobileViewport.value ? null : clampChatInputHeight(settingsStore.display.chat_input_height),
@@ -375,11 +376,6 @@ const inputWrapperStyle = computed(() => {
   return { minHeight: `${height + 71}px` }
 })
 
-function syncViewport() {
-  if (typeof window === 'undefined') return
-  isMobileViewport.value = isMobileChatInputViewport(window.innerWidth)
-}
-
 function resetTextareaHeight() {
   manualTextareaResize.value = false
   applyConfiguredTextareaHeight()
@@ -523,8 +519,6 @@ function saveDraftForActiveSession(value: string) {
 onMounted(() => {
   if (props.initialText) inputText.value = props.initialText
   else if (props.persistDraft) loadDraftForActiveSession()
-  syncViewport()
-  window.addEventListener('resize', syncViewport)
   nextTick(() => {
     applyConfiguredTextareaHeight()
     if (props.initialText) focusComposer()
@@ -1102,7 +1096,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', onDocumentMousedown)
-  window.removeEventListener('resize', syncViewport)
 })
 
 function removeAttachment(id: string) {
@@ -1991,7 +1984,7 @@ function openAttachmentPreview(attachment: Attachment) {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: $breakpoint-mobile) {
   .chat-input-area {
     --voice-overlay-mobile-bottom-offset: 146px;
     padding: 8px 12px 12px;
@@ -2245,7 +2238,7 @@ function openAttachmentPreview(attachment: Attachment) {
   padding: 0;
   overflow-y: auto;
 
-  @media (max-width: 768px) {
+  @media (max-width: $breakpoint-mobile) {
     font-size: 16px;
   }
 
@@ -2591,7 +2584,7 @@ function openAttachmentPreview(attachment: Attachment) {
   font-size: 13px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $breakpoint-mobile) {
   .skill-picker-item {
     height: 76px;
   }

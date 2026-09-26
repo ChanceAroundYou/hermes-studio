@@ -6,6 +6,7 @@ import { nextTick } from 'vue'
 import { useChatStore } from '@/stores/hermes/chat'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import ChatInput from '@/components/hermes/chat/ChatInput.vue'
+import { setViewportWidth } from '../mocks/viewport'
 
 const fetchSkillsMock = vi.hoisted(() => vi.fn())
 const fetchSkillBundlesMock = vi.hoisted(() => vi.fn())
@@ -112,7 +113,7 @@ function mountForSession(
 describe('ChatInput focusComposer', () => {
   beforeEach(() => {
     localStorage.clear()
-    window.innerWidth = 1024
+    setViewportWidth(1024)
     fetchSkillsMock.mockReset()
     fetchSkillsMock.mockResolvedValue({ categories: [], archived: [] })
     fetchSkillBundlesMock.mockReset()
@@ -142,7 +143,7 @@ describe('ChatInput focusComposer', () => {
   })
 
   it('leaves focus alone on a phone, where it would raise the keyboard', async () => {
-    window.innerWidth = 390
+    setViewportWidth(390)
     const wrapper = mountForSession('session-focus-mobile')
     const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
     textarea.blur()

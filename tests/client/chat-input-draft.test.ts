@@ -6,6 +6,7 @@ import { nextTick } from 'vue'
 import { useChatStore } from '@/stores/hermes/chat'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import ChatInput from '@/components/hermes/chat/ChatInput.vue'
+import { setViewportWidth } from '../mocks/viewport'
 
 const fetchSkillsMock = vi.hoisted(() => vi.fn())
 const fetchSkillBundlesMock = vi.hoisted(() => vi.fn())
@@ -106,7 +107,7 @@ function mountForSession(
 describe('ChatInput draft persistence', () => {
   beforeEach(() => {
     localStorage.clear()
-    window.innerWidth = 1024
+    setViewportWidth(1024)
     fetchSkillsMock.mockReset()
     fetchSkillsMock.mockResolvedValue({ categories: [], archived: [] })
     fetchSkillBundlesMock.mockReset()
@@ -306,7 +307,7 @@ describe('ChatInput draft persistence', () => {
   })
 
   it('keeps mobile chat input behavior even when a desktop height is configured', async () => {
-    window.innerWidth = 640
+    setViewportWidth(640)
     const wrapper = mountForSession('session-mobile', {}, { chat_input_height: 180 })
     await flushPromises()
     await nextTick()

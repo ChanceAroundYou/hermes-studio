@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { NButton, NInput } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import PendingInteractionCountdown from '@/components/hermes/chat/PendingInteractionCountdown.vue'
-import { useMobileChatInputViewport } from '@/composables/useMobileChatInputViewport'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 import { copyToClipboard } from '@/utils/clipboard'
 import type { PendingCardAction } from '@/utils/hermes/pending-card-action'
 
@@ -85,7 +85,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const isMobileViewport = useMobileChatInputViewport()
+const isMobileViewport = useMobileLayout()
 
 const isClarify = computed(() => props.kind === 'clarify')
 const showInput = computed(() => props.allowInput ?? isClarify.value)

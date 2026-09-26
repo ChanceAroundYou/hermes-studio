@@ -76,6 +76,7 @@ vi.mock('naive-ui', async () => {
 import GlobalPendingActions from '@/components/layout/GlobalPendingActions.vue'
 import { copyToClipboard } from '@/utils/clipboard'
 import { playCompletionSound } from '@/utils/completion-sound'
+import { setViewportWidth } from '../mocks/viewport'
 
 async function render(node: (() => any) | undefined) {
   const component = defineComponent({ setup: () => () => node?.() })
@@ -546,7 +547,7 @@ describe('GlobalPendingActions', () => {
   })
 
   it('submits a clarify response with Enter on a desktop viewport', async () => {
-    window.innerWidth = 1024
+    setViewportWidth(1024)
     chatState.sessions = [{ id: 'session-b', title: 'B' }]
     chatState.pendingClarifies = new Map([['session-b', {
       sessionId: 'session-b', clarifyId: 'clarify-b', question: 'Which environment?', choices: null,
@@ -563,7 +564,7 @@ describe('GlobalPendingActions', () => {
   })
 
   it('ignores Enter on a phone so only the clarify button submits', async () => {
-    window.innerWidth = 640
+    setViewportWidth(640)
     chatState.sessions = [{ id: 'session-b', title: 'B' }]
     chatState.pendingClarifies = new Map([['session-b', {
       sessionId: 'session-b', clarifyId: 'clarify-b', question: 'Which environment?', choices: null,

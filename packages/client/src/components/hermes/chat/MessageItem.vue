@@ -1334,6 +1334,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
+  @use '@/styles/variables' as *;
 @use "@/styles/variables" as *;
 
 .message {
@@ -1836,7 +1837,7 @@ onBeforeUnmount(() => {
   }
 
   // 移动端一直显示按钮
-  @media (max-width: 768px) {
+  @media (max-width: $breakpoint-mobile) {
     opacity: 1;
   }
 }

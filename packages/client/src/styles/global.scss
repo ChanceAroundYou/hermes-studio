@@ -325,7 +325,7 @@ a {
 }
 
 // Prevent iOS Safari auto-zoom on input focus by ensuring font-size is at least 16px
-@media (max-width: 768px) {
+@media (max-width: $breakpoint-mobile) {
   input,
   textarea,
   select,

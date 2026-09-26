@@ -5,6 +5,7 @@ import { createTestingPinia } from '@pinia/testing'
 import { useChatStore } from '@/stores/hermes/chat'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import ChatInput from '@/components/hermes/chat/ChatInput.vue'
+import { setViewportWidth } from '../mocks/viewport'
 
 const fetchSkillsMock = vi.hoisted(() => vi.fn())
 const fetchSkillBundlesMock = vi.hoisted(() => vi.fn())
@@ -115,7 +116,7 @@ describe('ChatInput mobile confirm key', () => {
   })
 
   it('inserts a newline instead of sending when Enter is pressed on a phone', async () => {
-    window.innerWidth = 390
+    setViewportWidth(390)
     const { wrapper, sendSpy } = mountComposer('session-mobile-enter')
     const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
     await wrapper.find('textarea').setValue('first line')
@@ -128,7 +129,7 @@ describe('ChatInput mobile confirm key', () => {
   })
 
   it('does not send on a composing Enter from a phone IME', async () => {
-    window.innerWidth = 390
+    setViewportWidth(390)
     const { wrapper, sendSpy } = mountComposer('session-mobile-composing')
     const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
     await wrapper.find('textarea').setValue('拼写中')
@@ -141,7 +142,7 @@ describe('ChatInput mobile confirm key', () => {
   })
 
   it('leaves the IME soft line break alone on a phone', async () => {
-    window.innerWidth = 390
+    setViewportWidth(390)
     const { wrapper, sendSpy } = mountComposer('session-mobile-linebreak')
     const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
     await wrapper.find('textarea').setValue('multi line')
@@ -154,7 +155,7 @@ describe('ChatInput mobile confirm key', () => {
   })
 
   it('sends on a phone only through the arrow send button', async () => {
-    window.innerWidth = 390
+    setViewportWidth(390)
     const { wrapper, sendSpy } = mountComposer('session-mobile-button')
     await wrapper.find('textarea').setValue('tap to send')
 
@@ -165,7 +166,7 @@ describe('ChatInput mobile confirm key', () => {
   })
 
   it('keeps Enter-to-send on a desktop viewport', async () => {
-    window.innerWidth = 1024
+    setViewportWidth(1024)
     const { wrapper, sendSpy } = mountComposer('session-desktop-enter')
     const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
     await wrapper.find('textarea').setValue('desktop enter')
@@ -178,7 +179,7 @@ describe('ChatInput mobile confirm key', () => {
   })
 
   it('keeps Shift+Enter as a newline on a desktop viewport', async () => {
-    window.innerWidth = 1024
+    setViewportWidth(1024)
     const { wrapper, sendSpy } = mountComposer('session-desktop-shift-enter')
     const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
     await wrapper.find('textarea').setValue('desktop newline')

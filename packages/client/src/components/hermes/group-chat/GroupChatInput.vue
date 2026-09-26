@@ -11,7 +11,8 @@ import ImagePreviewOverlay from '@/components/hermes/chat/ImagePreviewOverlay.vu
 import { buildMentionOptions, type MentionOption } from './mention-options'
 import type { GroupChatMention } from '@/api/studio/group-chat'
 import type { Attachment } from '@/stores/hermes/chat'
-import { clampChatInputHeight, isMobileChatInputViewport } from '@/utils/chat-input-height'
+import { clampChatInputHeight } from '@/utils/chat-input-height'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 import VoiceDialogueControls from '@/components/hermes/chat/VoiceDialogueControls.vue'
 import { normalizeComposerVoiceTranscript, useComposerVoiceInput } from '@/composables/useComposerVoiceInput'
 import {
@@ -80,7 +81,7 @@ const inputSettingsOptions = computed<DropdownOption[]>(() => [
         }, toolTraceVisible.value ? '✓' : ''),
     },
 ])
-const isMobileViewport = ref(typeof window !== 'undefined' ? isMobileChatInputViewport(window.innerWidth) : false)
+const isMobileViewport = useMobileLayout()
 const manualTextareaResize = ref(false)
 const configuredTextareaHeight = computed(() =>
     isMobileViewport.value ? null : clampChatInputHeight(settingsStore.display.chat_input_height),
@@ -97,8 +98,6 @@ onMounted(() => {
         autoPlaySpeech.value = false
         store.setAutoPlaySpeech(false)
     }
-    syncViewport()
-    window.addEventListener('resize', syncViewport)
     nextTick(() => {
         applyConfiguredTextareaHeight()
     })
@@ -162,11 +161,6 @@ const inputWrapperStyle = computed(() => {
     if (height === null) return {}
     return { minHeight: `${height + 63}px` }
 })
-
-function syncViewport() {
-  if (typeof window === 'undefined') return
-  isMobileViewport.value = isMobileChatInputViewport(window.innerWidth)
-}
 
 function resetTextareaHeight() {
     manualTextareaResize.value = false
@@ -623,7 +617,6 @@ onMounted(() => {
 
 onUnmounted(() => {
     document.removeEventListener('mousedown', onDocumentMousedown)
-    window.removeEventListener('resize', syncViewport)
 })
 
 function handleCompositionStart() {
@@ -884,6 +877,7 @@ function openAttachmentPreview(attachment: Attachment) {
 </template>
 
 <style scoped lang="scss">
+  @use '@/styles/variables' as *;
 @use "@/styles/variables" as *;
 
 .chat-input-area {
@@ -1193,7 +1187,7 @@ function openAttachmentPreview(attachment: Attachment) {
     padding: 0;
     overflow-y: auto;
 
-    @media (max-width: 768px) {
+    @media (max-width: $breakpoint-mobile) {
         font-size: 16px;
     }
 
@@ -1267,7 +1261,7 @@ function openAttachmentPreview(attachment: Attachment) {
     border: 0;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $breakpoint-mobile) {
     .chat-input-area {
         padding: 8px 12px 12px;
     }
@@ -1348,7 +1342,7 @@ function openAttachmentPreview(attachment: Attachment) {
     transform-origin: bottom;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $breakpoint-mobile) {
     .input-wrapper {
         min-height: 118px;
     }
