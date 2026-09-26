@@ -36,6 +36,7 @@ import { isServerTtsProvider } from "@/api/studio/tts";
 import type { ProfileAvatar as ProfileAvatarData } from "@/api/hermes/profiles";
 import ProfileAvatar from "@/components/hermes/profiles/ProfileAvatar.vue";
 import ImagePreviewOverlay from "./ImagePreviewOverlay.vue";
+import { formatBytes } from '@/utils/format'
 
 const MarkdownRenderer = defineAsyncComponent(async () => (await import("./MarkdownRenderer.vue")).default);
 
@@ -391,12 +392,6 @@ function isImage(type: string): boolean {
 
 function isVideo(type: string, name: string): boolean {
   return type.startsWith("video/") || /\.(?:mp4|mov|m4v|webm)$/i.test(name);
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
 /**
@@ -1087,7 +1082,7 @@ onBeforeUnmount(() => {
                   ></video>
                   <div class="msg-attachment-video-footer">
                     <span class="att-name">{{ att.name }}</span>
-                    <span class="att-size">{{ formatSize(att.size) }}</span>
+                    <span class="att-size">{{ formatBytes(att.size) }}</span>
                   </div>
                 </template>
                 <template v-else>
@@ -1106,7 +1101,7 @@ onBeforeUnmount(() => {
                       <polyline points="14 2 14 8 20 8" />
                     </svg>
                     <span class="att-name">{{ att.name }}</span>
-                    <span class="att-size">{{ formatSize(att.size) }}</span>
+                    <span class="att-size">{{ formatBytes(att.size) }}</span>
                     <svg class="att-download-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                       <polyline points="7 10 12 15 17 10" />

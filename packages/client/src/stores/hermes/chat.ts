@@ -17,6 +17,7 @@ import { showCompletionNotification } from '@/utils/completion-notification'
 import { detectThinkingBoundary } from '@/utils/thinking-parser'
 import { isKnownBridgeSessionCommand } from '@/utils/hermes/bridge-session-commands'
 import { responseErrorMessage } from '@/utils/http-error'
+import { errorMessage } from '@/utils/format'
 import {
   isPendingInteractionExpiredError,
   notifyPendingInteractionExpired,
@@ -582,27 +583,6 @@ function isToolOutputError(output: unknown): boolean {
   return false
 }
 
-function errorMessageText(error: unknown): string {
-  if (typeof error === 'string') return error.trim()
-  if (error == null) return ''
-  if (typeof error !== 'object') return String(error).trim()
-
-  if (Array.isArray(error)) {
-    return error.map(errorMessageText).filter(Boolean).join('\n')
-  }
-
-  const record = error as Record<string, unknown>
-  for (const key of ['message', 'error', 'detail', 'description', 'code']) {
-    const text = errorMessageText(record[key])
-    if (text) return text
-  }
-
-  try {
-    return JSON.stringify(error)
-  } catch {
-    return String(error)
-  }
-}
 
 async function uploadFiles(attachments: Attachment[]): Promise<{ name: string; path: string }[]> {
   if (attachments.length === 0) return []
@@ -3347,7 +3327,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function addAgentErrorMessage(sessionId: string, error?: unknown) {
-    const message = errorMessageText(error)
+    const message = errorMessage(error)
     const content = message ? `Error: ${message}` : 'Run failed'
     const now = Date.now()
     const profile = sessionProfileName(sessionId)

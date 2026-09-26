@@ -2,15 +2,10 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUsageStore } from '@/stores/hermes/usage'
+import { formatCompactCount } from '@/utils/format'
 
 const { t } = useI18n()
 const usageStore = useUsageStore()
-
-function formatTokens(n: number): string {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
-  return String(n)
-}
 
 function formatCost(n: number): string {
   if (n === 0) return '$0.00'
@@ -63,10 +58,10 @@ const maxTokens = computed(() =>
         </div>
         <div class="bar-tooltip">
           <div class="tooltip-date">{{ d.date }}</div>
-          <div class="tooltip-row">{{ t('usage.inputTokens') }}: {{ formatTokens(d.input_tokens) }}</div>
-          <div class="tooltip-row">{{ t('usage.outputTokens') }}: {{ formatTokens(d.output_tokens) }}</div>
-          <div class="tooltip-row">{{ t('usage.cacheRead') }}: {{ formatTokens(d.cache_read_tokens) }}</div>
-          <div class="tooltip-row">{{ t('usage.cacheWrite') }}: {{ formatTokens(d.cache_write_tokens) }}</div>
+          <div class="tooltip-row">{{ t('usage.inputTokens') }}: {{ formatCompactCount(d.input_tokens) }}</div>
+          <div class="tooltip-row">{{ t('usage.outputTokens') }}: {{ formatCompactCount(d.output_tokens) }}</div>
+          <div class="tooltip-row">{{ t('usage.cacheRead') }}: {{ formatCompactCount(d.cache_read_tokens) }}</div>
+          <div class="tooltip-row">{{ t('usage.cacheWrite') }}: {{ formatCompactCount(d.cache_write_tokens) }}</div>
           <div class="tooltip-row">{{ t('usage.cacheHitRate') }}: {{ cacheHitRate(d) }}</div>
           <div class="tooltip-row">{{ t('usage.sessions') }}: {{ d.sessions }}</div>
           <div class="tooltip-row">{{ t('usage.cost') }}: {{ formatCost(d.cost) }}</div>
@@ -101,10 +96,10 @@ const maxTokens = computed(() =>
         <tbody>
           <tr v-for="d in [...usageStore.dailyUsage].reverse()" :key="d.date">
             <td>{{ d.date }}</td>
-            <td>{{ formatTokens(d.input_tokens) }}</td>
-            <td>{{ formatTokens(d.output_tokens) }}</td>
-            <td>{{ formatTokens(d.cache_read_tokens) }}</td>
-            <td>{{ formatTokens(d.cache_write_tokens) }}</td>
+            <td>{{ formatCompactCount(d.input_tokens) }}</td>
+            <td>{{ formatCompactCount(d.output_tokens) }}</td>
+            <td>{{ formatCompactCount(d.cache_read_tokens) }}</td>
+            <td>{{ formatCompactCount(d.cache_write_tokens) }}</td>
             <td>{{ cacheHitRate(d) }}</td>
             <td>{{ d.sessions }}</td>
             <td>{{ formatCost(d.cost) }}</td>

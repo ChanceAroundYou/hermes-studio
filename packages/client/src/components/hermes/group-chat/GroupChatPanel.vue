@@ -726,11 +726,6 @@ async function handleRemoveMember(member: MemberInfo) {
     }
 }
 
-function formatTokens(tokens: number): string {
-    const value = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)
-    return `${value} ${t('usage.tokens')}`
-}
-
 function workspaceBasename(path: string): string {
     const trimmed = String(path || '').trim().replace(/[\\/]+$/, '')
     if (!trimmed) return ''
@@ -2143,7 +2138,7 @@ async function handleClarify(response?: string) {
                             <div class="room-info">
                                 <span class="room-name">{{ room.name || room.id }}</span>
                                 <span v-if="room.inviteCode" class="room-code">{{ room.inviteCode }}</span>
-                                <span class="room-tokens">{{ formatTokens(room.totalTokens || 0) }}</span>
+                                <span class="room-tokens">{{ formatCompactCount(room.totalTokens || 0, { kilo: 'k' }) }} {{ t('usage.tokens') }}</span>
                             </div>
                             <NPopconfirm v-if="canManageRoom(room)" @positive-click="handleDeleteRoom(room.id)">
                                 <template #trigger>
@@ -3438,6 +3433,7 @@ async function handleClarify(response?: string) {
 <script lang="ts">
 import { defineComponent } from 'vue'
 import CreateRoomForm from './CreateRoomForm.vue'
+import { formatCompactCount } from '@/utils/format'
 
 export default defineComponent({ components: { CreateRoomForm } })
 </script>

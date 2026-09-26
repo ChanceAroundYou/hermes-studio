@@ -542,7 +542,7 @@ function applyTheme(themeName: string) {
 
 // ─── Helpers ────────────────────────────────────────────────────
 
-function formatTime(ts: number) {
+function formatClockTime(ts: number) {
   const d = new Date(ts);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -635,7 +635,7 @@ onUnmounted(() => {
                 t("terminal.sessionExited")
               }}</span>
               <span v-else class="session-item-time">{{
-                formatTime(s.createdAt)
+                formatClockTime(s.createdAt)
               }}</span>
             </span>
           </div>

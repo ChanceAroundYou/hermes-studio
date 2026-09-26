@@ -5,6 +5,10 @@ import { useI18n } from 'vue-i18n'
 import { useLocalSttModel } from '@/composables/useLocalSttModel'
 import type { LocalSttModelDownloadSource } from '@/api/studio/local-stt-model'
 import type { VoiceApiCardTestState } from './VoiceApiCard.vue'
+import { formatBytes } from '@/utils/format'
+
+/** Model archive sizes: no decimals up to KB, em dash while unknown. */
+const archiveBytes = { decimals: 'unit-based', zeroFallback: '—', invalidFallback: '—' } as const
 
 const props = defineProps<{
   active: boolean
@@ -37,18 +41,6 @@ const statusLabel = computed(() => {
 })
 const stageLabel = computed(() => job.value ? t(`settings.voice.localSttStage.${job.value.stage}`) : '')
 const feedbackText = computed(() => props.testState?.message || '')
-
-function formatBytes(value: number | undefined): string {
-  if (!value || value <= 0) return '—'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let amount = value
-  let unit = 0
-  while (amount >= 1024 && unit < units.length - 1) {
-    amount /= 1024
-    unit += 1
-  }
-  return `${amount.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`
-}
 
 function clearPoll(): void {
   if (pollTimer) clearTimeout(pollTimer)
@@ -110,7 +102,7 @@ onBeforeUnmount(clearPoll)
         </div>
         <div>
           <dt>{{ t('settings.voice.localSttDownloadSize') }}</dt>
-          <dd>{{ formatBytes(status?.archiveSize) }}</dd>
+          <dd>{{ formatBytes(status?.archiveSize, archiveBytes) }}</dd>
         </div>
         <div>
           <dt>{{ t('settings.voice.localSttRuntime') }}</dt>
@@ -165,7 +157,7 @@ onBeforeUnmount(clearPoll)
     <div v-if="downloading" class="download-progress" role="status">
       <div class="progress-copy">
         <span>{{ stageLabel }}</span>
-        <span v-if="job?.receivedBytes">{{ formatBytes(job.receivedBytes) }} / {{ formatBytes(job.totalBytes) }}</span>
+        <span v-if="job?.receivedBytes">{{ formatBytes(job.receivedBytes, archiveBytes) }} / {{ formatBytes(job.totalBytes, archiveBytes) }}</span>
       </div>
       <NProgress
         type="line"

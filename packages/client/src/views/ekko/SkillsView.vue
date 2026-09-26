@@ -8,6 +8,7 @@ import SkillImportModal from '@/components/hermes/skills/SkillImportModal.vue'
 import SkillList from '@/components/hermes/skills/SkillList.vue'
 import SkillSourceLegend from '@/components/hermes/skills/SkillSourceLegend.vue'
 import type { SkillCategory, SkillFileEntry, SkillSource } from '@/api/hermes/skills'
+import { errorMessage } from '@/utils/format'
 import {
   deleteEkkoSkill,
   fetchEkkoExternalDirectories,
@@ -66,9 +67,6 @@ const selectedSkillData = computed(() => skills.value.find(skill =>
 
 const selectedReadonly = computed(() => selectedSkillData.value?.source !== 'local')
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 function handleMobileChange(event: MediaQueryListEvent | MediaQueryList) {
   showSidebar.value = !event.matches

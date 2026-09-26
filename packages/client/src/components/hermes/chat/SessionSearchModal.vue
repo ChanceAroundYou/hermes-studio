@@ -7,6 +7,7 @@ import { fetchSessions, searchSessions, type SessionSearchResult, type SessionSu
 import { useChatStore } from '@/stores/hermes/chat'
 import { useSessionSearch } from '@/composables/useSessionSearch'
 import type { Session } from '@/stores/hermes/chat'
+import { formatShortDateTime } from '@/utils/format'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -61,16 +62,6 @@ function formatSource(source: string): string {
   return map[source] || source
 }
 
-function formatTime(ts?: number): string {
-  if (!ts) return ''
-  const date = new Date(ts * 1000)
-  return date.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 function getItemTitle(item: SearchItem): string {
   const title = item.title?.trim()
@@ -313,7 +304,7 @@ onUnmounted(() => {
                 </div>
               </div>
               <div class="result-meta">
-                <span class="result-time">{{ formatTime(item.last_active || item.started_at) }}</span>
+                <span class="result-time">{{ formatShortDateTime(item.last_active || item.started_at, { unit: 's' }) }}</span>
                 <span v-if="hasQuery && item.matched_message_id != null" class="result-match">
                   #{{ item.matched_message_id }}
                 </span>

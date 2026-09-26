@@ -2,16 +2,11 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUsageStore } from '@/stores/hermes/usage'
+import { formatCompactCount } from '@/utils/format'
 
 const { t } = useI18n()
 const usageStore = useUsageStore()
 const maxModelTokens = computed(() => Math.max(...usageStore.modelUsage.map(m => m.visualTokens), 1))
-
-function formatTokens(n: number): string {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
-  return String(n)
-}
 
 function cacheHitRate(m: { inputTokens: number; cacheTokens: number }): string {
   const total = m.inputTokens + m.cacheTokens
@@ -56,9 +51,9 @@ function cacheHitRate(m: { inputTokens: number; cacheTokens: number }): string {
             />
           </div>
         </div>
-        <span class="model-tokens" :title="`${t('usage.inputTokens')}: ${formatTokens(m.inputTokens)} · ${t('usage.outputTokens')}: ${formatTokens(m.outputTokens)} · ${t('usage.cacheRead')}: ${formatTokens(m.cacheTokens)} · ${t('usage.cacheHitRate')}: ${cacheHitRate(m)}`">
-          {{ formatTokens(m.totalTokens) }}
-          <small v-if="m.cacheTokens > 0">+{{ formatTokens(m.cacheTokens) }}</small>
+        <span class="model-tokens" :title="`${t('usage.inputTokens')}: ${formatCompactCount(m.inputTokens)} · ${t('usage.outputTokens')}: ${formatCompactCount(m.outputTokens)} · ${t('usage.cacheRead')}: ${formatCompactCount(m.cacheTokens)} · ${t('usage.cacheHitRate')}: ${cacheHitRate(m)}`">
+          {{ formatCompactCount(m.totalTokens) }}
+          <small v-if="m.cacheTokens > 0">+{{ formatCompactCount(m.cacheTokens) }}</small>
         </span>
       </div>
     </div>

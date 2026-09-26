@@ -22,6 +22,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
+import { formatDateTime } from '@/utils/format'
 
 type SkillDescriptionLoadState = 'idle' | 'loading' | 'loaded' | 'failed'
 
@@ -210,7 +211,7 @@ const flowNodes = computed(() => {
         degree: layoutNode.degree,
         color: categoryColor(category),
         categoryLabel: node.category || t('journey.noCategory'),
-        timestampLabel: formatTime(node.timestamp),
+        timestampLabel: formatDateTime(node.timestamp, { unit: 's', fallback: '-' }),
         kindLabel: isMemoryNode(node) ? t('journey.memories') : t('journey.skills'),
         active,
         related,
@@ -278,10 +279,6 @@ function categoryColor(category: string): string {
   return CATEGORY_PALETTE[hash(category) % CATEGORY_PALETTE.length]
 }
 
-function formatTime(value?: number | null): string {
-  if (!value) return '-'
-  return new Date(value * 1000).toLocaleString()
-}
 
 function isMemoryNode(node: JourneyNode | null): boolean {
   return node?.kind === 'memory'
@@ -918,7 +915,7 @@ defineExpose({
               </div>
               <div class="detail-item">
                 <span>{{ t('journey.timestamp') }}</span>
-                <strong>{{ formatTime(selectedNode.timestamp) }}</strong>
+                <strong>{{ formatDateTime(selectedNode.timestamp, { unit: 's', fallback: '-' }) }}</strong>
               </div>
             </div>
 

@@ -15,6 +15,7 @@ import { useI18n } from 'vue-i18n'
 import McpServerCard from '@/components/hermes/mcp/McpServerCard.vue'
 import { useMcpConfigInput } from '@/composables/useMcpConfigInput'
 import type { McpServerInfo } from '@/api/hermes/mcp'
+import { errorMessage } from '@/utils/format'
 import {
   createEkkoMcpServer,
   deleteEkkoMcpServer,
@@ -112,9 +113,6 @@ function toMcpServer(server: EkkoMcpServerInfo): McpServerInfo {
   }
 }
 
-function errorMessage(value: unknown): string {
-  return value instanceof Error ? value.message : String(value)
-}
 
 function nextProbeVersion(name: string): number {
   const version = (probeVersions.get(name) ?? 0) + 1

@@ -1,15 +1,10 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { useUsageStore } from '@/stores/hermes/usage'
+import { formatCompactCount } from '@/utils/format'
 
 const { t } = useI18n()
 const usageStore = useUsageStore()
-
-function formatTokens(n: number): string {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
-  return String(n)
-}
 
 function formatCost(n: number): string {
   if (n === 0) return '$0.00'
@@ -22,10 +17,10 @@ function formatCost(n: number): string {
   <div class="stat-cards">
     <div class="stat-card">
       <div class="stat-label">{{ t('usage.totalTokens') }}</div>
-      <div class="stat-value">{{ formatTokens(usageStore.totalTokens) }}</div>
+      <div class="stat-value">{{ formatCompactCount(usageStore.totalTokens) }}</div>
       <div class="stat-sub">
-        {{ formatTokens(usageStore.totalInputTokens) }} {{ t('usage.inputTokens') }} /
-        {{ formatTokens(usageStore.totalOutputTokens) }} {{ t('usage.outputTokens') }}
+        {{ formatCompactCount(usageStore.totalInputTokens) }} {{ t('usage.inputTokens') }} /
+        {{ formatCompactCount(usageStore.totalOutputTokens) }} {{ t('usage.outputTokens') }}
       </div>
     </div>
     <div class="stat-card">
@@ -41,7 +36,7 @@ function formatCost(n: number): string {
       <div class="stat-label">{{ t('usage.cacheHitRate') }}</div>
       <div class="stat-value">{{ usageStore.cacheHitRate !== null ? usageStore.cacheHitRate.toFixed(1) + '%' : '--' }}</div>
       <div class="stat-sub" v-if="usageStore.cacheHitRate !== null">
-        {{ formatTokens(usageStore.totalCacheTokens) }} {{ t('usage.tokens') }}
+        {{ formatCompactCount(usageStore.totalCacheTokens) }} {{ t('usage.tokens') }}
       </div>
     </div>
   </div>

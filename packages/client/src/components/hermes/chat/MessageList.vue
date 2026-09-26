@@ -29,6 +29,7 @@ import { chatSessionAgentAvatar } from "@/utils/chat-agent-avatar";
 import { parseThinking } from "@/utils/thinking-parser";
 import { groupCompletedToolsByRun } from "./tool-run-grouping";
 import { insertByTimestamp } from "@/utils/hermes/transcript-order";
+import { formatCompactCount } from '@/utils/format'
 
 const props = withDefaults(defineProps<{
   approvalPortalToBody?: boolean
@@ -49,12 +50,6 @@ const thinkingElapsedMs = ref(0);
 const initialBottomScrollOptions = { frames: 8, keepAliveMs: 1200 };
 let thinkingStartedAt = 0;
 let thinkingTimer: ReturnType<typeof setInterval> | null = null;
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
-  return String(n)
-}
 
 function formatToolDuration(seconds: number): string {
   if (seconds < 1) return `${Math.round(seconds * 1000)}ms`
@@ -222,7 +217,7 @@ const compressionMessage = computed<Message | null>(() => {
   if (!s) return null
   const sid = chatStore.activeSessionId || 'unknown'
   const text = s.compressing
-    ? `Compressing... (${s.messageCount} msgs, ~${formatTokens(s.beforeTokens)} tokens)`
+    ? `Compressing... (${s.messageCount} msgs, ~${formatCompactCount(s.beforeTokens)} tokens)`
     : s.error
       ? `Compression failed: ${s.error}`
       : s.compressed === false
@@ -232,7 +227,7 @@ const compressionMessage = computed<Message | null>(() => {
           // switched away mid-compression or reconnected). Never claim it is
           // still running, and never invent token numbers.
           ? `Compression finished`
-          : `Compression completed: ${s.messageCount} msgs, ${formatTokens(s.beforeTokens)} → ${formatTokens(s.afterTokens)} tokens.`
+          : `Compression completed: ${s.messageCount} msgs, ${formatCompactCount(s.beforeTokens)} → ${formatCompactCount(s.afterTokens)} tokens.`
   return {
     id: `compression:${sid}`,
     role: 'command',

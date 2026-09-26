@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useFilesStore, isPreviewableFile, isTextFile } from '@/stores/hermes/files'
 import { downloadFile } from '@/api/studio/download'
 import type { FileEntry } from '@/api/studio/files'
+import { formatBytes } from '@/utils/format'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -12,18 +13,6 @@ const filesStore = useFilesStore()
 const emit = defineEmits<{
   (e: 'contextmenu-entry', event: MouseEvent, entry: FileEntry): void
 }>()
-
-function formatSize(bytes: number): string {
-  if (bytes === 0) return '—'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let i = 0
-  let size = bytes
-  while (size >= 1024 && i < units.length - 1) {
-    size /= 1024
-    i++
-  }
-  return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
-}
 
 function formatDate(iso: string): string {
   if (!iso) return '—'
@@ -121,7 +110,7 @@ async function handleDownload(entry: FileEntry) {
             <span class="file-icon">{{ getFileIcon(entry) }}</span>
             <span class="file-label" :title="entry.name">{{ entry.name }}</span>
           </div>
-          <div class="file-size">{{ entry.isDir ? '—' : formatSize(entry.size) }}</div>
+          <div class="file-size">{{ entry.isDir ? '—' : formatBytes(entry.size, { zeroFallback: '—' }) }}</div>
           <div class="file-date" :title="formatDateTitle(entry.modTime)">{{ formatDate(entry.modTime) }}</div>
           <div class="file-actions">
             <NButton v-if="isPreviewableFile(entry.name) && !entry.isDir" size="tiny" quaternary @click.stop="handlePreview(entry)" :title="t('files.preview')">👁️</NButton>

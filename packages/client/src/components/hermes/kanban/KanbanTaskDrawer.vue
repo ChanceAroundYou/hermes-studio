@@ -13,6 +13,7 @@ import FilePreview from '@/components/hermes/files/FilePreview.vue'
 import { fetchAuthenticatedBlob, saveBlob } from '@/api/studio/binary-content'
 import type { Session, Message } from '@/stores/hermes/chat'
 import type { KanbanAttachment, KanbanTaskDetail } from '@/api/hermes/kanban'
+import { formatBytes, formatDateTime } from '@/utils/format'
 
 const RUN_HISTORY_PAGE_SIZE = 10
 
@@ -219,14 +220,7 @@ watch(() => detail.value?.runs.length || 0, () => {
 })
 
 function formatTime(ts: number | null) {
-  if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleString()
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return formatDateTime(ts, { unit: 's', fallback: '—' })
 }
 
 async function handleAttachment(attachment: KanbanAttachment) {
@@ -556,7 +550,7 @@ function handleNavigateTask(taskId: string) {
               @click="handleAttachment(attachment)"
             >
               <span class="attachment-name">{{ attachment.filename }}</span>
-              <span class="attachment-size">{{ formatSize(attachment.size) }}</span>
+              <span class="attachment-size">{{ formatBytes(attachment.size) }}</span>
             </button>
           </div>
 

@@ -22,6 +22,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
+import { errorMessage, formatDateTime } from '@/utils/format'
 
 type MemoryViewMode = 'graph' | 'list'
 type MemoryStatusFilter = 'all' | EkkoMemoryStatus
@@ -144,9 +145,6 @@ const flowEdges = computed(() => graphEdges.value.map((edge) => {
   }
 }))
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 async function fitMemoryGraph() {
   await nextTick()
@@ -238,7 +236,6 @@ async function removeMemory(memory: EkkoMemoryNode) {
   }
 }
 
-function formatDate(value: string): string { return new Date(value).toLocaleString() }
 function statusLabel(value: EkkoMemoryStatus): string {
   return t({ active: 'ekkoConfig.statusActive', superseded: 'ekkoConfig.statusSuperseded',
     expired: 'ekkoConfig.statusExpired', deleted: 'ekkoConfig.statusDeleted' }[value])
@@ -396,7 +393,7 @@ watch(viewMode, (mode) => {
               </div>
               <p class="memory-content">{{ memory.content }}</p>
               <div v-if="memory.tags.length" class="tag-row"><NTag v-for="tag in memory.tags" :key="tag" size="tiny" round>{{ tag }}</NTag></div>
-              <div class="memory-foot">{{ formatDate(memory.updatedAt) }}</div>
+              <div class="memory-foot">{{ formatDateTime(memory.updatedAt) }}</div>
             </article>
           </div>
           <NEmpty v-else class="empty" :description="t('ekkoConfig.noMemory')" />
@@ -430,7 +427,7 @@ watch(viewMode, (mode) => {
           <div class="detail-item"><span>{{ t('ekkoConfig.memoryRevision') }}</span><strong>r{{ selectedMemory.revision }}</strong></div>
           <div class="detail-item"><span>{{ t('ekkoConfig.memoryConfidence') }}</span><strong>{{ selectedMemory.confidence }}</strong></div>
           <div class="detail-item"><span>{{ t('ekkoConfig.memoryImportance') }}</span><strong>{{ selectedMemory.importance }}</strong></div>
-          <div class="detail-item detail-item--wide"><span>{{ t('ekkoConfig.memoryUpdatedAt') }}</span><strong>{{ formatDate(selectedMemory.updatedAt) }}</strong></div>
+          <div class="detail-item detail-item--wide"><span>{{ t('ekkoConfig.memoryUpdatedAt') }}</span><strong>{{ formatDateTime(selectedMemory.updatedAt) }}</strong></div>
         </div>
         <div v-if="selectedMemory.tags.length" class="drawer-section">
           <span class="detail-card-label">{{ t('ekkoConfig.tagsLabel') }}</span>

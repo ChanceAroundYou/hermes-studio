@@ -1,24 +1,4 @@
-function errorMessageText(error: unknown): string {
-  if (typeof error === 'string') return error.trim()
-  if (error == null) return ''
-  if (typeof error !== 'object') return String(error).trim()
-
-  if (Array.isArray(error)) {
-    return error.map(errorMessageText).filter(Boolean).join('\n')
-  }
-
-  const record = error as Record<string, unknown>
-  for (const key of ['message', 'error', 'detail', 'description', 'code']) {
-    const text = errorMessageText(record[key])
-    if (text) return text
-  }
-
-  try {
-    return JSON.stringify(error)
-  } catch {
-    return String(error)
-  }
-}
+import { errorMessage } from '@/utils/format'
 
 export async function responseErrorMessage(
   response: Response,
@@ -29,7 +9,7 @@ export async function responseErrorMessage(
   const contentType = response.headers.get('content-type') || ''
   if (contentType.includes('application/json')) {
     try {
-      detail = errorMessageText(await response.clone().json())
+      detail = errorMessage(await response.clone().json())
     } catch {
       detail = ''
     }

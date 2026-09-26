@@ -3,6 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NButton, NSpin, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { fetchPerformanceRuntime, type PerformanceRuntimeSnapshot } from '@/api/studio/performance-monitor'
+import { BYTE_UNITS_WITH_TB, formatBytes, formatDateTime } from '@/utils/format'
+
+/** Memory counters: B..TB, dash while the sampler has no value yet. */
+const memoryBytes = { units: BYTE_UNITS_WITH_TB, invalidFallback: '-' } as const
 
 const { t } = useI18n()
 const message = useMessage()
@@ -15,18 +19,6 @@ const brokerMemory = computed(() => snapshot.value?.bridge.broker.process?.memor
 const webRssMemory = computed(() => snapshot.value?.web.memory.rss ?? null)
 const workerCount = computed(() => snapshot.value?.bridge.workers.length ?? 0)
 const runningWorkerCount = computed(() => snapshot.value?.bridge.workers.filter(worker => worker.running).length ?? 0)
-
-function formatBytes(value?: number | null): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let size = value
-  let unit = 0
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024
-    unit += 1
-  }
-  return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
-}
 
 function formatPercent(value?: number | null): string {
   return value == null || !Number.isFinite(value) ? '-' : `${value.toFixed(1)}%`
@@ -42,10 +34,6 @@ function formatDuration(seconds?: number | null): string {
   return `${minutes}m`
 }
 
-function formatTime(seconds?: number): string {
-  if (!seconds) return '-'
-  return new Date(seconds * 1000).toLocaleString()
-}
 
 function statusText(running: boolean): string {
   return running ? t('performance.running') : t('performance.stopped')
@@ -106,7 +94,7 @@ onBeforeUnmount(() => {
           <div class="summary-item">
             <span class="summary-label">{{ t('performance.systemMemory') }}</span>
             <strong>{{ formatPercent(snapshot.system.memoryPercent) }}</strong>
-            <small>{{ formatBytes(snapshot.system.usedMemoryBytes) }} / {{ formatBytes(snapshot.system.totalMemoryBytes) }}</small>
+            <small>{{ formatBytes(snapshot.system.usedMemoryBytes, memoryBytes) }} / {{ formatBytes(snapshot.system.totalMemoryBytes, memoryBytes) }}</small>
             <div class="meter"><span :style="{ width: `${snapshot.system.memoryPercent || 0}%` }" /></div>
           </div>
           <div class="summary-item">
@@ -117,7 +105,7 @@ onBeforeUnmount(() => {
           <div class="summary-item">
             <span class="summary-label">{{ t('performance.workers') }}</span>
             <strong>{{ runningWorkerCount }} / {{ workerCount }}</strong>
-            <small>{{ t('performance.totalWorkerMemory') }} {{ formatBytes(snapshot.bridge.totalWorkerMemoryRssBytes) }}</small>
+            <small>{{ t('performance.totalWorkerMemory') }} {{ formatBytes(snapshot.bridge.totalWorkerMemoryRssBytes, memoryBytes) }}</small>
           </div>
         </section>
 
@@ -133,7 +121,7 @@ onBeforeUnmount(() => {
                 <span>PID {{ snapshot.web.pid }}</span>
               </div>
               <span>{{ formatPercent(snapshot.web.cpuPercent) }}</span>
-              <span>{{ formatBytes(webRssMemory) }}</span>
+              <span>{{ formatBytes(webRssMemory, memoryBytes) }}</span>
               <span class="status running">{{ statusText(true) }}</span>
             </div>
             <div class="process-row">
@@ -142,7 +130,7 @@ onBeforeUnmount(() => {
                 <span>{{ snapshot.bridge.endpoint }}</span>
               </div>
               <span>{{ formatPercent(snapshot.bridge.broker.process?.cpuPercent) }}</span>
-              <span>{{ formatBytes(brokerMemory) }}</span>
+              <span>{{ formatBytes(brokerMemory, memoryBytes) }}</span>
               <span class="status" :class="{ running: snapshot.bridge.reachable && snapshot.bridge.broker.running }">
                 {{ snapshot.bridge.reachable && snapshot.bridge.broker.running ? statusText(true) : statusText(false) }}
               </span>
@@ -177,9 +165,9 @@ onBeforeUnmount(() => {
                   <td>{{ worker.profile || '-' }}</td>
                   <td>{{ worker.pid || '-' }}</td>
                   <td>{{ formatPercent(worker.cpuPercent) }}</td>
-                  <td>{{ formatBytes(worker.memoryRssBytes) }}</td>
+                  <td>{{ formatBytes(worker.memoryRssBytes, memoryBytes) }}</td>
                   <td>{{ worker.runningSessionCount }} / {{ worker.sessionCount }}</td>
-                  <td>{{ formatTime(worker.lastUsedAt) }}</td>
+                  <td>{{ formatDateTime(worker.lastUsedAt, { unit: 's', fallback: '-' }) }}</td>
                   <td><span class="status" :class="{ running: worker.running }">{{ statusText(worker.running) }}</span></td>
                 </tr>
               </tbody>

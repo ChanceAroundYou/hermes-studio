@@ -19,6 +19,10 @@ import {
 import HermesDataDirectoryHint from '@/components/hermes/HermesDataDirectoryHint.vue'
 import { useRuntimeRestartPrompt } from '@/composables/useRuntimeRestartPrompt'
 import { desktopBridge } from '@/utils/desktop-bridge'
+import { formatBytes } from '@/utils/format'
+
+/** Update download progress: blank while unknown. */
+const downloadBytes = { decimals: 'significant', zeroFallback: '', invalidFallback: '' } as const
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (event: 'update:show', value: boolean): void }>()
@@ -188,27 +192,15 @@ function sourceLabel(source: VersionDownloadSource): string {
   return source === 'github' ? t('runtimeVersions.github') : t('runtimeVersions.cf')
 }
 
-function formatBytes(value?: number): string {
-  if (!value || value <= 0) return ''
-  const units = ['B', 'KB', 'MB', 'GB']
-  let size = value
-  let unitIndex = 0
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024
-    unitIndex += 1
-  }
-  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
-}
-
 function displayHermesAgentVersion(value?: string): string {
   return value?.split('·')[0]?.trim() || '-'
 }
 
 function jobProgressText(job: VersionDownloadJob): string {
   if (job.receivedBytes && job.totalBytes) {
-    return `${formatBytes(job.receivedBytes)} / ${formatBytes(job.totalBytes)}`
+    return `${formatBytes(job.receivedBytes, downloadBytes)} / ${formatBytes(job.totalBytes, downloadBytes)}`
   }
-  if (job.receivedBytes) return formatBytes(job.receivedBytes)
+  if (job.receivedBytes) return formatBytes(job.receivedBytes, downloadBytes)
   return messageText(job.message)
 }
 

@@ -4,6 +4,10 @@ import { NButton, NInput, NPopover, NSelect, useDialog, useMessage } from 'naive
 import { useI18n } from 'vue-i18n'
 import { desktopBridge, type DesktopBrowserDownload, type DesktopBrowserSelection, type DesktopBrowserState } from '@/utils/desktop-bridge'
 import type { BrowserAnnotationSubmission } from '@/utils/browser-annotation-submit'
+import { BYTE_UNITS_WITH_TB, formatBytes } from '@/utils/format'
+
+/** Transfer/memory counters: B..TB, no decimals once the mantissa reaches 10. */
+const transferBytes = { units: BYTE_UNITS_WITH_TB, decimals: 'significant', invalidFallback: '0 B' } as const
 
 const props = withDefaults(defineProps<{
   visible?: boolean
@@ -191,19 +195,6 @@ function cancelDownload(downloadId: string): void {
   void run(async () => applyState(await bridge!.cancelDownload(downloadId)))
 }
 
-function formatBytes(input: number): string {
-  const bytes = Number.isFinite(input) ? Math.max(0, input) : 0
-  if (bytes < 1024) return `${Math.round(bytes)} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let value = bytes / 1024
-  let unit = units[0]
-  for (let index = 1; index < units.length && value >= 1024; index += 1) {
-    value /= 1024
-    unit = units[index]
-  }
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`
-}
-
 function downloadPercent(item: DesktopBrowserDownload): number | null {
   if (item.totalBytes <= 0) return null
   return Math.min(100, Math.max(0, Math.round(item.receivedBytes / item.totalBytes * 100)))
@@ -216,8 +207,8 @@ function downloadStateLabel(stateValue: DesktopBrowserDownload['state']): string
 function downloadSummary(item: DesktopBrowserDownload): string {
   const percent = downloadPercent(item)
   const transferred = item.totalBytes > 0
-    ? `${formatBytes(item.receivedBytes)} / ${formatBytes(item.totalBytes)}`
-    : formatBytes(item.receivedBytes)
+    ? `${formatBytes(item.receivedBytes, transferBytes)} / ${formatBytes(item.totalBytes, transferBytes)}`
+    : formatBytes(item.receivedBytes, transferBytes)
   return `${downloadStateLabel(item.state)}${percent === null ? '' : ` · ${percent}%`} · ${transferred}`
 }
 

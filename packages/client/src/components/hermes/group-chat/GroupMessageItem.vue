@@ -36,6 +36,7 @@ import { groupAgentAvatar, groupMessageAgent, parseStoredAvatar } from '@/utils/
 import GroupAgentMessageAvatar from './GroupAgentMessageAvatar.vue'
 import GroupAgentRobotIcon from './GroupAgentRobotIcon.vue'
 import ImagePreviewOverlay from '@/components/hermes/chat/ImagePreviewOverlay.vue'
+import { formatBytes } from '@/utils/format'
 
 const MarkdownRenderer = defineAsyncComponent(async () => (await import('../chat/MarkdownRenderer.vue')).default)
 
@@ -445,7 +446,6 @@ function formatToolPayload(raw?: unknown, extractDiff = false): ToolPayload {
     }
 }
 
-
 function renderToolPayload(content: string, language?: string): string {
     return renderHighlightedCodeBlock(content, language, t('common.copy'), {
         maxHighlightLength: TOOL_PAYLOAD_DISPLAY_LIMIT,
@@ -659,12 +659,6 @@ function normalizeLocalFilePath(path: string): string {
     return /^[a-zA-Z]:\\/.test(path) ? path.replace(/\\/g, '/') : path
 }
 
-function formatSize(bytes: number): string {
-    if (bytes < 1024) return bytes + ' B'
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
-
 let autoPlayHandler: ((e: Event) => void) | null = null
 
 onMounted(() => {
@@ -790,7 +784,7 @@ onBeforeUnmount(() => {
                             ></video>
                             <div class="msg-attachment-video-footer">
                                 <span class="att-name">{{ att.name }}</span>
-                                <span v-if="att.size" class="att-size">{{ formatSize(att.size) }}</span>
+                                <span v-if="att.size" class="att-size">{{ formatBytes(att.size) }}</span>
                             </div>
                         </template>
                         <a v-else class="msg-attachment-file" :href="att.url" :title="t('download.downloadFile')" @click="handleAttachmentClick($event, att)">
@@ -799,7 +793,7 @@ onBeforeUnmount(() => {
                                 <polyline points="14 2 14 8 20 8" />
                             </svg>
                             <span class="att-name">{{ att.name }}</span>
-                            <span class="att-size">{{ formatSize(att.size) }}</span>
+                            <span class="att-size">{{ formatBytes(att.size) }}</span>
                         </a>
                     </div>
                 </div>

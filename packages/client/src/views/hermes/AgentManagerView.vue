@@ -25,6 +25,7 @@ import { useAppStore } from '@/stores/hermes/app'
 import { getBaseUrlValue } from '@/api/client'
 import { useChatStore } from '@/stores/hermes/chat'
 import { desktopBridge } from '@/utils/desktop-bridge'
+import { errorMessage } from '@/utils/format'
 
 const base = getBaseUrlValue()
 
@@ -181,9 +182,6 @@ function replaceTool(next: CodingAgentToolStatus) {
     : [...tools.value, next]
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 type AgentManagementOperation = 'install' | 'delete'
 

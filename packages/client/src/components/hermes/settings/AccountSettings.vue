@@ -227,7 +227,7 @@ async function handleUnlockAll() {
   }
 }
 
-function formatTime(ts: number): string {
+function formatRemainingMinutes(ts: number): string {
   const remaining = Math.max(0, Math.round((ts - Date.now()) / 60000));
   return remaining > 0 ? `${remaining} min` : t("common.expired");
 }
@@ -302,7 +302,7 @@ onMounted(() => { loadLockedIps(); });
           <div class="locked-info">
             <span class="locked-ip">{{ lock.ip }}</span>
             <span class="locked-badge">{{ lockedIpTypeLabel(lock.type) }}</span>
-            <span class="locked-ttl">{{ formatTime(lock.lockedUntil) }}</span>
+            <span class="locked-ttl">{{ formatRemainingMinutes(lock.lockedUntil) }}</span>
           </div>
           <NButton size="tiny" type="error" ghost @click="handleUnlockIp(lock.ip)">{{ t("settings.lockedIps.unlock") }}</NButton>
         </div>

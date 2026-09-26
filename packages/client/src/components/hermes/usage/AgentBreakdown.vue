@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUsageStore } from '@/stores/hermes/usage'
+import { formatCompactCount } from '@/utils/format'
 
 const { t } = useI18n()
 const usageStore = useUsageStore()
@@ -20,12 +21,6 @@ const agentLabels: Record<string, string> = {
 
 function agentName(agent: string): string {
   return t(`usage.agents.${agentLabels[agent] || 'unknown'}`)
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
-  return String(n)
 }
 
 function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): string {
@@ -58,10 +53,10 @@ function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): stri
         </div>
         <span
           class="agent-tokens"
-          :title="`${t('usage.inputTokens')}: ${formatTokens(agent.inputTokens)} · ${t('usage.outputTokens')}: ${formatTokens(agent.outputTokens)} · ${t('usage.cacheRead')}: ${formatTokens(agent.cacheTokens)} · ${t('usage.cacheHitRate')}: ${cacheHitRate(agent)}`"
+          :title="`${t('usage.inputTokens')}: ${formatCompactCount(agent.inputTokens)} · ${t('usage.outputTokens')}: ${formatCompactCount(agent.outputTokens)} · ${t('usage.cacheRead')}: ${formatCompactCount(agent.cacheTokens)} · ${t('usage.cacheHitRate')}: ${cacheHitRate(agent)}`"
         >
-          {{ formatTokens(agent.totalTokens) }}
-          <small v-if="agent.cacheTokens > 0">+{{ formatTokens(agent.cacheTokens) }}</small>
+          {{ formatCompactCount(agent.totalTokens) }}
+          <small v-if="agent.cacheTokens > 0">+{{ formatCompactCount(agent.cacheTokens) }}</small>
         </span>
       </div>
     </div>

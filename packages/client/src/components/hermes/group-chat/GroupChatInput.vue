@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatBytes } from '@/utils/format'
 import { ref, computed, nextTick, onMounted, onUnmounted, watch, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton, NDropdown, NTooltip, type DropdownOption } from 'naive-ui'
@@ -716,12 +717,6 @@ function removeAttachment(id: string) {
     }
 }
 
-function formatSize(bytes: number): string {
-    if (bytes < 1024) return bytes + ' B'
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
-
 function isImage(type: string): boolean {
     return type.startsWith('image/')
 }
@@ -747,7 +742,7 @@ function openAttachmentPreview(attachment: Attachment) {
                 </button>
                 <div v-else class="attachment-file">
                     <span class="file-name">{{ att.name }}</span>
-                    <span class="file-size">{{ formatSize(att.size) }}</span>
+                    <span class="file-size">{{ formatBytes(att.size) }}</span>
                 </div>
                 <button class="attachment-remove" @click="removeAttachment(att.id)">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>

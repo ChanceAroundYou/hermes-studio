@@ -17,6 +17,7 @@ import {
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import SettingRow from '@/components/hermes/settings/SettingRow.vue'
+import { errorMessage } from '@/utils/format'
 import {
   fetchEkkoSettings,
   saveEkkoSettings,
@@ -60,9 +61,6 @@ function handleTabUpdate(tab: SettingsTab) {
   })
 }
 
-function errorMessage(value: unknown): string {
-  return value instanceof Error ? value.message : String(value)
-}
 
 async function loadSettings() {
   loading.value = true

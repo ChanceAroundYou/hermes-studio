@@ -4,6 +4,7 @@ import { NButton, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { fetchMemory, saveMemory, type MemoryData } from '@/api/hermes/skills'
 import { useProfilesStore } from '@/stores/hermes/profiles'
+import { formatShortDateTime } from '@/utils/format'
 
 const MarkdownRenderer = defineAsyncComponent(async () => (await import('@/components/hermes/chat/MarkdownRenderer.vue')).default)
 
@@ -59,15 +60,6 @@ async function handleSave() {
   }
 }
 
-function formatTime(ts: number | null): string {
-  if (!ts) return ''
-  return new Date(ts).toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 const memoryEmpty = computed(() => !data.value?.memory?.trim())
 const userEmpty = computed(() => !data.value?.user?.trim())
@@ -109,7 +101,7 @@ const displaySoul = computed(() => (data.value?.soul || '').replace(/§/g, '\n\n
                   </svg>
                 </span>
                 <span class="section-title">{{ t('memory.myNotes') }}</span>
-                <span v-if="data?.memory_mtime" class="section-mtime">{{ formatTime(data.memory_mtime) }}</span>
+                <span v-if="data?.memory_mtime" class="section-mtime">{{ formatShortDateTime(data.memory_mtime) }}</span>
               </div>
               <NButton v-if="editingSection !== 'memory'" size="tiny" quaternary @click="startEdit('memory')">
                 <template #icon>
@@ -154,7 +146,7 @@ const displaySoul = computed(() => (data.value?.soul || '').replace(/§/g, '\n\n
                   </svg>
                 </span>
                 <span class="section-title">{{ t('memory.userProfile') }}</span>
-                <span v-if="data?.user_mtime" class="section-mtime">{{ formatTime(data.user_mtime) }}</span>
+                <span v-if="data?.user_mtime" class="section-mtime">{{ formatShortDateTime(data.user_mtime) }}</span>
               </div>
               <NButton v-if="editingSection !== 'user'" size="tiny" quaternary @click="startEdit('user')">
                 <template #icon>
@@ -201,7 +193,7 @@ const displaySoul = computed(() => (data.value?.soul || '').replace(/§/g, '\n\n
                   </svg>
                 </span>
                 <span class="section-title">{{ t('memory.soul') }}</span>
-                <span v-if="data?.soul_mtime" class="section-mtime">{{ formatTime(data.soul_mtime) }}</span>
+                <span v-if="data?.soul_mtime" class="section-mtime">{{ formatShortDateTime(data.soul_mtime) }}</span>
               </div>
               <NButton v-if="editingSection !== 'soul'" size="tiny" quaternary @click="startEdit('soul')">
                 <template #icon>

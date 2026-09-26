@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { NButton, NDrawer, NDrawerContent, NInput, NModal, NPopconfirm, NSpin, NTag, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { copyToClipboard } from '@/utils/clipboard'
+import { formatDateTime } from '@/utils/format'
 import {
   approveDevice,
   blockDevice,
@@ -139,9 +140,7 @@ function formatOs(device: LanDeviceInfo): string {
 
 function formatTime(value: string | number | null): string {
   if (!value) return t('devices.never')
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value)
-  return date.toLocaleString()
+  return formatDateTime(value, { invalid: 'raw', fallback: t('devices.never') })
 }
 
 function formatVersion(value: string): string {

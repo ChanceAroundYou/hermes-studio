@@ -2,6 +2,7 @@
 import { computed, h, onMounted, reactive, ref } from 'vue'
 import { NButton, NDataTable, NForm, NFormItem, NInput, NModal, NPopconfirm, NSelect, NSpace, NTag, useMessage, type DataTableColumns } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { formatDateTime } from '@/utils/format'
 import {
   createManagedUser,
   deleteManagedUser,
@@ -146,10 +147,6 @@ async function removeUser(user: ManagedUser) {
   }
 }
 
-function formatTime(value: number | null): string {
-  if (!value) return '-'
-  return new Date(value).toLocaleString()
-}
 
 const columns = computed<DataTableColumns<ManagedUser>>(() => [
   {
@@ -189,7 +186,7 @@ const columns = computed<DataTableColumns<ManagedUser>>(() => [
     title: t('users.lastLogin'),
     key: 'last_login_at',
     minWidth: 170,
-    render: (row) => formatTime(row.last_login_at),
+    render: (row) => formatDateTime(row.last_login_at),
   },
   {
     title: t('common.edit'),

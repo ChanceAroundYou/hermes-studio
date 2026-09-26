@@ -56,7 +56,7 @@ function levelClass(level: string): string {
   }
 }
 
-function formatTime(ts: string): string {
+function extractLogClock(ts: string): string {
   const match = ts.match(/\d{2}:\d{2}:\d{2}/)
   return match ? match[0] : ts
 }
@@ -147,7 +147,7 @@ onMounted(async () => {
             class="log-entry"
             :class="levelClass(entry.level)"
           >
-            <span class="log-time">{{ formatTime(entry.timestamp) }}</span>
+            <span class="log-time">{{ extractLogClock(entry.timestamp) }}</span>
             <span class="log-level" :class="levelClass(entry.level)">{{ entry.level }}</span>
             <span class="log-logger">{{ displayLogName(entry.logger) }}</span>
             <template v-if="parseAccessLog(entry.message)">

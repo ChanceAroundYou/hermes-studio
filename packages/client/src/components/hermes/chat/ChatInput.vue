@@ -21,6 +21,7 @@ import { clampChatInputHeight, isMobileChatInputViewport } from '@/utils/chat-in
 import { normalizeComposerVoiceTranscript, useComposerVoiceInput } from '@/composables/useComposerVoiceInput'
 import { extractRepresentativeVideoFrames, isVideoFile } from '@/utils/video-frame-extraction'
 import ImagePreviewOverlay from './ImagePreviewOverlay.vue'
+import { formatBytes, formatCompactCount } from '@/utils/format'
 
 const chatStore = useChatStore()
 const appStore = useAppStore()
@@ -863,12 +864,6 @@ const usagePercent = computed(() =>
   Math.min((totalTokens.value / contextLength.value) * 100, 100),
 )
 
-function formatTokens(n: number): string {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
-  return String(n)
-}
-
 // --- File attachment helpers ---
 
 function addFile(file: File) {
@@ -1122,12 +1117,6 @@ function removeAttachment(id: string) {
   attachments.value = attachments.value.filter(attachment => !removedIds.has(attachment.id))
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
-
 function isImage(type: string): boolean {
   return type.startsWith('image/')
 }
@@ -1162,7 +1151,7 @@ function openAttachmentPreview(attachment: Attachment) {
           <div class="attachment-file">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             <span class="file-name">{{ att.name }}</span>
-            <span class="file-size">{{ formatSize(att.size) }}</span>
+            <span class="file-size">{{ formatBytes(att.size) }}</span>
           </div>
         </template>
         <details v-if="att.context" class="attachment-context">
@@ -1222,16 +1211,16 @@ function openAttachmentPreview(attachment: Attachment) {
       ></div>
       <div v-if="showContextUsage" class="context-usage-row">
         <span class="context-info" :class="{ 'context-warning': usagePercent > 80 }">
-          {{ formatTokens(totalTokens) }} /
+          {{ formatCompactCount(totalTokens, { kilo: 'k' }) }} /
           <NTooltip trigger="hover" :disabled="isMobileViewport">
             <template #trigger>
               <span class="context-limit-editable" @click="handleEditContextLimit">
-                {{ formatTokens(contextLength) }}
+                {{ formatCompactCount(contextLength, { kilo: 'k' }) }}
               </span>
             </template>
             <span>{{ t('chat.contextClickToEdit') }}</span>
           </NTooltip>
-          · {{ t('chat.contextRemaining') }} {{ formatTokens(remainingTokens) }}
+          · {{ t('chat.contextRemaining') }} {{ formatCompactCount(remainingTokens, { kilo: 'k' }) }}
         </span>
         <div class="context-bar">
           <div

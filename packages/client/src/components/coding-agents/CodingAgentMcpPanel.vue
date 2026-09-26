@@ -6,6 +6,7 @@ import McpServerCard from '@/components/hermes/mcp/McpServerCard.vue'
 import { useMcpConfigInput } from '@/composables/useMcpConfigInput'
 import type { CodingAgentId } from '@/api/coding-agents'
 import type { McpServerConfig } from '@/api/hermes/mcp'
+import { errorMessage } from '@/utils/format'
 import {
   addCodingAgentMcpServer,
   fetchCodingAgentMcpServers,
@@ -112,9 +113,6 @@ const filteredServers = computed(() => {
   )
 })
 
-function errorMessage(value: unknown): string {
-  return value instanceof Error ? value.message : String(value)
-}
 
 function nextProbeVersion(name: string): number {
   const version = (probeVersions.get(name) || 0) + 1

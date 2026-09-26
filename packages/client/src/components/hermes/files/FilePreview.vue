@@ -14,6 +14,7 @@ import { handleCodeBlockCopyClick, renderHighlightedCodeBlock } from '@/componen
 import { previewMimeMatches } from '@/utils/hermes/file-preview'
 import { openHtmlInDesktopBrowser } from '@/utils/desktop-browser'
 import FileTreeToggle from './FileTreeToggle.vue'
+import { formatBytes } from '@/utils/format'
 
 const MarkdownRenderer = defineAsyncComponent(async () => (await import('@/components/hermes/chat/MarkdownRenderer.vue')).default)
 const HtmlFilePreview = defineAsyncComponent(async () => (await import('./HtmlFilePreview.vue')).default)
@@ -134,13 +135,6 @@ async function handleDownload(): Promise<void> {
 function handleClose(): void {
   if (props.customClose) props.customClose()
   else filesStore.closePreview()
-}
-
-function formatSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 const highlightedPreview = computed(() => {
@@ -279,7 +273,7 @@ onBeforeUnmount(() => {
         />
         <span class="preview-filename">{{ filesStore.previewFile.path }}</span>
         <span v-if="previewLocationLabel" class="preview-location" aria-live="polite">{{ previewLocationLabel }}</span>
-        <span class="preview-size">{{ formatSize(filesStore.previewFile.size) }}</span>
+        <span class="preview-size">{{ formatBytes(filesStore.previewFile.size, { units: ['B', 'KB', 'MB'] }) }}</span>
       </div>
       <div class="preview-actions">
         <NButton size="small" secondary :loading="downloading" @click="handleDownload">{{ t('files.download') }}</NButton>

@@ -4,6 +4,7 @@ import { NSpin, NEmpty, NCollapse, NCollapseItem } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { listCronRuns, readCronRun } from '@/api/hermes/cron-history'
 import type { RunEntry, RunDetail } from '@/api/hermes/cron-history'
+import { formatBytes } from '@/utils/format'
 
 const MarkdownRenderer = defineAsyncComponent(async () => (await import('@/components/hermes/chat/MarkdownRenderer.vue')).default)
 
@@ -58,12 +59,6 @@ async function handleExpand(key: string | number | Array<string | number>) {
   }
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
-}
-
 function getJobName(jobId: string): string {
   return props.jobNameMap[jobId] || jobId
 }
@@ -97,7 +92,7 @@ watch(() => [props.selectedJobId, props.profileKey], () => {
             :name="`${run.jobId}/${run.fileName}`"
           >
             <template #header-extra>
-              <span class="run-meta">{{ formatSize(run.size) }}</span>
+              <span class="run-meta">{{ formatBytes(run.size, { separator: '' }) }}</span>
             </template>
 
             <NSpin v-if="loadingContent[`${run.jobId}/${run.fileName}`]" size="small" />
