@@ -12,6 +12,7 @@ const sessionScrollPositions = new Map<string, MessageViewportScrollSnapshot>();
 <script setup lang="ts">
 import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { NSpin } from "naive-ui";
 import VirtualMessageList from "./VirtualMessageList.vue";
 import MessageItem from "./MessageItem.vue";
 import { positionTaskPlansAtTurnEnd } from "@/utils/task-plan";
@@ -46,6 +47,11 @@ const { toolTraceVisible } = useToolTraceVisibility();
 const listRef = ref<InstanceType<typeof VirtualMessageList> | null>(null);
 const pendingInitialScrollKey = ref<string | null>(null);
 const showScrollBottomButton = ref(false);
+const isPositioningSearch = ref(false);
+const isSearchFetching = computed(() => !!chatStore.focusMessageId && chatStore.isLoadingMessages);
+const isSearchLoading = computed(() => !!chatStore.focusMessageId && (
+  chatStore.isLoadingMessages || isPositioningSearch.value
+));
 const thinkingElapsedMs = ref(0);
 const initialBottomScrollOptions = { frames: 8, keepAliveMs: 1200 };
 let thinkingStartedAt = 0;
@@ -240,10 +246,16 @@ const compressionMessage = computed<Message | null>(() => {
 })
 
 const displayMessages = computed(() => {
+  // Pagination can add thousands of rows. Don't repeatedly parse and group
+  // partial pages while the transcript is covered by the search loader.
+  if (isSearchFetching.value) return [];
   const messages = chatStore.messages;
   const hasCompression = !!compressionMessage.value
   const renderedMessages = messages
     .filter((m) => {
+      // A search hit must survive the filters below, otherwise navigating to a
+      // result inside a collapsed tool run or a filtered row shows nothing.
+      if (m.id === chatStore.focusMessageId) return true;
       if (hasCompression && m.role === 'command' && /Compression (completed|failed)|Compressing\.\.\.|Compression skipped/.test(m.content || '')) return false
       if (m.role === "tool") {
         return toolTraceVisible.value && !!m.toolName;
@@ -262,7 +274,8 @@ const displayMessages = computed(() => {
       }
       return message;
     });
-  let out = groupCompletedToolsByRun(positionTaskPlansAtTurnEnd(renderedMessages));
+  // Pass the search hit through so it is not folded into a collapsed tool card.
+  let out = groupCompletedToolsByRun(positionTaskPlansAtTurnEnd(renderedMessages), chatStore.focusMessageId);
   if (compressionMessage.value) {
     // Place the card by time, where the compression actually happened. The card
     // carries the compression's own start time, so auto-compression (which
@@ -273,24 +286,24 @@ const displayMessages = computed(() => {
   // Embed consecutive tool cards into the preceding assistant's bubble,
   // so the tool sits directly under the bubble and above message-meta
   // (tight visual attachment, not separated by the button row gap).
-  const embedded: Message[] = []
+  const embedded: Message[] = [];
   for (const m of out) {
     if (m.systemType === 'tool-run' && m.toolMessages?.length) {
-      let attachIdx = -1
+      let attachIdx = -1;
       for (let i = embedded.length - 1; i >= 0; i--) {
-        const cand = embedded[i]
-        if (cand.role === 'user' || cand.role === 'command' || cand.systemType === 'command' || cand.systemType === 'fork-divider') break
+        const cand = embedded[i];
+        if (cand.role === 'user' || cand.role === 'command' || cand.systemType === 'command' || cand.systemType === 'fork-divider') break;
         if (cand.role === 'assistant') { attachIdx = i; break }
       }
       if (attachIdx >= 0) {
-        const prev = embedded[attachIdx]
-        embedded[attachIdx] = { ...prev, attachedToolMessages: [...(prev.attachedToolMessages || []), ...m.toolMessages!] } as Message
-        continue
+        const prev = embedded[attachIdx];
+        embedded[attachIdx] = { ...prev, attachedToolMessages: [...(prev.attachedToolMessages || []), ...m.toolMessages!] } as Message;
+        continue;
       }
-      embedded.push(m)
-      continue
+      embedded.push(m);
+      continue;
     }
-    embedded.push(m)
+    embedded.push(m);
   }
   return embedded;
 });
@@ -466,6 +479,7 @@ function shouldAutoFollowBottom(threshold = 100): boolean {
 }
 
 function scrollToBottom(options?: BottomScrollOptions) {
+  if (isSearchLoading.value) return;
   listRef.value?.scrollToBottom(options);
   showScrollBottomButton.value = false;
 }
@@ -498,11 +512,7 @@ function saveSessionScrollPosition(scrollKey: string | null | undefined) {
 
 function applyInitialSessionScroll(scrollKey: string) {
   if (activeSessionScrollKey.value !== scrollKey) return;
-  if (chatStore.focusMessageId) {
-    pendingInitialScrollKey.value = null;
-    scrollToMessage(chatStore.focusMessageId);
-    return;
-  }
+  if (chatStore.focusMessageId) return;
 
   const snapshot = sessionScrollPositions.get(scrollKey);
   if (snapshot) {
@@ -534,6 +544,7 @@ function applyInitialSessionScroll(scrollKey: string) {
 }
 
 async function handleTopReach() {
+  if (chatStore.isLoadingMessages || isSearchLoading.value) return;
   const session = chatStore.activeSession;
   if (!session?.hasMoreBefore || session.isLoadingOlderMessages || showHistoryArchiveLink.value) return;
   const snapshot = listRef.value?.captureScrollPosition() ?? null;
@@ -580,10 +591,6 @@ watch(
     if (isLoading || !wasLoading) return;
     const scrollKey = activeSessionScrollKey.value;
     if (!scrollKey || pendingInitialScrollKey.value !== scrollKey) return;
-    if (chatStore.focusMessageId) {
-      pendingInitialScrollKey.value = null;
-      return;
-    }
     await nextTick();
     if (activeSessionScrollKey.value !== scrollKey) return;
     applyInitialSessionScroll(scrollKey);
@@ -592,11 +599,33 @@ watch(
 );
 
 watch(
-  () => chatStore.focusMessageId,
-  (messageId) => {
-    if (!messageId) return;
-    scrollToMessage(messageId);
+  [activeSessionScrollKey, () => chatStore.focusMessageId, () => chatStore.isLoadingMessages],
+  async ([scrollKey, messageId, isLoading], _previous, onCleanup) => {
+    let cancelled = false;
+    let positioningList: InstanceType<typeof VirtualMessageList> | null = null;
+    onCleanup(() => {
+      cancelled = true;
+      positioningList?.cancelAnchorAlignment();
+    });
+    isPositioningSearch.value = !!scrollKey && !!messageId;
+    if (!scrollKey || !messageId || isLoading) return;
+
+    // Mount the completed search window once, keeping it hidden through
+    // virtual-row measurement and the final scroll correction.
+    await nextTick();
+    if (cancelled) return;
+    positioningList = listRef.value;
+    try {
+      await positioningList?.scrollToMessage(messageId);
+    } finally {
+      if (!cancelled) {
+        pendingInitialScrollKey.value = null;
+        isPositioningSearch.value = false;
+        void nextTick(updateScrollBottomButton);
+      }
+    }
   },
+  { immediate: true, flush: "sync" },
 );
 
 // When a run starts (user just sent a message), always scroll to bottom once
@@ -642,20 +671,14 @@ watch(
   () => chatStore.messages[chatStore.messages.length - 1]?.content,
   () => {
     if (pendingInitialScrollKey.value === activeSessionScrollKey.value) return;
-    if (chatStore.focusMessageId) {
-      scrollToMessage(chatStore.focusMessageId);
-      return;
-    }
+    if (chatStore.focusMessageId) return;
     if (!shouldAutoFollowBottom()) return;
     scrollToBottom({ frames: 1, keepAliveMs: 0 });
   },
 );
 watch(currentToolCalls, () => {
   if (pendingInitialScrollKey.value === activeSessionScrollKey.value) return;
-  if (chatStore.focusMessageId) {
-    scrollToMessage(chatStore.focusMessageId);
-    return;
-  }
+  if (chatStore.focusMessageId) return;
   if (!shouldAutoFollowBottom()) return;
   scrollToBottom({ frames: 1, keepAliveMs: 0 });
 });
@@ -691,12 +714,16 @@ defineExpose({
 </script>
 
 <template>
-  <div class="message-list-shell">
+  <div class="message-list-shell" :aria-busy="isSearchLoading">
     <VirtualMessageList
+      v-if="!isSearchFetching"
       :key="activeSessionScrollKey || 'chat-empty'"
       ref="listRef"
+      :class="{ 'message-list--search-loading': isSearchLoading }"
+      :inert="isSearchLoading || undefined"
+      :aria-hidden="isSearchLoading || undefined"
       :messages="displayMessagesWithForkDivider"
-      :virtualized="false"
+      :virtualized="(chatStore.activeSession?.loadedMessageCount || 0) > LIVE_CHAT_MAX_LOADED_MESSAGES"
       :row-gap="8"
       :padding="virtualListPadding"
       @scroll="handleListScroll"
@@ -813,8 +840,15 @@ defineExpose({
         </div>
       </template>
     </VirtualMessageList>
+    <div v-if="isSearchLoading" class="message-search-loading" role="status" :aria-label="t('common.loading')">
+      <NSpin size="medium" :rotate="false" :description="t('common.loading')">
+        <template #icon>
+          <span class="message-search-spinner" aria-hidden="true" />
+        </template>
+      </NSpin>
+    </div>
     <button
-      v-if="showScrollBottomButton"
+      v-if="showScrollBottomButton && !isSearchLoading"
       type="button"
       class="scroll-bottom-button"
       :aria-label="t('chat.scrollToBottom')"
@@ -892,6 +926,39 @@ defineExpose({
   min-height: 0;
   position: relative;
   display: flex;
+}
+
+.message-list--search-loading {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.message-search-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  background: $bg-main-surface;
+}
+
+// Animate only the composited transform. SVG stroke animations need repainting
+// on the same main thread that is mounting and measuring the message list.
+.message-search-spinner {
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 3px solid transparent;
+  border-top-color: currentColor;
+  border-inline-end-color: currentColor;
+  border-radius: 50%;
+  will-change: transform;
+  animation: message-search-spin 0.8s linear infinite;
+}
+
+@keyframes message-search-spin {
+  to { transform: rotate(360deg); }
 }
 
 .message-float-stack {

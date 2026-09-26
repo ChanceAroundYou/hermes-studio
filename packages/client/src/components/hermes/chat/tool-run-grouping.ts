@@ -11,13 +11,16 @@ import type { Message } from '@/stores/hermes/chat'
  *   assistant appear below that text — exactly "same assistant merges, new assistant separates".
  * - Insertion point = chunk[0]'s original index, stable across reload (timestamp-persisted).
  * - Every card default collapsed (ToolRunCard expanded=false).
+ * - `ungroupedMessageId` is the search hit being navigated to. Folding it into a
+ *   collapsed card would hide the very message the user searched for, so that one
+ *   message stays on its own row and breaks the chunk around it.
  */
-export function groupCompletedToolsByRun(messages: Message[]): Message[] {
+export function groupCompletedToolsByRun(messages: Message[], ungroupedMessageId?: string | null): Message[] {
   const out: Message[] = []
   let i = 0
   while (i < messages.length) {
     const m = messages[i]
-    const isTool = m.role === 'tool' && !!m.toolName
+    const isTool = m.role === 'tool' && !!m.toolName && m.id !== ungroupedMessageId
     if (!isTool) {
       out.push(m)
       i += 1
@@ -27,7 +30,7 @@ export function groupCompletedToolsByRun(messages: Message[]): Message[] {
     let j = i
     while (j < messages.length) {
       const cur = messages[j]
-      if (cur.role !== 'tool' || !cur.toolName) break
+      if (cur.role !== 'tool' || !cur.toolName || cur.id === ungroupedMessageId) break
       chunk.push(cur)
       j += 1
     }
