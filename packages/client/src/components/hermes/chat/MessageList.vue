@@ -391,12 +391,7 @@ watch(
   () => visibleClarify.value?.clarifyId,
   () => { clarifyResponse.value = visibleClarify.value?.initialResponse || ""; },
 );
-const hasFloatingPrompt = computed(() => !!visibleApproval.value || !!visibleClarify.value);
-const virtualListPadding = computed(() => {
-  if (queuedMessages.value.length > 0 && hasFloatingPrompt.value) return "20px 20px 380px";
-  if (queuedMessages.value.length > 0 || hasFloatingPrompt.value) return "20px 20px 260px";
-  return "20px";
-});
+const virtualListPadding = "20px";
 
 const activeSessionScrollKey = computed(() => {
   const sessionId = chatStore.activeSessionId;
@@ -686,16 +681,17 @@ watch(currentToolCalls, () => {
   scrollToBottom({ frames: 1, keepAliveMs: 0 });
 });
 
+// The queue card is fixed-position; enqueuing messages must not scroll the
+// transcript. When the card first appears, make sure it is not hidden behind
+// the last message: scroll to bottom only if the tail is not already visible.
 watch(
   () => queuedMessages.value.length,
   async (length, previousLength) => {
-    if (pendingInitialScrollKey.value === activeSessionScrollKey.value) return;
-    if (chatStore.focusMessageId) return;
     if (length <= previousLength) return;
-    const wasNearBottom = shouldAutoFollowBottom(320);
-    await nextTick();
-    if (!wasNearBottom && !chatStore.isRunActive) return;
-    scrollToBottom({ frames: 4, keepAliveMs: 600 });
+    if (previousLength === 0) {
+      await nextTick();
+      if (!listRef.value?.isNearBottom(400)) scrollToBottom({ frames: 2, keepAliveMs: 0 });
+    }
   },
 );
 
@@ -1387,11 +1383,20 @@ defineExpose({
   }
 
   .approval-float-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    // Buttons must size themselves to their label; fixed-width columns drop
+    // long clarify choices.
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
 
     :deep(.n-button) {
-      width: 100%;
+      width: auto;
+      max-width: 100%;
+    }
+
+    :deep(.n-button__content) {
+      white-space: normal;
+      text-align: start;
     }
   }
 

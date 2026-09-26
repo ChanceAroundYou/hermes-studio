@@ -1433,6 +1433,10 @@ async function copySessionLink(id?: string) {
   }
 }
 
+function toggleSessionOutline() {
+  showOutline.value = !showOutline.value;
+}
+
 async function copySessionId(id?: string) {
   const sessionId = id || chatStore.activeSessionId;
   if (sessionId) {
@@ -1593,9 +1597,7 @@ function handleActiveSessionMenuSelect(key: string) {
   const sessionId = chatStore.activeSessionId;
   if (!sessionId) return;
   restoreActiveSessionMenuTriggerFocus = key !== "rename";
-  if (key === "outline") {
-    showOutline.value = !showOutline.value;
-  } else if (key === "rename") {
+  if (key === "rename") {
     if (!activeSessionSupportsPersistence.value) return;
     openRenameSession(sessionId);
   } else if (key === "open-link") {
@@ -3303,6 +3305,42 @@ async function handleSessionModelCustomSubmit() {
               </template>
               {{ desktopBrowserAvailable ? `${t("drawer.files")} / ${t("drawer.terminal")} / ${t("browser.title")}` : `${t("drawer.files")} / ${t("drawer.terminal")}` }}
             </NTooltip>
+            <NTooltip trigger="hover">
+              <template #trigger>
+                <NButton
+                  class="header-session-outline-toggle"
+                  quaternary
+                  size="small"
+                  :disabled="!chatStore.activeSessionId"
+                  :class="{ active: showOutline }"
+                  :aria-label="t('chat.outlineTitle')"
+                  :aria-expanded="showOutline"
+                  aria-controls="chat-outline-panel"
+                  @click="toggleSessionOutline"
+                  circle
+                >
+                  <template #icon>
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.7"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <circle cx="5" cy="6" r="1" />
+                      <circle cx="5" cy="12" r="1" />
+                      <circle cx="5" cy="18" r="1" />
+                      <path d="M9 6h10M9 12h10M9 18h10" />
+                    </svg>
+                  </template>
+                </NButton>
+              </template>
+              {{ t("chat.outlineTitle") }}
+            </NTooltip>
             <NDropdown
               v-model:show="showActiveSessionMenu"
               trigger="click"
@@ -4343,6 +4381,11 @@ async function handleSessionModelCustomSubmit() {
 }
 
 .header-tool-toggle.active {
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.1);
+}
+
+.header-session-outline-toggle.active {
   color: var(--accent-primary);
   background: rgba(var(--accent-primary-rgb), 0.1);
 }

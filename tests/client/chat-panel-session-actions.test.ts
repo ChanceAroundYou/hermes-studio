@@ -13,8 +13,13 @@ describe('ChatPanel session action menus', () => {
   it('keeps the side-panel button and replaces the two adjacent actions with one accessible menu button', () => {
     const header = headerActionsSource()
 
-    expect(header.match(/<NButton/g)).toHaveLength(2)
+    expect(header.match(/<NButton/g)).toHaveLength(3)
     expect(header).toContain('class="header-tool-toggle"')
+    expect(header).toContain('class="header-session-outline-toggle"')
+    expect(header).toContain('@click="toggleSessionOutline"')
+    expect(header).toContain(':aria-label="t(\'chat.outlineTitle\')"')
+    expect(header).toContain(':aria-expanded="showOutline"')
+    expect(header).toContain('aria-controls="chat-outline-panel"')
     expect(header).toContain('@click="toggleToolPanel"')
     expect(header).toContain(':aria-label="t(\'chat.sidePanel\')"')
     expect(header).toContain(':aria-expanded="showToolPanel"')

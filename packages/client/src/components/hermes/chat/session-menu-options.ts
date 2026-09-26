@@ -148,7 +148,6 @@ export function buildActiveSessionMenuOptions(
   availability: ActiveSessionMenuAvailability = { canRename: true, canOpen: true },
 ): DropdownOption[] {
   return [
-    actionOption(labels.outline, 'outline', 'outline'),
     actionOption(labels.copyId, 'copy-id', 'copy'),
     actionOption(labels.rename, 'rename', 'rename', { disabled: !availability.canRename }),
     actionOption(labels.open, 'open-link', 'open-new', { disabled: !availability.canOpen }),

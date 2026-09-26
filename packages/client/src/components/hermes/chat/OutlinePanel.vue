@@ -119,7 +119,7 @@ function scrollToTarget(item: OutlineItem) {
 </script>
 
 <template>
-  <div class="outline-panel">
+  <div id="chat-outline-panel" class="outline-panel">
     <div class="outline-header">
       <span class="outline-title">{{ t('chat.outlineTitle') }}</span>
     </div>
