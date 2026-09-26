@@ -47,6 +47,8 @@ vi.mock('../../packages/ekko-agent/src', () => ({
   resolveModelProviderConfigs: resolveModelProviderConfigsMock,
 }))
 
+const authorizedProviderFetchMock = vi.fn()
+
 vi.mock('../../packages/server/src/modules/studio/public/chat-agent-runtime', () => ({
   createPrimaryAgentBridge: vi.fn(() => ({
     request: bridgeRequestMock,
@@ -56,6 +58,7 @@ vi.mock('../../packages/server/src/modules/studio/public/chat-agent-runtime', ()
   createChatEkkoModelClient: createModelClientMock,
   resolveChatEkkoModelProviderConfigs: resolveModelProviderConfigsMock,
   resolveChatEkkoProviderRuntimeConfig: resolveEkkoProviderRuntimeConfigMock,
+  createChatEkkoAuthorizedProviderFetch: authorizedProviderFetchMock,
 }))
 
 describe('ChatContextCompressor', () => {
@@ -92,6 +95,7 @@ describe('ChatContextCompressor', () => {
     resolveModelProviderConfigsMock.mockReturnValue({
       providerConfig: { id: 'openrouter', defaultModel: 'summary-model' },
     })
+    authorizedProviderFetchMock.mockReturnValue(async (input: unknown, init?: unknown) => global.fetch(input as RequestInfo | URL, init as RequestInit))
     createModelClientMock.mockReturnValue({
       provider: 'openrouter',
       requestStyle: 'openai-chat',

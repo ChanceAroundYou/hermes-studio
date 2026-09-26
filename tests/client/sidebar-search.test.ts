@@ -142,7 +142,7 @@ describe('AppSidebar navigation', () => {
     expect(wrapper.find('.sidebar-return-tab').exists()).toBe(true)
   })
 
-  it('shows version management only in the desktop shell', async () => {
+  it('no longer hosts version management inside the app sidebar', async () => {
     const webWrapper = mount(AppSidebar, {
       global: {
         stubs: {
@@ -150,11 +150,6 @@ describe('AppSidebar navigation', () => {
           ModelSelector: true,
           LanguageSwitch: true,
           ThemeSwitch: true,
-          VersionManagementModal: {
-            name: 'VersionManagementModal',
-            props: ['show'],
-            template: '<div class="version-management-modal-stub" :data-show="String(show)" />',
-          },
         },
       },
     })
@@ -170,24 +165,15 @@ describe('AppSidebar navigation', () => {
           ModelSelector: true,
           LanguageSwitch: true,
           ThemeSwitch: true,
-          VersionManagementModal: {
-            name: 'VersionManagementModal',
-            props: ['show'],
-            template: '<div class="version-management-modal-stub" :data-show="String(show)" />',
-          },
         },
       },
     })
 
-    expect(desktopWrapper.find('.version-management-btn').exists()).toBe(true)
-    expect(desktopWrapper.get('.version-management-modal-stub').attributes('data-show')).toBe('false')
-
-    await desktopWrapper.get('.version-management-btn').trigger('click')
-
-    expect(desktopWrapper.get('.version-management-modal-stub').attributes('data-show')).toBe('true')
+    expect(desktopWrapper.find('.version-management-btn').exists()).toBe(false)
+    expect(desktopWrapper.find('.version-management-modal-stub').exists()).toBe(false)
   })
 
-  it('uses short group labels and keeps group folding active when collapsed', async () => {
+  it('keeps the collapsed sidebar width compact', async () => {
     mockAppStore.sidebarCollapsed = true
     const wrapper = mount(AppSidebar, {
       global: {
@@ -202,22 +188,10 @@ describe('AppSidebar navigation', () => {
     })
 
     expect(wrapper.classes()).toContain('collapsed')
-    expect(wrapper.findAll('.nav-group-label span').map(node => node.text())).toEqual([
-      'sidebar.groupAgentShort',
-      'sidebar.groupMonitoringShort',
-      'sidebar.groupToolsShort',
-      'sidebar.groupSystemShort',
-    ])
-
-    const agentGroup = wrapper.findAll('.nav-group')[0]
-    expect(agentGroup.find('.nav-group-items').attributes('style')).toBeUndefined()
-
-    await agentGroup.find('.nav-group-label').trigger('click')
-    expect(agentGroup.find('.nav-group-items').attributes('style')).toContain('display: none')
+    expect(wrapper.findAll('.nav-group-label').length).toBe(0)
   })
 
-  it('keeps MCP visible for admins while hiding device management', () => {
-    localStorage.setItem('hermes_api_key', fakeJwt({ sub: '2', role: 'admin' }))
+  it('keeps removed entries out of the app sidebar while preserving settings', async () => {
     const wrapper = mount(AppSidebar, {
       global: {
         stubs: {
@@ -230,54 +204,9 @@ describe('AppSidebar navigation', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('sidebar.mcp')
-    expect(wrapper.text()).toContain('sidebar.theme')
+    expect(wrapper.text()).not.toContain('sidebar.mcp')
     expect(wrapper.text()).not.toContain('sidebar.devices')
+    expect(wrapper.text()).toContain('sidebar.theme')
   })
 
-  it('uses the regular update button to open Docker upgrade guidance', async () => {
-    mockAppStore.isDocker = true
-    mockAppStore.updateAvailable = true
-    mockAppStore.latestVersion = '0.6.29'
-    const wrapper = mount(AppSidebar, {
-      global: {
-        stubs: {
-          ProfileSelector: true,
-          ModelSelector: true,
-          LanguageSwitch: true,
-          ThemeSwitch: true,
-        },
-      },
-    })
-
-    const button = wrapper.get('.update-btn:not(.version-management-btn)')
-    expect(button.classes()).not.toContain('docker-update-btn')
-    expect(button.text()).toContain('sidebar.updateVersion')
-
-    await button.trigger('click')
-
-    expect(mockAppStore.doUpdate).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('sidebar.dockerUpdateGuide')
-  })
-
-  it('keeps the original npm update action outside Docker', async () => {
-    mockAppStore.isDocker = false
-    mockAppStore.updateAvailable = true
-    mockAppStore.latestVersion = '0.6.29'
-    const wrapper = mount(AppSidebar, {
-      global: {
-        stubs: {
-          ProfileSelector: true,
-          ModelSelector: true,
-          LanguageSwitch: true,
-          ThemeSwitch: true,
-        },
-      },
-    })
-
-    await wrapper.get('.update-btn:not(.version-management-btn)').trigger('click')
-
-    expect(mockAppStore.doUpdate).toHaveBeenCalledOnce()
-    expect(wrapper.text()).not.toContain('sidebar.dockerUpdateGuide')
-  })
 })

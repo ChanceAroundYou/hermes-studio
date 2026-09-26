@@ -200,57 +200,29 @@ describe('MessageList live reasoning', () => {
     const wrapper = mountMessageList([
       { id: 'user-1', role: 'user', content: 'Use a tool', timestamp: 1 },
       {
-        id: 'assistant-1',
-        role: 'assistant',
-        content: '',
-        reasoning: 'Need inspect the file.',
-        timestamp: 2,
-        isStreaming: false,
-      },
-      {
         id: 'tool-1',
         role: 'tool',
         content: '',
         toolName: 'read_file',
+        toolStatus: 'done',
         reasoning: 'Need inspect the file.',
-        toolStatus: 'running',
+        timestamp: 2,
+      },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: '',
+        reasoning: 'Now summarize the tool result.',
         timestamp: 3,
+        isStreaming: true,
       },
     ])
     await flushPromises()
 
-    expect(wrapper.find('[data-id="assistant-1"]').exists()).toBe(false)
-    expect(wrapper.get('.live-reasoning-detail').text()).toContain('Need inspect the file.')
-    const liveReasoningRow = wrapper.get('.live-reasoning-detail').element
-    const tool = wrapper.get('.tool-calls-panel .tool-call-item:not(.compression-item)').element
-    expect(liveReasoningRow.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(chatStore.messages.find(message => message.id === 'assistant-1')).toEqual(
-      expect.objectContaining({ reasoning: 'Need inspect the file.' }),
-    )
-
-    const runningTool = chatStore.messages.find(message => message.id === 'tool-1')
-    if (!runningTool) throw new Error('expected running tool')
-    runningTool.toolStatus = 'done'
-    await nextTick()
-
-    expect(wrapper.get('[data-id="tool-1"]').text()).toContain('Need inspect the file.')
-    expect(wrapper.findAll('.tool-calls-panel .tool-call-item:not(.compression-item)')).toHaveLength(0)
-    expect(wrapper.get('.live-reasoning-detail').classes()).toContain('is-empty')
-    expect(wrapper.get('.live-reasoning-body').text()).toBe('')
-
-    chatStore.messages.push({
-      id: 'assistant-2',
-      role: 'assistant',
-      content: '',
-      reasoning: 'Now summarize\n  the tool result.',
-      timestamp: 4,
-      isStreaming: true,
-    })
-    await nextTick()
-
+    expect(wrapper.find('.tool-run-card').exists()).toBe(true)
+    expect(wrapper.get('.tool-run-card').text()).toContain('read_file')
     expect(wrapper.get('.live-reasoning-body').text()).toBe('Now summarize the tool result.')
     expect(wrapper.get('.live-reasoning-detail').text()).not.toContain('Need inspect the file.')
-    expect(wrapper.get('.live-reasoning-detail').element).toBe(liveReasoningRow)
     expect(chatStore.messages.find(message => message.id === 'tool-1')).toEqual(
       expect.objectContaining({ reasoning: 'Need inspect the file.' }),
     )
@@ -340,7 +312,7 @@ describe('MessageList live reasoning', () => {
       },
     ])
 
-    expect(wrapper.find('.tool-calls-panel').exists()).toBe(true)
+    expect(wrapper.find('.tool-run-card').exists()).toBe(true)
     expect(wrapper.find('.thinking-status').exists()).toBe(true)
 
     chatStore.abortState = null
@@ -378,10 +350,10 @@ describe('MessageList live reasoning', () => {
     ])
     await flushPromises()
 
-    expect(wrapper.find('[data-id="tool-done"]').exists()).toBe(true)
+    expect(wrapper.find('.tool-run-card').exists()).toBe(true)
+    expect(wrapper.findAll('.tool-run-card')).toHaveLength(1)
     expect(wrapper.find('[data-id="tool-running"]').exists()).toBe(false)
-    expect(wrapper.findAll('.tool-calls-panel .tool-call-item:not(.compression-item)')).toHaveLength(1)
-    expect(wrapper.get('.tool-calls-panel').text()).toContain('Command')
+    expect(wrapper.get('.tool-run-card').text()).toContain('Command')
     expect(wrapper.get('.live-reasoning-body').text()).toBe('Run the focused tests.')
   })
 
@@ -421,11 +393,13 @@ describe('MessageList live reasoning', () => {
     expect(wrapper.get('.tool-run-card').attributes('data-run-id')).toBe('run-1')
     expect(wrapper.find('[data-id="tool-1"]').exists()).toBe(false)
     expect(wrapper.find('[data-id="tool-2"]').exists()).toBe(false)
-    expect(wrapper.find('[data-id="tool-without-run"]').exists()).toBe(true)
+    expect(wrapper.findAll('.tool-run-card')).toHaveLength(1)
+    expect(wrapper.find('[data-id="tool-without-run"]').exists()).toBe(false)
 
     await wrapper.get('.tool-run-header').trigger('click')
 
     expect(wrapper.find('[data-id="tool-1"]').exists()).toBe(true)
     expect(wrapper.find('[data-id="tool-2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-id="tool-without-run"]').exists()).toBe(true)
   })
 })

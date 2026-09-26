@@ -87,21 +87,21 @@ describe('client style system', () => {
     expect(historyMessageList).toContain('animation: history-message-surface-fade-in 1.5s ease both;')
   })
 
-  it('keeps the three-way conversation switch active state visible in dark mode', () => {
+  it('keeps the four-way conversation switch active state visible in dark mode', () => {
     const pageSidebarNav = readClientFile('components/layout/PageSidebarNav.vue')
 
     expect(pageSidebarNav).toContain(
-      ':global(.dark .conversation-switch--three .conversation-switch-tab.active)',
+      ':global(.dark .conversation-switch--four .conversation-switch-tab.active)',
     )
     expect(pageSidebarNav).toContain('background: $bg-card-hover;')
     expect(pageSidebarNav).toContain('inset 0 0 0 1px $border-color')
   })
 
-  it('keeps the coding agents page aligned with the app main surface', () => {
-    const codingAgentsView = readClientFile('views/hermes/CodingAgentsView.vue')
+  it('keeps the agent manager page aligned with the app main surface', () => {
+    const agentManagerView = readClientFile('views/hermes/AgentManagerView.vue')
 
-    expect(codingAgentsView).toMatch(
-      /\.coding-agents-content\s*\{[^}]*background: \$bg-main-surface;/s,
+    expect(agentManagerView).toMatch(
+      /\.agent-manager-panel\s*\{[^}]*background: \$bg-main-surface;/s,
     )
   })
 
@@ -124,7 +124,7 @@ describe('client style system', () => {
     expect(customBackgroundStyles).toContain(':deep(.chat-panel > .chat-main)')
     expect(customBackgroundStyles).toContain(':deep(.group-chat-panel > .chat-main)')
     expect(customBackgroundStyles).toContain(':deep(.virtual-message-list)')
-    expect(customBackgroundStyles).toContain(':deep(.coding-agents-content)')
+    expect(customBackgroundStyles).toContain(':deep(.agent-manager-panel)')
     expect(customBackgroundStyles).toMatch(
       /:deep\(\.workflow-view\),[\s\S]*:deep\(\.petdex-view\)\s*\{\s*background-color: transparent;/,
     )

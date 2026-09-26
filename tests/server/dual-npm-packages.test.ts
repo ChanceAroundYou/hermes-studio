@@ -1,10 +1,29 @@
 import { execFileSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join as joinPath } from 'node:path'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildSync } from 'esbuild'
 import { packNpmReleases } from '../../scripts/pack-npm-releases.mjs'
+
+/**
+ * The pack script requires an npm CLI so it can call `npm pack`. Under
+ * `npm run test` npm_execpath is set; when vitest is launched directly the
+ * bundled npm binary is located relative to the `npm` executable instead.
+ */
+function resolveNpmCli(): string | undefined {
+  if (process.env.npm_execpath) return process.env.npm_execpath
+  const nodeBinDir = dirname(process.execPath)
+  for (const candidate of [
+    joinPath(nodeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    joinPath(nodeBinDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    joinPath(nodeBinDir, '..', 'lib64', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ]) {
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
+}
 
 const dirs: string[] = []
 afterEach(() => dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })))
@@ -24,7 +43,7 @@ describe('dual npm release artifacts', () => {
     writeFileSync(join(root, 'dist/client/index.html'), '<html>same client</html>')
     writeFileSync(join(root, 'dist/server/index.js'), '/* same server */')
     const output = join(root, 'output')
-    const packed = packNpmReleases(root, output)
+    const packed = packNpmReleases(root, output, resolveNpmCli())
     expect(packed.map(pkg => pkg.name)).toEqual(['ekko-studio', 'hermes-web-ui'])
     expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(manifest)
 
@@ -59,6 +78,6 @@ describe('dual npm release artifacts', () => {
     const root = mkdtempSync(join(tmpdir(), 'studio-unbuilt-pack-test-'))
     dirs.push(root)
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'ekko-studio', version: '1.0.0', bin: {} }))
-    expect(() => packNpmReleases(root, join(root, 'output'))).toThrow('Build the package first')
+    expect(() => packNpmReleases(root, join(root, 'output'), resolveNpmCli())).toThrow('Build the package first')
   })
 })

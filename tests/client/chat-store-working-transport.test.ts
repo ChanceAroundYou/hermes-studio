@@ -281,7 +281,7 @@ describe('sidebar activity through the real chat API', () => {
     store.setRuntimeMode('global_agent')
     store.sessions = [session('one')]
     await store.switchSession('one')
-    const observer = socketState.sockets[1]
+    const observer = socketState.sockets.filter(sock => sock.url === '/global-agent').at(-1)
     expect(observer.url).toBe('/global-agent')
     observer.__trigger('disconnect', 'ping timeout')
     observer.__trigger('connect')

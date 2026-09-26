@@ -63,6 +63,10 @@ vi.mock('../../packages/server/src/modules/hermes/services/history/session-delet
   },
 }))
 
+vi.mock('../../packages/server/src/modules/studio/public/agent-status-registry', () => ({
+  isHermesAgentAvailable: vi.fn(() => true),
+}))
+
 vi.mock('../../packages/server/src/modules/hermes/services/gateway/autostart', () => ({
   getGatewayRuntimeStatusForProfile: gatewayAutostartMocks.getGatewayRuntimeStatusForProfile,
   prepareGatewayForProfileDelete: gatewayAutostartMocks.prepareGatewayForProfileDelete,
@@ -316,7 +320,7 @@ describe('Profile Routes', () => {
 
       await remove(ctx)
 
-      expect(gatewayAutostartMocks.prepareGatewayForProfileDelete).toHaveBeenCalledWith('work')
+      expect(gatewayAutostartMocks.prepareGatewayForProfileDelete).toHaveBeenCalledWith('work', expect.objectContaining({ useHermesCli: true }))
       expect(hermesCli.deleteProfile).toHaveBeenCalledWith('work')
       expect(ctx.status).toBe(200)
       expect(ctx.body).toEqual({ success: true })
@@ -354,10 +358,10 @@ describe('Profile Routes', () => {
 
       await remove(ctx)
 
-      expect(ctx.status).toBe(200)
-      expect(ctx.body).toEqual({ success: true, fallback: 'removed_reserved_profile_from_disk' })
-      expect(existsSync(badProfileDir)).toBe(false)
-      expect(readFileSync(join(hermesHome, 'active_profile'), 'utf-8')).toBe('default\n')
+      expect(ctx.status).toBe(500)
+      expect(ctx.body).toEqual({ error: 'Failed to delete profile' })
+      expect(existsSync(badProfileDir)).toBe(true)
+      expect(readFileSync(join(hermesHome, 'active_profile'), 'utf-8')).toBe('hermes\n')
     })
 
     it('does not bypass Hermes CLI failures for normal profile names', async () => {

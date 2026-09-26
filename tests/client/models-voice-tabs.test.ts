@@ -69,6 +69,7 @@ vi.mock('naive-ui', async () => {
 })
 
 vi.mock('@/stores/hermes/models', () => ({ useModelsStore: () => modelsStore }))
+vi.mock('@/stores/hermes/app', () => ({ useAppStore: () => ({ serverVersion: '0.7.0', setPageSidebarExpanded: vi.fn() }) }))
 vi.mock('@/stores/hermes/profiles', () => ({ useProfilesStore: () => profilesStore }))
 vi.mock('@/stores/hermes/settings', () => ({ useSettingsStore: () => settingsStore }))
 vi.mock('@/api/hermes/copilot-auth', () => ({ checkCopilotToken: vi.fn(async () => {}) }))

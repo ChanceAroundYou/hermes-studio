@@ -26,6 +26,11 @@ vi.mock('../../packages/server/src/modules/studio/services/auth/token-auth', () 
   getToken: vi.fn(async () => 'test-token'),
 }))
 
+vi.mock('../../packages/server/src/modules/studio/services/agent-availability', () => ({
+  AGENT_NOT_INSTALLED: 'AGENT_NOT_INSTALLED',
+  assertAgentAvailable: vi.fn(),
+}))
+
 import { AgentClients, groupBridgeSessionId } from '../../packages/server/src/modules/studio/services/group-chat/agent-clients'
 import { GroupChatServer } from '../../packages/server/src/modules/studio/sockets/group-chat'
 import type { GroupRoomSummaryService } from '../../packages/server/src/modules/studio/services/group-chat/room-summary'

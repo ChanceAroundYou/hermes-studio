@@ -97,13 +97,9 @@ describe('SkillsView', () => {
     ] }], archived: [] })
     const wrapper = mount(SkillsView, {
       props: { target },
-      global: { stubs: {
-        SkillList: true, SkillDetail: defineComponent({ props: ['readonly'], template: '<article class="detail" :data-readonly="readonly" />' }),
-        SkillImportModal: true, SkillExternalDirsModal: true, PendingWriteApprovals: true,
-      } },
     })
     await flushPromises()
-    expect(wrapper.get('.detail').attributes('data-readonly')).toBe('true')
+    expect(wrapper.get('.skill-detail-stub').attributes('data-skill')).toBe('shared')
     wrapper.unmount()
   })
   beforeEach(() => {

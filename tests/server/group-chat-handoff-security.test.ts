@@ -7,6 +7,11 @@ import {
 import { GROUP_AGENT_PAIRING_REQUEST_TTL_MS } from '../../packages/server/src/modules/studio/services/group-chat/agent-relay-store'
 import { setGroupChatRuntimeServer } from '../../packages/server/src/modules/studio/services/group-chat/runtime'
 
+vi.mock('../../packages/server/src/modules/studio/services/agent-availability', () => ({
+  AGENT_NOT_INSTALLED: 'AGENT_NOT_INSTALLED',
+  assertAgentAvailable: vi.fn(),
+}))
+
 vi.mock('../../packages/server/src/modules/studio/services/group-chat/agent-relay', () => ({
   getGroupAgentOutboundRelayManager: vi.fn(() => ({ connect: vi.fn() })),
   GROUP_AGENT_RELAY_PROTOCOL_VERSION: 2,

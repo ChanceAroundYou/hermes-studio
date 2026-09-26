@@ -4,6 +4,7 @@ import { defineComponent } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMocks = vi.hoisted(() => ({
+  fetchAgentStatusSnapshot: vi.fn(),
   checkCodingAgentUpdate: vi.fn(),
   deleteCodingAgent: vi.fn(),
   fetchCodingAgentsStatus: vi.fn(),
@@ -17,16 +18,49 @@ const messageMock = vi.hoisted(() => ({
   success: vi.fn(),
 }))
 
+
+
+vi.mock('@/api/hermes/system', () => ({
+  fetchAvailableModelsForProfile: vi.fn().mockResolvedValue({ groups: [] }),
+}))
+
+vi.mock('@/api/agent-status', () => ({
+  fetchAgentStatusSnapshot: apiMocks.fetchAgentStatusSnapshot,
+}))
+
+vi.mock('@/api/hermes/runtime-versions', () => ({
+  fetchRuntimeVersionStatus: vi.fn().mockResolvedValue({}),
+}))
+
+vi.mock('@/api/hermes/legacy-data-migration', () => ({
+  decideLegacyWindowsDataMigration: vi.fn(),
+  fetchLegacyWindowsDataMigrationStatus: vi.fn(),
+}))
+
 vi.mock('@/api/coding-agents', () => ({
   ...apiMocks,
   inferCodingAgentApiMode: () => 'codex_responses',
   launchCodingAgentNativeTerminal: vi.fn(),
   normalizeCodingAgentApiMode: (value?: string, fallback?: string) => value || fallback || 'codex_responses',
   prepareCodingAgentLaunch: vi.fn(),
+  getAgentUpdatePolicies: vi.fn().mockResolvedValue({ agents: {} }),
+  setAgentAutoUpdate: vi.fn().mockResolvedValue({ agents: {} }),
 }))
 
-vi.mock('@/api/hermes/system', () => ({
-  fetchAvailableModelsForProfile: vi.fn().mockResolvedValue({ groups: [] }),
+vi.mock('@/stores/hermes/app', () => ({
+  useAppStore: () => ({ serverVersion: '0.7.0', setPageSidebarExpanded: vi.fn() }),
+}))
+
+vi.mock('@/stores/hermes/chat', () => ({
+  useChatStore: () => ({ newChat: vi.fn() }),
+}))
+
+vi.mock('@/api/client', () => ({
+  getBaseUrlValue: () => '',
+}))
+
+vi.mock('@/utils/desktop-bridge', () => ({
+  desktopBridge: vi.fn(() => undefined),
 }))
 
 vi.mock('@/stores/hermes/profiles', () => ({
@@ -35,6 +69,18 @@ vi.mock('@/stores/hermes/profiles', () => ({
 
 vi.mock('@/components/hermes/chat/TerminalPanel.vue', () => ({
   default: defineComponent({ template: '<div />' }),
+}))
+
+const routeMock = vi.hoisted(() => ({
+  params: {} as Record<string, string>,
+  query: {} as Record<string, string>,
+}))
+
+let routeState = routeMock
+
+vi.mock('vue-router', () => ({
+  useRoute: () => routeState,
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -52,7 +98,7 @@ vi.mock('naive-ui', () => {
     }),
     NForm: SlotStub,
     NFormItem: SlotStub,
-    NInput: SlotStub,
+    NInput: defineComponent({ props: ['value', 'type', 'placeholder', 'disabled'], template: '<textarea :placeholder="placeholder" />', }),
     NModal: SlotStub,
     NRadioButton: SlotStub,
     NRadioGroup: SlotStub,
@@ -60,11 +106,16 @@ vi.mock('naive-ui', () => {
     NSpace: SlotStub,
     NSpin: SlotStub,
     NTag: defineComponent({ template: '<span><slot /></span>' }),
+    NPopconfirm: defineComponent({ template: '<div><slot name="trigger" /><slot /></div>' }),
+    NSwitch: defineComponent({ template: '<div />' }),
+    NDrawer: defineComponent({ template: '<div><slot /></div>' }),
+    NDrawerContent: defineComponent({ template: '<div><slot /></div>' }),
     useMessage: () => messageMock,
+    useDialog: () => ({ warning: vi.fn() }),
   }
 })
 
-import CodingAgentsView from '@/views/hermes/CodingAgentsView.vue'
+import AgentManagerView from '@/views/hermes/AgentManagerView.vue'
 
 const claudeV1 = {
   id: 'claude-code',
@@ -98,9 +149,17 @@ function buttonWithText(wrapper: VueWrapper, text: string) {
   return wrapper.findAll('button').find(button => button.text() === text)
 }
 
-describe('CodingAgentsView update state', () => {
+describe('AgentManagerView update state', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    apiMocks.fetchAgentStatusSnapshot.mockResolvedValue({
+      agents: [claudeV1, codexMissing].map(tool => ({
+        id: tool.id,
+        installed: tool.installed,
+        version: tool.version,
+        source: 'user-cli',
+      })),
+    })
     apiMocks.fetchCodingAgentsStatus.mockResolvedValue({ tools: [claudeV1, codexMissing] })
     apiMocks.readCodingAgentConfigFile.mockResolvedValue({
       content: '',
@@ -109,7 +168,7 @@ describe('CodingAgentsView update state', () => {
     })
   })
 
-  it('rechecks after an update and replaces the available banner with the latest state', async () => {
+  it('replaces the stale update button after an update completes', async () => {
     apiMocks.checkCodingAgentUpdate
       .mockResolvedValueOnce({
         success: true,
@@ -117,40 +176,28 @@ describe('CodingAgentsView update state', () => {
         latestVersion: '2.0.0',
         updateAvailable: true,
       })
-      .mockResolvedValueOnce({
-        success: true,
-        tool: claudeV2,
-        latestVersion: '2.0.0',
-        updateAvailable: false,
-      })
     apiMocks.installCodingAgent.mockResolvedValue({
       success: true,
       tool: claudeV2,
       tools: [claudeV2, codexMissing],
     })
 
-    const wrapper = mount(CodingAgentsView)
+    const wrapper = mount(AgentManagerView)
     await flushPromises()
 
     await buttonWithText(wrapper, 'codingAgents.checkUpdate')!.trigger('click')
     await flushPromises()
 
-    const availableState = wrapper.get('[data-testid="coding-agent-update-claude-code"]')
-    expect(availableState.text()).toContain('codingAgents.newVersionAvailable')
-    expect(availableState.text()).toContain('2.0.0')
-    expect(availableState.find('.update-action').exists()).toBe(true)
-    expect(availableState.find('.agent-install-summary').exists()).toBe(false)
+    const card = wrapper.get('[data-testid="agent-card-claude-code"]')
+    const updateButton = buttonWithText(card, 'agentManager.updateToVersion')
+    expect(updateButton).toBeTruthy()
 
-    await buttonWithText(wrapper, 'codingAgents.updateNow')!.trigger('click')
+    await updateButton!.trigger('click')
     await flushPromises()
 
     expect(apiMocks.installCodingAgent).toHaveBeenCalledWith('claude-code')
-    expect(apiMocks.checkCodingAgentUpdate).toHaveBeenCalledTimes(2)
-    expect(wrapper.get('[data-testid="coding-agent-update-claude-code"]').text())
-      .toContain('codingAgents.upToDate')
-    expect(wrapper.find('.agent-install-summary').text()).toContain('2.0.0')
-    expect(wrapper.text()).not.toContain('codingAgents.newVersionAvailable')
-    expect(wrapper.text()).not.toContain('codingAgents.checkingUpdate')
+    expect(wrapper.get('[data-testid="agent-card-claude-code"]').text()).toContain('2.0.0')
+    expect(buttonWithText(wrapper, 'agentManager.updateToVersion')).toBeFalsy()
     expect(buttonWithText(wrapper, 'codingAgents.checkUpdate')).toBeTruthy()
   })
 
@@ -163,7 +210,7 @@ describe('CodingAgentsView update state', () => {
       message: 'registry unavailable',
     })
 
-    const wrapper = mount(CodingAgentsView)
+    const wrapper = mount(AgentManagerView)
     await flushPromises()
 
     await buttonWithText(wrapper, 'codingAgents.checkUpdate')!.trigger('click')
@@ -175,17 +222,25 @@ describe('CodingAgentsView update state', () => {
     expect(wrapper.text()).not.toContain('codingAgents.checkingUpdate')
   })
 
-  it('shows Pi user configuration files without exposing runtime-only files', async () => {
-    const wrapper = mount(CodingAgentsView)
+  it('shows Pi user configuration files in the agent settings page', async () => {
+    vi.mocked(apiMocks.readCodingAgentConfigFile)
+      .mockImplementation(async (agentId: string, key: string) => {
+        const path = agentId === 'pi'
+          ? (key === 'agents' ? '~/.pi/agent/AGENTS.md' : '~/.pi/agent/settings.json')
+          : '~/.claude/settings.json'
+        return { key, content: '', absolutePath: path, path, exists: true }
+      })
+
+    routeState = { params: { agentId: 'pi', section: 'settings' }, query: {} }
+    const CodingAgentConfigView = (await import('@/views/hermes/CodingAgentConfigView.vue')).default
+    const wrapper = mount(CodingAgentConfigView)
+    routeState = routeMock
     await flushPromises()
 
-    expect(wrapper.text()).toContain('~/.claude/mcp.json')
-    expect(wrapper.text()).not.toContain('~/.claude.json')
-    expect(wrapper.text()).toContain('~/.pi/agent/auth.json')
-    expect(wrapper.text()).toContain('~/.pi/agent/settings.json')
-    expect(wrapper.text()).toContain('~/.pi/agent/AGENTS.md')
-    expect(wrapper.text()).toContain('~/.pi/agent/mcp.json')
-    expect(wrapper.text()).not.toContain('~/.pi/agent/models.json')
-    expect(wrapper.text()).not.toContain('~/.pi/agent/APPEND_SYSTEM.md')
+    const html = wrapper.html()
+    expect(html).toContain('~/.pi/agent/AGENTS.md')
+    expect(html).toContain('~/.pi/agent/settings.json')
+    expect(html).not.toContain('~/.pi/agent/models.json')
+    expect(html).not.toContain('~/.pi/agent/APPEND_SYSTEM.md')
   })
 })

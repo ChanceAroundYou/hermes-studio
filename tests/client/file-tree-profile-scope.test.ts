@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { defineComponent } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import FileTree from '@/components/hermes/files/FileTree.vue'
 import { useFilesStore } from '@/stores/hermes/files'
@@ -36,6 +37,20 @@ vi.mock('naive-ui', () => ({
     `,
   },
 }))
+
+const Host = defineComponent({
+  components: { FileTree },
+  props: { workspaceKeyValue: { type: String, default: '' } },
+  emits: ['host-open'],
+  data: () => ({ opened: [] as Array<{ path: string }> }) as any,
+  methods: {
+    onOpen(entry: { path: string }) {
+      ;(this as any).opened.push(entry)
+      ;(this as any).$emit('host-open', entry.path)
+    },
+  },
+  template: `<FileTree :workspace-key="workspaceKeyValue" @open-entry="onOpen" />`,
+})
 
 describe('FileTree profile scope', () => {
   beforeEach(() => {
@@ -90,16 +105,18 @@ describe('FileTree profile scope', () => {
     })
     const store = useFilesStore()
     store.currentWorkspaceSessionId = 'session-1'
-    const wrapper = mount(FileTree, { props: { workspaceKey: '/tmp/workspace' } })
+    const wrapper = mount(Host, { props: { workspaceKeyValue: '/tmp/workspace' } })
     await flushPromises()
 
     const nodes = wrapper.findAll('.tree-node-stub')
     await nodes[0].trigger('click')
     await nodes[1].trigger('click')
 
-    expect(wrapper.emitted('open-entry')).toEqual([
-      [expect.objectContaining({ path: 'first.ts' })],
-      [expect.objectContaining({ path: 'second.ts' })],
+    expect((wrapper.vm as any).opened.map((entry: { path: string }) => entry.path)).toEqual([
+      'first.ts',
+      'second.ts',
     ])
+
   })
+
 })

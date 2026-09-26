@@ -71,12 +71,13 @@ describe('tool trace visibility', () => {
   it('shows named transcript and live tool traces by default while keeping unnamed internal tools hidden', () => {
     const wrapper = mountLiveList()
 
+    expect(wrapper.find('.tool-run-card').exists()).toBe(true)
+    expect(wrapper.get('.tool-run-card').text()).toContain('read_file')
+    expect(wrapper.find('.tool-run-card [data-id="tool-running"]').exists()).toBe(false)
     expect(wrapper.findAll('.stub-message').map(node => node.attributes('data-id'))).toEqual([
       'user-1',
-      'tool-named',
       'assistant-1',
     ])
-    expect(wrapper.findAll('.tool-call-name').map(node => node.text())).toContain('search')
   })
 
   it('applies the same default-visible rule to history sessions', () => {
@@ -84,9 +85,10 @@ describe('tool trace visibility', () => {
       props: { session: makeSession(sampleMessages) },
     })
 
+    expect(wrapper.find('.tool-run-card').exists()).toBe(true)
+    expect(wrapper.get('.tool-run-card').text()).toContain('read_file')
     expect(wrapper.findAll('.stub-message').map(node => node.attributes('data-id'))).toEqual([
       'user-1',
-      'tool-named',
       'assistant-1',
     ])
   })
@@ -141,7 +143,7 @@ describe('tool trace visibility', () => {
       'user-1',
       'assistant-1',
     ])
-    expect(liveWrapper.findAll('.tool-call-name').map(node => node.text())).toContain('search')
+    expect(liveWrapper.find('.tool-run-card').exists()).toBe(false)
 
     const historyWrapper = mount(HistoryMessageList, {
       props: { session: makeSession(sampleMessages) },
@@ -150,6 +152,7 @@ describe('tool trace visibility', () => {
       'user-1',
       'assistant-1',
     ])
+    expect(historyWrapper.find('.tool-run-card').exists()).toBe(false)
   })
 
   it('does not treat tool traces before a slash command as current tool calls', () => {
@@ -164,8 +167,9 @@ describe('tool trace visibility', () => {
 
     const wrapper = mount(MessageList)
 
-    expect(wrapper.findAll('.stub-message').map(node => node.attributes('data-id'))).toContain('tool-weather')
-    expect(wrapper.findAll('.tool-call-name').map(node => node.text())).not.toContain('weather')
+    expect(wrapper.find('.tool-run-card').exists()).toBe(true)
+    expect(wrapper.get('.tool-run-card').text()).toContain('weather')
+    expect(wrapper.findAll('.stub-message').map(node => node.attributes('data-id'))).not.toContain('tool-weather')
   })
 
 })

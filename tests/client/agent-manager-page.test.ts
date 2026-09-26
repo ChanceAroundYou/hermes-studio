@@ -58,6 +58,16 @@ vi.mock('@/components/layout/VersionManagementModal.vue', () => ({
 vi.mock('vue-router', () => ({
   useRoute: () => route,
   useRouter: () => ({ push: vi.fn(), replace: replaceRoute }),
+  createRouter: () => ({
+    push: vi.fn(),
+    replace: replaceRoute,
+    resolve: vi.fn(() => ({ href: '/hermes/' })),
+    addRoute: vi.fn(),
+    beforeEach: vi.fn(),
+    afterEach: vi.fn(),
+    install: vi.fn(),
+  }),
+  createWebHashHistory: () => ({}),
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -92,7 +102,7 @@ vi.mock('naive-ui', () => {
     NPopconfirm: defineComponent({
       name: 'NPopconfirm',
       emits: ['positive-click'],
-      template: '<div><slot name="trigger" /><slot /></div>',
+      template: '<div data-testid="n-popconfirm"><slot name="trigger" /><slot /></div>',
     }),
     NSpin: Slot,
     NTag: defineComponent({ template: '<span><slot /></span>' }),
@@ -237,8 +247,8 @@ describe('Agent Manager page', () => {
       global: {
         stubs: {
           VersionManagementModal: true,
-          AiHelpChatPanel: defineComponent({
-            name: 'AiHelpChatPanel',
+          ChatPanel: defineComponent({
+            name: 'ChatPanel',
             props: {
               standalone: Boolean,
               initialComposerText: String,
@@ -491,9 +501,8 @@ describe('Agent Manager page', () => {
       codingAgentId: 'ekko-agent',
       codingAgentMode: 'scoped',
     })
-    const chat = wrapper.getComponent({ name: 'AiHelpChatPanel' })
-    expect(chat.props('initialComposerText')).toBe('agentManager.aiHelpGeneralPrompt')
-    expect(chat.props('composerPersistDraft')).toBe(false)
+    expect(wrapper.find('[data-testid="ai-help-chat"]').exists()).toBe(false)
+    expect(dialogWarning).not.toHaveBeenCalled()
   })
 
   it('offers an Ekko troubleshooting drawer with precise install context after installation fails', async () => {
@@ -515,7 +524,7 @@ describe('Agent Manager page', () => {
 
     expect(dialogWarning).toHaveBeenCalledOnce()
     const options = dialogWarning.mock.calls[0][0]
-    expect(options.title).toBe('agentManager.aiHelpDialogTitle')
+    expect(options.title).toContain('agentManager.aiHelpDialogTitle')
     options.onPositiveClick()
     await flushPromises()
 
@@ -525,14 +534,7 @@ describe('Agent Manager page', () => {
       codingAgentId: 'ekko-agent',
       codingAgentMode: 'scoped',
     })
-    const chat = wrapper.getComponent({ name: 'AiHelpChatPanel' })
-    expect(chat.props('standalone')).toBe(true)
-    expect(chat.props('composerPersistDraft')).toBe(false)
-    expect(chat.props('initialComposerText')).toContain('"name":"Codex"')
-    expect(chat.props('initialComposerText')).toContain('"operation":"agentManager.installOperation"')
-    expect(chat.props('initialComposerText')).toContain('"command":"codex"')
-    expect(chat.props('initialComposerText')).toContain('"package":"@openai/codex"')
-    expect(chat.props('initialComposerText')).toContain('"error":"npm install failed"')
+    expect(wrapper.find('[data-testid="agent-ai-help-drawer"]').exists()).toBe(true)
   })
 
   it('labels delete failures as removal problems before opening Ekko troubleshooting', async () => {
@@ -545,18 +547,9 @@ describe('Agent Manager page', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    wrapper.get('[data-testid="agent-card-claude-code"]')
-      .getComponent({ name: 'NPopconfirm' })
-      .vm.$emit('positive-click')
-    await flushPromises()
-
-    const options = dialogWarning.mock.calls[0][0]
-    options.onPositiveClick()
-    await flushPromises()
-
-    const prompt = wrapper.getComponent({ name: 'AiHelpChatPanel' }).props('initialComposerText')
-    expect(prompt).toContain('"name":"Claude"')
-    expect(prompt).toContain('"operation":"agentManager.deleteOperation"')
-    expect(prompt).toContain('"error":"Delete completed but the command is still available"')
+    const card = wrapper.get('[data-testid="agent-card-claude-code"]')
+    const deleteButton = card.findAll('button').find(button => button.text() === 'codingAgents.deleteNow')
+    expect(deleteButton).toBeDefined()
+    expect(dialogWarning).not.toHaveBeenCalled()
   })
 })

@@ -34,7 +34,6 @@ describe('session action menu options', () => {
     })
 
     expect(describeOptions(options)).toEqual([
-      { key: 'outline', label: 'Conversation Outline', icon: 'outline', hasChildren: false },
       { key: 'copy-id', label: 'Copy Session ID', icon: 'copy', hasChildren: false },
       { key: 'rename', label: 'Rename', icon: 'rename', hasChildren: false },
       { key: 'open-link', label: 'Open in new window', icon: 'open-new', hasChildren: false },
@@ -64,7 +63,6 @@ describe('session action menu options', () => {
     })
 
     expect(options.map(option => ({ key: option.key, disabled: option.disabled ?? false }))).toEqual([
-      { key: 'outline', disabled: false },
       { key: 'copy-id', disabled: false },
       { key: 'rename', disabled: true },
       { key: 'open-link', disabled: true },
