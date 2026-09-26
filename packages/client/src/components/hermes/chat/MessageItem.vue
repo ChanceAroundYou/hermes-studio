@@ -63,10 +63,23 @@ const { t } = useI18n();
 const toast = useMessage();
 
 const isSystem = computed(() => props.message.role === "system");
-const isAgentError = computed(() => props.message.role === "assistant" && props.message.systemType === "error");
+const isCommandMessage = computed(() => props.message.role === "command" || props.message.systemType === "command");
+// One canonical error bubble. A run failure used to render twice in two
+// different styles: a red rounded bubble for `run.failed` and a yellow
+// left-striped notice for everything routed through a system message (bridge
+// resume failures, swallowed model errors, failed sends). Every error now maps
+// to the same `.agent-error` treatment.
+const isAgentError = computed(() => {
+  const message = props.message;
+  if (message.role === "command") return false;
+  if (message.systemType === "error") return true;
+  if (message.role === "system" && !message.commandAction && !isCommandMessage.value) {
+    return /^\s*(error\b|run failed)/i.test(String(message.content || ""));
+  }
+  return false;
+});
 
 const effectiveHeadingIdPrefix = computed(() => props.headingIdPrefix || `msg-${props.message.id}`);
-const isCommandMessage = computed(() => props.message.role === "command" || props.message.systemType === "command");
 const isCommandError = computed(() => props.message.role === "command" && props.message.systemType === "error");
 const isStatusCommand = computed(() =>
   isCommandMessage.value
@@ -1038,7 +1051,7 @@ onBeforeUnmount(() => {
           <div
             class="message-bubble"
             :class="{
-              system: isSystem,
+              system: isSystem && !isAgentError,
               'agent-error': isAgentError,
               command: isCommandMessage,
               'command-error': isCommandError,

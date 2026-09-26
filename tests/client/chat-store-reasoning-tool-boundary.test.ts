@@ -555,7 +555,7 @@ describe('chat store reasoning/tool boundaries', () => {
       role: 'assistant',
       content: 'final answer',
     }))
-    expect(store.messages.some(message => message.role === 'system' && message.content.includes('Agent returned no output'))).toBe(false)
+    expect(store.messages.some(message => message.systemType === 'error' && message.content.includes('Agent returned no output'))).toBe(false)
   })
 
   it('does not add a front-end MoA discussion placeholder from session.command start', async () => {

@@ -101,6 +101,9 @@ export interface Message {
   reasoning?: string
   queued?: boolean
   systemType?: 'command' | 'error' | 'fork-divider' | 'tool-run'
+  /** Client-injected row (e.g. a run error) with no server-side counterpart,
+   *  so a transcript re-fetch has to preserve it explicitly. */
+  localOnly?: boolean
   commandAction?: string
   commandData?: Record<string, unknown>
   finishReason?: string | null
@@ -896,7 +899,7 @@ function resolveResumedAssistantState(
   }
 }
 
-function mapHermesMessages(msgs: HermesMessage[], taskPlans: unknown[] = [], previous: Message[] = []): Message[] {
+function mapHermesMessages(msgs: HermesMessage[], taskPlans: unknown[] = [], previous: Message[] = [], options: { preserveLocalOnly?: boolean } = {}): Message[] {
   // Filter out assistant messages with no display content unless they carry tool call metadata
   // needed to name later tool result rows when resuming persisted history.
   const filteredMsgs = msgs.filter(m => {
@@ -1148,7 +1151,24 @@ function mapHermesMessages(msgs: HermesMessage[], taskPlans: unknown[] = [], pre
   }
   const restored = mergeTaskPlanMessages(result, taskPlans)
   const restoredIds = new Set(restored.map(message => message.id))
-  return mergeTaskPlanMessages(restored, previous.filter(message => message.taskPlan && restoredIds.has(message.id)).map(message => message.taskPlan))
+  const merged = mergeTaskPlanMessages(restored, previous.filter(message => message.taskPlan && restoredIds.has(message.id)).map(message => message.taskPlan))
+  return options.preserveLocalOnly ? mergeLocalOnlyMessages(merged, previous) : merged
+}
+
+/**
+ * Re-attach client-injected rows (run errors) that the server transcript can
+ * never contain. Without this a re-fetch on session switch, tab focus or resume
+ * silently drops the error the user is trying to read.
+ */
+function mergeLocalOnlyMessages(mapped: Message[], previous: Message[]): Message[] {
+  const localOnly = previous.filter(message => message.localOnly)
+  if (!localOnly.length) return mapped
+  const key = (message: Message) => `${message.role}\u0000${String(message.content || '').trim()}`
+  const presentIds = new Set(mapped.map(message => message.id))
+  const presentKeys = new Set(mapped.map(key))
+  const missing = localOnly.filter(message => !presentIds.has(message.id) && !presentKeys.has(key(message)))
+  if (!missing.length) return mapped
+  return [...mapped, ...missing].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
 }
 
 function normalizeForDedup(s: string): string {
@@ -1377,6 +1397,78 @@ function removeItem(key: string) {
   } catch {
     // ignore
   }
+}
+
+// Run errors exist only in the client transcript: the server never stores them.
+// They used to vanish on the next re-fetch (session switch, tab focus, resume)
+// because the transcript was replaced wholesale. In-memory rows cover those
+// paths; a small localStorage mirror also covers a page reload.
+const LOCAL_ERROR_STORAGE_PREFIX = 'hermes_local_errors_v1_'
+const LOCAL_ERROR_STORAGE_LIMIT = 10
+const LOCAL_ERROR_STORAGE_TTL_MS = 24 * 60 * 60 * 1000
+
+interface StoredLocalError {
+  content: string
+  timestamp: number
+  role: 'system' | 'assistant'
+}
+
+function localErrorStorageKey(profile: string, sessionId: string): string {
+  return `${LOCAL_ERROR_STORAGE_PREFIX}${profile}_${sessionId}`
+}
+
+function readStoredLocalErrors(profile: string, sessionId: string): StoredLocalError[] {
+  if (!profile || !sessionId) return []
+  const raw = getItemBestEffort(localErrorStorageKey(profile, sessionId))
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((entry: unknown): entry is { content: string, timestamp?: unknown, role?: unknown } =>
+        !!entry && typeof entry === 'object' && typeof (entry as { content?: unknown }).content === 'string')
+      .map(entry => ({
+        content: entry.content,
+        timestamp: Number(entry.timestamp) || 0,
+        role: entry.role === 'system' ? 'system' as const : 'assistant' as const,
+      }))
+      .filter(entry => entry.content.length > 0 && entry.timestamp >= Date.now() - LOCAL_ERROR_STORAGE_TTL_MS)
+  } catch {
+    return []
+  }
+}
+
+function rememberLocalError(
+  profile: string,
+  sessionId: string,
+  record: StoredLocalError,
+  dropContent?: string,
+) {
+  const { content, timestamp, role } = record
+  if (!profile || !sessionId || !content) return
+  const records = readStoredLocalErrors(profile, sessionId)
+    .filter(entry => entry.content !== content && entry.content !== dropContent)
+  records.push({ content, timestamp, role })
+  setItemBestEffort(
+    localErrorStorageKey(profile, sessionId),
+    JSON.stringify(records.slice(-LOCAL_ERROR_STORAGE_LIMIT)),
+  )
+}
+
+function forgetLocalErrors(profile: string, sessionId: string) {
+  if (!profile || !sessionId) return
+  removeItem(localErrorStorageKey(profile, sessionId))
+}
+
+function storedLocalErrorMessages(profile: string, sessionId: string): Message[] {
+  return readStoredLocalErrors(profile, sessionId).map(record => ({
+    id: `local-error-${sessionId}-${record.timestamp}`,
+    role: record.role,
+    content: record.content,
+    timestamp: record.timestamp || Date.now(),
+    systemType: 'error' as const,
+    localOnly: true,
+  }))
 }
 
 // Strip the circular `file: File` reference from attachments before caching —
@@ -1903,7 +1995,7 @@ export const useChatStore = defineStore('chat', () => {
       const detail = await fetchSessionMessagesPage(sessionId, 0, LIVE_CHAT_MESSAGE_PAGE_SIZE)
       if (!detail?.session) return false
       const target = ensureSessionLoaded(detail.session as SessionSummary)
-      target.messages = mapHermesMessages(detail.messages || [])
+      target.messages = mapHermesMessages(detail.messages || [], [], carryOverLocalErrors(sessionId, target.messages), { preserveLocalOnly: true })
       target.loadedMessageCount = detail.messages.length
       target.messageTotal = detail.total
       target.messageCount = detail.total
@@ -2145,7 +2237,7 @@ export const useChatStore = defineStore('chat', () => {
       )
       const detail = await fetchSessionMessagesPage(sid, 0, limit, activeSession.value?.profile)
       if (!detail) return false
-      const mapped = mapHermesMessages(detail.messages || [], detail.taskPlans, target.messages)
+      const mapped = mapHermesMessages(detail.messages || [], detail.taskPlans, carryOverLocalErrors(sid, target.messages), { preserveLocalOnly: true })
       target.messages = mapped
       restorePersistedSubagentStreams(sid)
       setWorkspaceRunChanges(sid, detail.workspaceRunChanges || [])
@@ -2315,7 +2407,7 @@ export const useChatStore = defineStore('chat', () => {
           const t = sessions.value.find(s => s.id === sessionId)
           if (t) {
             restLoadedMessages = true
-            t.messages = mapHermesMessages(page.messages as any[])
+            t.messages = mapHermesMessages(page.messages as any[], [], carryOverLocalErrors(sessionId, t.messages), { preserveLocalOnly: true })
             restorePersistedSubagentStreams(sessionId)
             setWorkspaceRunChanges(sessionId, (page as any).workspaceRunChanges || [])
             t.loadedMessageCount = page.messages.length
@@ -2408,7 +2500,7 @@ export const useChatStore = defineStore('chat', () => {
           target.parentLastMessageRole = (data as any).parentLastMessageRole || target.parentLastMessageRole || null
           if (Array.isArray(data.messages)) {
             if (!restLoadedMessages) {
-              target.messages = mapHermesMessages(data.messages as any[], data.taskPlans, target.messages)
+              target.messages = mapHermesMessages(data.messages as any[], data.taskPlans, carryOverLocalErrors(sessionId, target.messages), { preserveLocalOnly: true })
               restorePersistedSubagentStreams(sessionId)
               setWorkspaceRunChanges(sessionId, data.workspaceRunChanges || [])
               target.loadedMessageCount = data.messageLoadedCount ?? data.messages.length
@@ -2638,6 +2730,7 @@ export const useChatStore = defineStore('chat', () => {
     const ok = await deleteSessionApi(sessionId, target?.profile)
     if (!ok) return false
     setBackgroundPending(sessionId, 0)
+    forgetLocalErrors(target?.profile || getProfileName(), sessionId)
     sessions.value = sessions.value.filter(s => s.id !== sessionId)
     clearMessageReference(sessionId)
     setAbortState(sessionId, null)
@@ -2657,6 +2750,7 @@ export const useChatStore = defineStore('chat', () => {
     const ok = await archiveSessionApi(sessionId)
     if (!ok) return false
     setBackgroundPending(sessionId, 0)
+    forgetLocalErrors(target?.profile || getProfileName(), sessionId)
     sessions.value = sessions.value.filter(s => s.id !== sessionId)
     clearMessageReference(sessionId)
     setAbortState(sessionId, null)
@@ -2945,7 +3039,7 @@ export const useChatStore = defineStore('chat', () => {
   function clearAgentEventMessages(sessionId: string) {
     const s = sessions.value.find(s => s.id === sessionId)
     if (!s) return
-    s.messages = s.messages.filter(m => m.commandAction !== 'agent.event')
+    s.messages = s.messages.filter(m => m.commandAction !== 'agent.event' || m.systemType === 'error')
   }
 
   function handleSubagentEvent(sessionId: string, evt: RunEvent) {
@@ -3158,9 +3252,33 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
+  // A single failure used to surface as two stacked bubbles (a warning-coloured
+  // system notice plus this error bubble), and both vanished on the next
+  // transcript re-fetch. Errors are now one shape (`role: 'assistant'` +
+  // `systemType: 'error'`), marked `localOnly` so re-mapping preserves them, and
+  // repeats at the tail collapse into the existing bubble.
+  const LOCAL_ERROR_COALESCE_WINDOW_MS = 30_000
+
+  function sessionProfileName(sessionId: string): string {
+    return sessions.value.find(session => session.id === sessionId)?.profile || getProfileName()
+  }
+
+  /**
+   * Local error rows live only in the client transcript. When a session is
+   * loaded without them (first render after a reload) the last few are restored
+   * from the localStorage mirror so the failure the user is reading survives.
+   */
+  function carryOverLocalErrors(sessionId: string, existing: Message[]): Message[] {
+    if (existing.some(message => message.localOnly)) return existing
+    const stored = storedLocalErrorMessages(sessionProfileName(sessionId), sessionId)
+    return stored.length ? [...existing, ...stored] : existing
+  }
+
   function addAgentErrorMessage(sessionId: string, error?: unknown) {
     const message = errorMessageText(error)
     const content = message ? `Error: ${message}` : 'Run failed'
+    const now = Date.now()
+    const profile = sessionProfileName(sessionId)
     const msgs = getSessionMsgs(sessionId)
     const last = msgs[msgs.length - 1]
     if (last?.isStreaming) {
@@ -3179,18 +3297,51 @@ export const useChatStore = defineStore('chat', () => {
           content,
           isStreaming: false,
           systemType: 'error',
+          localOnly: true,
         })
+        rememberLocalError(profile, sessionId, { content, timestamp: last.timestamp || now, role: 'assistant' })
         return
       }
     }
-    if (last?.role === 'assistant' && last.systemType === 'error' && last.content === content) return
+    if (last?.role === 'assistant' && last.systemType === 'error') {
+      if (last.content === content) return
+      // Same failure reported twice in a row (e.g. run.failed plus a transport
+      // level error): keep one bubble and let the newest wording win.
+      if (last.localOnly && now - (last.timestamp || 0) <= LOCAL_ERROR_COALESCE_WINDOW_MS) {
+        updateMessage(sessionId, last.id, { content, timestamp: now })
+        rememberLocalError(profile, sessionId, { content, timestamp: now, role: 'assistant' }, String(last.content || ''))
+        return
+      }
+    }
+    if (msgs.some(m => m.role === 'assistant' && m.systemType === 'error' && m.localOnly && m.content === content
+      && now - (m.timestamp || 0) <= LOCAL_ERROR_COALESCE_WINDOW_MS)) return
     addMessage(sessionId, {
       id: uid(),
       role: 'assistant',
       content,
-      timestamp: Date.now(),
+      timestamp: now,
       systemType: 'error',
+      localOnly: true,
     })
+    rememberLocalError(profile, sessionId, { content, timestamp: now, role: 'assistant' })
+  }
+
+  /**
+   * Failures that were previously rendered as a warning-coloured system notice
+   * now share the single error bubble (`systemType: 'error'`), while keeping the
+   * neutral system role so assistant-message accounting is unaffected.
+   */
+  function addSystemErrorMessage(sessionId: string, content: string) {
+    const now = Date.now()
+    addMessage(sessionId, {
+      id: uid(),
+      role: 'system',
+      content,
+      timestamp: now,
+      systemType: 'error',
+      localOnly: true,
+    })
+    rememberLocalError(sessionProfileName(sessionId), sessionId, { content, timestamp: now, role: 'system' })
   }
 
   function handleSessionCommandEvent(evt: RunEvent) {
@@ -3222,6 +3373,7 @@ export const useChatStore = defineStore('chat', () => {
 
     if (action === 'clear' && command === 'clear') {
       if (target) target.messages = []
+      forgetLocalErrors(target?.profile || getProfileName(), sid)
       queuedUserMessages.value.delete(sid)
       queueLengths.value.delete(sid)
       queueInsertionStates.value.delete(sid)
@@ -3327,8 +3479,14 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
     if ((evt as any).source === 'coding_agent' && (evt as any).kind === 'status') return
-    const text = String((evt as any).text || (evt as any).message || '').trim()
+    const text = String((evt as any).text || (evt as any).message || (evt as any).error || '').trim()
     if (!text) return
+    // Bridge resume failures are errors, not status chatter: render them with
+    // the one error bubble instead of the neutral system notice.
+    if ((evt as any).event === 'run.reattach_failed') {
+      addAgentErrorMessage(sid, text)
+      return
+    }
 
     const msgs = getSessionMsgs(sid)
     const last = msgs[msgs.length - 1]
@@ -4235,7 +4393,7 @@ export const useChatStore = defineStore('chat', () => {
           const previousActiveAssistantMessageId = activeAssistantMessageId
           const previousReasoningAssistantMessageId = reasoningAssistantMessageId
           const replayRunMarker = getReplayRunMarker(data.events) ?? activeRunMarker
-          target.messages = mapHermesMessages(data.messages as any[], data.taskPlans, target.messages)
+          target.messages = mapHermesMessages(data.messages as any[], data.taskPlans, carryOverLocalErrors(sid, target.messages), { preserveLocalOnly: true })
           restorePersistedSubagentStreams(sid)
           setWorkspaceRunChanges(sid, data.workspaceRunChanges || [])
           target.loadedMessageCount = data.messageLoadedCount ?? data.messages.length
@@ -4737,12 +4895,7 @@ export const useChatStore = defineStore('chat', () => {
                 finalOutputTrimmed === '' &&
                 !queueInsertionInterruption
               if (swallowedError) {
-                addMessage(sid, {
-                  id: uid(),
-                  role: 'system',
-                  content: 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.',
-                  timestamp: Date.now(),
-                })
+                addSystemErrorMessage(sid, 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.')
               } else {
                 playCompletionBellIfEnabled()
                 showCompletionNotificationIfEnabled(sid, completedAssistantMessageId)
@@ -4879,12 +5032,7 @@ export const useChatStore = defineStore('chat', () => {
       if (!shouldQueue && !runSubmitted) {
         serverWorking.value.delete(sid)
       }
-      addMessage(sid, {
-        id: uid(),
-        role: 'system',
-        content: `Error: ${err.message}`,
-        timestamp: Date.now(),
-      })
+      addSystemErrorMessage(sid, `Error: ${err?.message || String(err)}`)
     }
   }
 
@@ -5354,12 +5502,7 @@ export const useChatStore = defineStore('chat', () => {
             && finalOutputTrimmed === ''
             && !queueInsertionInterruption
           if (swallowedError) {
-            addMessage(sid, {
-              id: uid(),
-              role: 'system',
-              content: 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.',
-              timestamp: Date.now(),
-            })
+            addSystemErrorMessage(sid, 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.')
           } else {
             playCompletionBellIfEnabled()
             showCompletionNotificationIfEnabled(sid, completedAssistantMessageId)
@@ -5648,7 +5791,7 @@ export const useChatStore = defineStore('chat', () => {
                 activeSession.value.workspace = data.workspace.trim() || null
                 activeSession.value.isLocalOnly = false
               }
-              activeSession.value.messages = mapHermesMessages(data.messages as any[], data.taskPlans, activeSession.value.messages)
+              activeSession.value.messages = mapHermesMessages(data.messages as any[], data.taskPlans, carryOverLocalErrors(sid, activeSession.value.messages), { preserveLocalOnly: true })
               restorePersistedSubagentStreams(sid)
               setWorkspaceRunChanges(sid, data.workspaceRunChanges || [])
               activeSession.value.loadedMessageCount = data.messageLoadedCount ?? data.messages.length

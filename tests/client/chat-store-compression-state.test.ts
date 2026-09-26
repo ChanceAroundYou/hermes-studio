@@ -83,6 +83,7 @@ describe('chat store compression state', () => {
   beforeEach(() => {
     handlers = undefined
     vi.resetAllMocks()
+    localStorage.clear()
     setActivePinia(createPinia())
     chatApi.startRunViaSocket.mockReturnValue({ abort: vi.fn() })
     chatApi.resumeSession.mockImplementation((sessionId: string, onResumed: (data: any) => void) => {
@@ -756,11 +757,15 @@ describe('chat store compression state', () => {
     await store.switchSession('session-reattach')
     await nextTick()
 
+    // Bridge resume failures are errors: they now render through the single
+    // error bubble instead of the neutral agent-event notice, so one failure
+    // can no longer show up twice in two different styles.
     expect(store.activeSession?.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        role: 'system',
-        commandAction: 'agent.event',
-        content: 'Unable to confirm Agent Bridge status while resuming: connect ECONNREFUSED configured endpoint',
+        role: 'assistant',
+        systemType: 'error',
+        localOnly: true,
+        content: 'Error: Unable to confirm Agent Bridge status while resuming: connect ECONNREFUSED configured endpoint',
       }),
     ]))
   })
@@ -784,7 +789,7 @@ describe('chat store compression state', () => {
     expect(assistant?.content).toBe('final answer')
     expect(assistant?.isStreaming).toBe(false)
     expect(store.activeSession?.messages.some(
-      (message: Message) => message.role === 'system' && message.content.includes('Agent returned no output'),
+      (message: Message) => message.systemType === 'error' && message.content.includes('Agent returned no output'),
     )).toBe(false)
   })
 
@@ -809,7 +814,7 @@ describe('chat store compression state', () => {
     expect(assistantMessages).toHaveLength(1)
     expect(assistantMessages[0]?.content).toBe('final answer')
     expect(store.activeSession?.messages.some(
-      (message: Message) => message.role === 'system' && message.content.includes('Agent returned no output'),
+      (message: Message) => message.systemType === 'error' && message.content.includes('Agent returned no output'),
     )).toBe(false)
     expect(dispatchSpy).toHaveBeenCalledTimes(1)
     const autoPlayEvent = dispatchSpy.mock.calls[0][0] as CustomEvent<{ messageId: string; content: string }>
@@ -838,7 +843,7 @@ describe('chat store compression state', () => {
 
     expect(store.activeSession?.messages.find((message: Message) => message.id === 'old-a1')?.content).toBe('previous answer')
     expect(store.activeSession?.messages.some(
-      (message: Message) => message.role === 'system' && message.content.includes('Agent returned no output'),
+      (message: Message) => message.systemType === 'error' && message.content.includes('Agent returned no output'),
     )).toBe(true)
     expect(dispatchSpy).not.toHaveBeenCalled()
   })
@@ -860,7 +865,7 @@ describe('chat store compression state', () => {
     await nextTick()
 
     expect(store.activeSession?.messages.some(
-      (message: Message) => message.role === 'system' && message.content.includes('Agent returned no output'),
+      (message: Message) => message.systemType === 'error' && message.content.includes('Agent returned no output'),
     )).toBe(false)
   })
 
@@ -886,7 +891,7 @@ describe('chat store compression state', () => {
     await nextTick()
 
     expect(store.activeSession?.messages.some(
-      (message: Message) => message.role === 'system' && message.content.includes('Agent returned no output'),
+      (message: Message) => message.systemType === 'error' && message.content.includes('Agent returned no output'),
     )).toBe(false)
   })
 
@@ -973,7 +978,7 @@ describe('chat store compression state', () => {
     expect(assistantMessages).toHaveLength(1)
     expect(assistantMessages[0]?.content).toBe('final answer')
     expect(store.activeSession?.messages.some(
-      (message: Message) => message.role === 'system' && message.content.includes('Agent returned no output'),
+      (message: Message) => message.systemType === 'error' && message.content.includes('Agent returned no output'),
     )).toBe(false)
     expect(dispatchSpy).toHaveBeenCalledTimes(1)
     const autoPlayEvent = dispatchSpy.mock.calls[0][0] as CustomEvent<{ messageId: string; content: string }>
@@ -1099,7 +1104,7 @@ describe('chat store compression state', () => {
       isStreaming: false,
     }))
     expect(store.activeSession?.messages.some(
-      (message: Message) => message.role === 'system' && message.content.includes('Agent returned no output'),
+      (message: Message) => message.systemType === 'error' && message.content.includes('Agent returned no output'),
     )).toBe(false)
     expect(dispatchSpy).not.toHaveBeenCalled()
     vi.useRealTimers()
