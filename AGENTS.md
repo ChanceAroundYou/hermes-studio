@@ -12,6 +12,7 @@ and keep this file small enough to fit into every task context.
 - `docs/harness/worktree-runbook.md` - isolated local dev and test setup.
 - `docs/harness/pr-review.md` - self-review checklist before pushing.
 - `docs/harness/server-module-boundaries.md` - target backend modules, ownership, and dependency rules.
+- `docs/harness/client-dedup-map.md` - which client helpers are the single implementation, and which same-named ones must not be merged.
 
 ## Common Commands
 

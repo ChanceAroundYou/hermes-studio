@@ -70,6 +70,33 @@ npm run test:e2e
 npm run build
 ```
 
+### Local browser setup (Linux hosts without managed browsers)
+
+Some hosts have no Playwright-managed browsers, and `npx playwright install`
+refuses to install them (for example `Playwright does not support chromium on
+ubuntu26.04-x64`). Those hosts run the suite against system Chrome for Testing
+wrappers, so the managed cache has to contain links to them:
+
+```bash
+C=$HOME/.cache/ms-playwright
+mkdir -p "$C/chromium-1223/chrome-linux" \
+         "$C/chromium_headless_shell-1223/chrome-headless-shell-linux64" \
+         "$C/ffmpeg-1011"
+ln -sfn "$HOME/.local/bin/chrome"               "$C/chromium-1223/chrome-linux/chrome"
+ln -sfn "$HOME/.local/bin/chrome-headless-shell" "$C/chromium_headless_shell-1223/chrome-headless-shell-linux64/chrome-headless-shell"
+ln -sfn "$(command -v ffmpeg)"                  "$C/ffmpeg-1011/ffmpeg-linux"
+touch "$C/chromium-1223/INSTALLATION_COMPLETE" \
+      "$C/chromium_headless_shell-1223/INSTALLATION_COMPLETE" \
+      "$C/ffmpeg-1011/INSTALLATION_COMPLETE"
+```
+
+`playwright.config.ts` records `video: 'retain-on-failure'`, which needs the
+ffmpeg entry above; without it every test fails at `newPage()` before it starts.
+
+Do **not** run `npx playwright install` on such a host: it empties the managed
+cache first and then fails, so browser tests stay down until the links above are
+recreated.
+
 ## npm Publishing
 
 The source package is `ekko-studio`. `npm run build` followed by
