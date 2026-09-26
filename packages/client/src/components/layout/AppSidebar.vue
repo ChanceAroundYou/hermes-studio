@@ -16,6 +16,7 @@ import {
   isStoredSuperAdmin,
 } from "@/api/client";
 import { clearThemeBackgroundCache } from "@/api/studio/theme";
+import { MOBILE_LAYOUT_QUERY, matchesMediaQuery } from '@/utils/viewport'
 
 const { t } = useI18n();
 const message = useMessage();
@@ -48,10 +49,7 @@ function handleSidebarClick(event: MouseEvent) {
     return;
   }
 
-  if (
-    typeof window !== "undefined" &&
-    window.matchMedia("(max-width: 768px)").matches
-  ) {
+  if (matchesMediaQuery(MOBILE_LAYOUT_QUERY)) {
     appStore.closeSidebar();
   }
 }

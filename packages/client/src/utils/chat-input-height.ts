@@ -1,4 +1,7 @@
-export const CHAT_INPUT_MOBILE_BREAKPOINT = 768
+import { MOBILE_LAYOUT_BREAKPOINT } from './viewport'
+
+/** The composer shares the client-wide phone breakpoint. */
+export const CHAT_INPUT_MOBILE_BREAKPOINT = MOBILE_LAYOUT_BREAKPOINT
 export const MIN_CHAT_INPUT_HEIGHT = 48
 export const MAX_CHAT_INPUT_HEIGHT = 400
 

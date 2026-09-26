@@ -23,6 +23,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import { formatDateTime } from '@/utils/format'
+import { NARROW_DRAWER_QUERY, matchesMediaQuery } from '@/utils/viewport'
 
 type SkillDescriptionLoadState = 'idle' | 'loading' | 'loaded' | 'failed'
 
@@ -592,7 +593,7 @@ function togglePlayback() {
 }
 
 function updateViewportMetrics() {
-  drawerWidth.value = window.innerWidth <= 640 ? window.innerWidth : 380
+  drawerWidth.value = matchesMediaQuery(NARROW_DRAWER_QUERY) ? window.innerWidth : 380
   const rect = graphWrapRef.value?.getBoundingClientRect()
   if (rect) graphSize.value = { width: rect.width, height: rect.height }
 }

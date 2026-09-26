@@ -16,6 +16,7 @@ import PageSidebarNav from '@/components/layout/PageSidebarNav.vue'
 import PageSidebarFooter from '@/components/layout/PageSidebarFooter.vue'
 import { setSessionPinned, batchDeleteSessions, deleteSession, fetchHermesSessionGroups, fetchHermesSessionPage, fetchHermesSession, fetchSessionMessagesPage, importHermesSession, unarchiveSession, type HermesMessage, type SessionSummary } from '@/api/studio/sessions'
 import { useChatStore } from '@/stores/hermes/chat'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 
 const appStore = useAppStore()
 const chatStore = useChatStore()
@@ -128,16 +129,13 @@ async function loadHermesSessions() {
 }
 
 // Initialize synchronously from the media query so first paint is correct.
-const showSessions = ref(
-  typeof window === 'undefined' || !window.matchMedia('(max-width: 768px)').matches,
-)
+const isMobile = useMobileLayout()
+const showSessions = ref(!isMobile.value)
 watch(
   showSessions,
   expanded => appStore.setPageSidebarExpanded(expanded),
   { immediate: true },
 )
-let mobileQuery: MediaQueryList | null = null
-const isMobile = ref(false)
 
 function findHistorySession(sessionId: string): SessionSummary | undefined {
   return hermesSessions.value.find(session => session.id === sessionId)
@@ -316,7 +314,7 @@ async function loadHistorySession(sessionId: string, profile?: string | null) {
   historySessionId.value = sessionData.id
   historySession.value = sessionData
 
-  if (mobileQuery?.matches) showSessions.value = false
+  if (isMobile.value) showSessions.value = false
 }
 
 async function loadOlderHistoryMessages(sessionId: string): Promise<boolean> {
@@ -411,12 +409,11 @@ async function syncRouteSession() {
   }
 }
 
-function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
-  isMobile.value = e.matches
-  if (e.matches && showSessions.value) {
+watch(isMobile, (mobile) => {
+  if (mobile && showSessions.value) {
     showSessions.value = false
   }
-}
+}, { immediate: true })
 
 function openPageSidebar() {
   showSessions.value = true
@@ -428,14 +425,10 @@ onMounted(async () => {
   await loadHermesSessions()
   await syncRouteSession()
 
-  mobileQuery = window.matchMedia('(max-width: 768px)')
-  handleMobileChange(mobileQuery)
-  mobileQuery.addEventListener('change', handleMobileChange)
   window.addEventListener('hermes:open-page-sidebar', openPageSidebar)
 })
 
 onUnmounted(() => {
-  mobileQuery?.removeEventListener('change', handleMobileChange)
   window.removeEventListener('hermes:open-page-sidebar', openPageSidebar)
 })
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NInput, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import SkillDetail from '@/components/hermes/skills/SkillDetail.vue'
@@ -9,6 +9,7 @@ import SkillList from '@/components/hermes/skills/SkillList.vue'
 import SkillSourceLegend from '@/components/hermes/skills/SkillSourceLegend.vue'
 import type { SkillCategory, SkillFileEntry, SkillSource } from '@/api/hermes/skills'
 import { errorMessage } from '@/utils/format'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 import {
   deleteEkkoSkill,
   fetchEkkoExternalDirectories,
@@ -36,7 +37,6 @@ const showSidebar = ref(true)
 const sourceFilter = ref<SourceFilter | null>(null)
 const showImportModal = ref(false)
 const showExternalDirsModal = ref(false)
-let mobileQuery: MediaQueryList | null = null
 
 const categories = computed<SkillCategory[]>(() => {
   const grouped = new Map<string, SkillCategory['skills']>()
@@ -68,9 +68,11 @@ const selectedSkillData = computed(() => skills.value.find(skill =>
 const selectedReadonly = computed(() => selectedSkillData.value?.source !== 'local')
 
 
-function handleMobileChange(event: MediaQueryListEvent | MediaQueryList) {
-  showSidebar.value = !event.matches
-}
+const isMobile = useMobileLayout()
+
+watch(isMobile, (mobile) => {
+  showSidebar.value = !mobile
+}, { immediate: true })
 
 function ensureSelectedSkill() {
   if (selectedSkillData.value) return
@@ -94,7 +96,7 @@ async function loadSkills() {
 function handleSelect(category: string, skill: string) {
   selectedCategory.value = category
   selectedSkill.value = skill
-  if (window.innerWidth <= 768) showSidebar.value = false
+  if (isMobile.value) showSidebar.value = false
 }
 
 async function loadContent(_category: string, skill: string, filePath?: string): Promise<string> {
@@ -138,13 +140,9 @@ async function handleExternalDirsSaved() {
 }
 
 onMounted(() => {
-  mobileQuery = window.matchMedia('(max-width: 768px)')
-  handleMobileChange(mobileQuery)
-  mobileQuery.addEventListener('change', handleMobileChange)
   void loadSkills()
 })
 
-onUnmounted(() => mobileQuery?.removeEventListener('change', handleMobileChange))
 </script>
 
 <template>

@@ -12,6 +12,7 @@ import FileRenameModal from '@/components/hermes/files/FileRenameModal.vue'
 import type { FileEntry } from '@/api/studio/files'
 import { fetchSessionWorkspaceAttachmentBlob } from '@/api/studio/sessions'
 import { fetchGroupWorkspaceAttachmentBlob } from '@/api/studio/group-chat'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 
 const FileEditor = defineAsyncComponent(async () => (await import('@/components/hermes/files/FileEditor.vue')).default)
 const FilePreview = defineAsyncComponent(async () => (await import('@/components/hermes/files/FilePreview.vue')).default)
@@ -42,8 +43,7 @@ const filesPanelRef = ref<HTMLElement | null>(null)
 const sidebarWidth = ref(260)
 const treeCollapsed = ref(false)
 const selectedDiffEntry = ref<FileEntry | null>(null)
-const mobileMediaQuery = window.matchMedia(`(max-width: 768px)`)
-const isMobileLayout = ref(mobileMediaQuery.matches)
+const isMobileLayout = useMobileLayout()
 const mobileFileOpen = ref(false)
 let stopSidebarResize: (() => void) | null = null
 const hasOpenFile = computed(() => Boolean(
@@ -86,13 +86,11 @@ function toggleTreeCollapsed(): void {
   treeCollapsed.value = !treeCollapsed.value
 }
 
-function handleMobileLayoutChange(event: MediaQueryListEvent): void {
-  isMobileLayout.value = event.matches
-  if (event.matches) {
-    treeCollapsed.value = false
-    mobileFileOpen.value = Boolean(selectedDiffEntry.value || filesStore.editingFile || filesStore.previewFile)
-  }
-}
+watch(isMobileLayout, (mobile) => {
+  if (!mobile) return
+  treeCollapsed.value = false
+  mobileFileOpen.value = Boolean(selectedDiffEntry.value || filesStore.editingFile || filesStore.previewFile)
+})
 
 function handleContextMenu(e: MouseEvent, entry: FileEntry) {
   contextMenuRef.value?.show(e, entry)
@@ -215,7 +213,6 @@ watch(() => filesStore.previewFile, previewFile => {
 })
 
 onMounted(() => {
-  mobileMediaQuery.addEventListener('change', handleMobileLayoutChange)
   if ((props.workspaceSessionId || props.workspaceRoomId) && props.workspace) {
     void filesStore.fetchEntries('', { workspaceSessionId: props.workspaceSessionId, workspaceRoomId: props.workspaceRoomId })
   } else if (filesStore.currentWorkspaceSessionId || filesStore.currentWorkspaceRoomId) {
@@ -227,7 +224,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopSidebarResize?.()
-  mobileMediaQuery.removeEventListener('change', handleMobileLayoutChange)
 })
 </script>
 

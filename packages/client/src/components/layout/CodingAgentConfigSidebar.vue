@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import PluginIcon from '@/components/common/PluginIcon.vue'
 import RouteLinkItem from '@/components/common/RouteLinkItem.vue'
 import { useAppStore } from '@/stores/hermes/app'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 
 const { t } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
-const isMobile = ref(typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches)
+const isMobile = useMobileLayout()
 const expanded = ref(!isMobile.value)
-let mobileQuery: MediaQueryList | null = null
 
 const agentId = computed(() => String(route.params.agentId || ''))
 const activeSection = computed(() => String(route.params.section || 'settings'))
@@ -28,10 +28,9 @@ function setExpanded(value: boolean) {
   appStore.setPageSidebarExpanded(value)
 }
 
-function handleMobileChange(event: MediaQueryList | MediaQueryListEvent) {
-  isMobile.value = event.matches
-  setExpanded(!event.matches)
-}
+watch(isMobile, (mobile) => {
+  setExpanded(!mobile)
+}, { immediate: true })
 
 function handleNavClick(event: MouseEvent) {
   if (!isMobile.value) return
@@ -44,14 +43,10 @@ function openSidebar() {
 }
 
 onMounted(() => {
-  mobileQuery = window.matchMedia('(max-width: 768px)')
-  handleMobileChange(mobileQuery)
-  mobileQuery.addEventListener('change', handleMobileChange)
   window.addEventListener('hermes:open-page-sidebar', openSidebar)
 })
 
 onUnmounted(() => {
-  mobileQuery?.removeEventListener('change', handleMobileChange)
   window.removeEventListener('hermes:open-page-sidebar', openSidebar)
 })
 </script>

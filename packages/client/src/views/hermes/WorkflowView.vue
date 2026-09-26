@@ -120,6 +120,7 @@ import type {
   WorkflowSelectOption,
 } from '@/components/hermes/workflow/types'
 import type { AvailableModelGroup } from '@/api/hermes/system'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 import {
   fetchAgentStatusSnapshot,
   isAgentStatusAvailable,
@@ -314,15 +315,13 @@ const workflowWorkspace = ref<string | null>(null)
 const workspaceModalVisible = ref(false)
 const workspacePickerTarget = ref<'active' | 'create'>('active')
 const activeWorkflowId = ref('')
-const showWorkflowSidebar = ref(
-  typeof window === 'undefined' || !window.matchMedia('(max-width: 768px)').matches,
-)
+const isMobile = useMobileLayout()
+const showWorkflowSidebar = ref(!isMobile.value)
 watch(
   showWorkflowSidebar,
   expanded => appStore.setPageSidebarExpanded(expanded),
   { immediate: true },
 )
-const isMobile = ref(false)
 const workflowsLoading = ref(false)
 const workflowProfileFilter = ref<string | null>(null)
 const createWorkflowDrawerVisible = ref(false)
@@ -399,7 +398,6 @@ const skillOptionRequests = new Map<string, Promise<void>>()
 const runtimeStatusByWorkflowId = ref<Record<string, WorkflowRuntimeStatus>>({})
 let removeWorkflowStatusListener: (() => void) | null = null
 let removeWorkflowStatusErrorListener: (() => void) | null = null
-let mobileQuery: MediaQueryList | null = null
 let applyingWorkflow = false
 let workflowRunsLoadSeq = 0
 let workflowRunsLoadingSeq = 0
@@ -920,9 +918,6 @@ watch([workflowName, workflowWorkspace, nodes, edges, nextNodeIndex], () => {
 onMounted(() => {
   if (typeof window === 'undefined') return
   workflowBudgetClock = window.setInterval(() => { workflowBudgetNow.value = Date.now() }, 1000)
-  mobileQuery = window.matchMedia('(max-width: 768px)')
-  handleMobileChange(mobileQuery)
-  mobileQuery.addEventListener('change', handleMobileChange)
   window.addEventListener('hermes:open-page-sidebar', openPageSidebar)
   window.addEventListener('resize', handleWorkflowChatPanelViewportResize)
   window.addEventListener('keydown', handleWorkflowUndoShortcut)
@@ -935,7 +930,6 @@ onUnmounted(() => {
   publishVisibleWorkflowApproval(visibleWorkflowApprovalKey.value, false)
   if (workflowBudgetClock !== null) window.clearInterval(workflowBudgetClock)
   workflowBudgetClock = null
-  mobileQuery?.removeEventListener('change', handleMobileChange)
   window.removeEventListener('hermes:open-page-sidebar', openPageSidebar)
   window.removeEventListener('resize', handleWorkflowChatPanelViewportResize)
   window.removeEventListener('keydown', handleWorkflowUndoShortcut)
@@ -947,11 +941,10 @@ onUnmounted(() => {
   removeWorkflowStatusErrorListener = null
 })
 
-function handleMobileChange(event: MediaQueryList | MediaQueryListEvent) {
-  isMobile.value = event.matches
-  showWorkflowSidebar.value = !event.matches
-  if (event.matches) showWorkflowRunsPanel.value = false
-}
+watch(isMobile, (mobile) => {
+  showWorkflowSidebar.value = !mobile
+  if (mobile) showWorkflowRunsPanel.value = false
+}, { immediate: true })
 
 function openPageSidebar() {
   showWorkflowSidebar.value = true

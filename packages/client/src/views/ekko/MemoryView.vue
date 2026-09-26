@@ -23,6 +23,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import { errorMessage, formatDateTime } from '@/utils/format'
+import { NARROW_DRAWER_QUERY, matchesMediaQuery } from '@/utils/viewport'
 
 type MemoryViewMode = 'graph' | 'list'
 type MemoryStatusFilter = 'all' | EkkoMemoryStatus
@@ -272,7 +273,7 @@ function miniMapNodeColor(node: { data?: MemoryFlowNodeData }): string {
   return node.data?.color || '#7f8c9a'
 }
 function updateViewportMetrics() {
-  drawerWidth.value = window.innerWidth <= 640 ? window.innerWidth : 420
+  drawerWidth.value = matchesMediaQuery(NARROW_DRAWER_QUERY) ? window.innerWidth : 420
   const rect = graphWrapRef.value?.getBoundingClientRect()
   if (rect?.height) graphHeight.value = rect.height
 }

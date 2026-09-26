@@ -64,6 +64,7 @@ import { canScopedCodingAgentUseProvider, usesServerManagedProviderAuth, isKeyle
 import { OPEN_SUBAGENT_STREAM_EVENT, type OpenSubagentStreamDetail } from "@/utils/hermes/subagent-stream";
 import { desktopBridge, hasDesktopBrowserBridge } from "@/utils/desktop-bridge";
 import { OPEN_DESKTOP_BROWSER_PANEL_EVENT } from "@/utils/desktop-browser";
+import { useMobileLayout } from '@/composables/useMediaQuery'
 import {
   createBrowserAnnotationAttachment,
   type BrowserAnnotationSubmission,
@@ -160,19 +161,10 @@ const isBatchDeleting = ref(false);
 // only flips it to `false` AFTER the first render, causing a visible flash
 // where the session list covers the chat content ("auto-fixes after a
 // moment" — that was the race).
-const showSessions = ref(
-  !props.standalone && (
-    typeof window === "undefined" ||
-    !window.matchMedia("(max-width: 768px)").matches
-  )
-);
+const isMobile = useMobileLayout();
+const showSessions = ref(!props.standalone && !isMobile.value);
 const pageSidebarExpanded = computed(
   () => !props.standalone && currentMode.value === "chat" && showSessions.value,
-);
-let mobileQuery: MediaQueryList | null = null;
-const isMobile = ref(
-  typeof window !== "undefined" &&
-  window.matchMedia("(max-width: 768px)").matches,
 );
 const toolPanelStyle = computed(() => ({
   width: isMobile.value ? "100%" : `min(${toolPanelWidth.value}px, 100%)`,
@@ -373,7 +365,7 @@ async function handleSessionClick(
   if (chatStore.activeSessionId !== sessionId) {
     await chatStore.switchSession(sessionId);
   }
-  if (mobileQuery?.matches) showSessions.value = false;
+  if (isMobile.value) showSessions.value = false;
 }
 
 async function handleRecentSessionClick(sessionId: string) {
@@ -382,12 +374,11 @@ async function handleRecentSessionClick(sessionId: string) {
   await handleSessionClick(sessionId, { preserveCategoryCollapse: true });
 }
 
-function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
-  isMobile.value = e.matches;
-  if (e.matches && showSessions.value) {
+watch(isMobile, (mobile) => {
+  if (mobile && showSessions.value) {
     showSessions.value = false;
   }
-}
+}, { immediate: true });
 
 function openPageSidebar() {
   showSessions.value = true;
@@ -503,9 +494,6 @@ function handleOpenDesktopBrowserPanelRequest() {
 }
 
 onMounted(() => {
-  mobileQuery = window.matchMedia("(max-width: 768px)");
-  handleMobileChange(mobileQuery);
-  mobileQuery.addEventListener("change", handleMobileChange);
   window.addEventListener("hermes:open-page-sidebar", openPageSidebar);
   window.addEventListener("hermes:preview-workspace-file", handleWorkspaceFilePreviewRequest);
   window.addEventListener(OPEN_DESKTOP_BROWSER_PANEL_EVENT, handleOpenDesktopBrowserPanelRequest);
@@ -557,7 +545,6 @@ watch(
 );
 
 onUnmounted(() => {
-  mobileQuery?.removeEventListener("change", handleMobileChange);
   window.removeEventListener("hermes:open-page-sidebar", openPageSidebar);
   window.removeEventListener("hermes:preview-workspace-file", handleWorkspaceFilePreviewRequest);
   window.removeEventListener(OPEN_DESKTOP_BROWSER_PANEL_EVENT, handleOpenDesktopBrowserPanelRequest);
@@ -1408,7 +1395,7 @@ async function confirmNewChat() {
     params: { sessionId: session.id },
   });
   showNewChatModal.value = false;
-  if (mobileQuery?.matches) showSessions.value = false;
+  if (isMobile.value) showSessions.value = false;
 }
 
 function sessionProfile(sessionId: string): string | null {

@@ -107,7 +107,8 @@ const profilesStore = useProfilesStore()
 const filesStore = useFilesStore()
 const toolPanelStore = useToolPanelStore()
 
-const showSidebar = ref(!props.standalone && window.innerWidth > 768)
+const isMobile = useMobileLayout()
+const showSidebar = ref(!props.standalone && !isMobile.value)
 watch(
     showSidebar,
     expanded => appStore.setPageSidebarExpanded(expanded),
@@ -221,7 +222,7 @@ const showWorkspacePanel = ref(false)
 const toolPanelTransitionReady = ref(false)
 const activeWorkspacePanel = ref<'files' | 'terminal' | 'browser'>('files')
 const desktopBrowserAvailable = hasDesktopBrowserBridge()
-const workspacePanelMobile = ref(window.innerWidth <= 768)
+const workspacePanelMobile = ref(isMobile.value)
 const GROUP_CHAT_REFACTOR_NOTICE_STORAGE_KEY = 'hermes.groupChat.refactorNotice.v1.acknowledged'
 const WORKSPACE_PANEL_MIN_WIDTH = 360
 const WORKSPACE_PANEL_DEFAULT_WIDTH = 560
@@ -754,7 +755,7 @@ function clampWorkspacePanelWidth(width: number): number {
 }
 
 function handleWorkspacePanelResize(): void {
-    workspacePanelMobile.value = window.innerWidth <= 768
+    workspacePanelMobile.value = isMobile.value
     if (!workspacePanelMobile.value) workspacePanelWidth.value = clampWorkspacePanelWidth(workspacePanelWidth.value)
 }
 
@@ -981,7 +982,7 @@ function handleSelectRemoteRoom(room: RemoteGroupChatRoom) {
     if (!room.inviteCode) return
     const url = `${room.cloudOrigin}/#/share/group-chat/${encodeURIComponent(room.inviteCode)}`
     window.open(url, '_blank', 'noopener,noreferrer')
-    if (window.innerWidth <= 768) showSidebar.value = false
+    if (isMobile.value) showSidebar.value = false
 }
 
 function hasDraggedFiles(event: DragEvent) {
@@ -1283,7 +1284,7 @@ async function handleClearRoomContext() {
 async function handleSelectRoom(roomId: string) {
     try {
         await router.push({ name: 'hermes.groupChatRoom', params: { roomId } })
-        if (window.innerWidth <= 768) showSidebar.value = false
+        if (isMobile.value) showSidebar.value = false
     } catch {
         message.error(t('groupChat.joinFailed'))
     }
@@ -3434,6 +3435,7 @@ async function handleClarify(response?: string) {
 import { defineComponent } from 'vue'
 import CreateRoomForm from './CreateRoomForm.vue'
 import { formatCompactCount } from '@/utils/format'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 
 export default defineComponent({ components: { CreateRoomForm } })
 </script>

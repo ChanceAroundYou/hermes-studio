@@ -8,6 +8,8 @@ import { getApiKey, getBaseUrlValue, wsOrigin } from "@/api/client";
 import { NButton, NPopconfirm, NTooltip, NSelect, useMessage } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import type { ITheme } from "@xterm/xterm";
+import { watch } from 'vue'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 
 const { t } = useI18n();
 const message = useMessage();
@@ -244,7 +246,6 @@ const termMap = new Map<
 let activeTerm: Terminal | null = null;
 let activeFitAddon: FitAddon | null = null;
 let resizeObserver: ResizeObserver | null = null;
-let mobileQuery: MediaQueryList | null = null;
 let touchScrollLastY: number | null = null;
 let touchScrollRemainder = 0;
 const TOUCH_SCROLL_LINE_PX = 18;
@@ -413,7 +414,7 @@ function switchSession(id: string) {
   activeFitAddon = entry.fitAddon;
   mountActiveTerminal();
   send({ type: "switch", sessionId: id });
-  if (mobileQuery?.matches) showSessions.value = false;
+  if (isMobile.value) showSessions.value = false;
 }
 
 function closeSession(id: string) {
@@ -547,21 +548,19 @@ function formatClockTime(ts: number) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
-  if (e.matches && showSessions.value) showSessions.value = false;
-}
+const isMobile = useMobileLayout();
+
+watch(isMobile, (mobile) => {
+  if (mobile && showSessions.value) showSessions.value = false;
+}, { immediate: true });
 
 // ─── Lifecycle ──────────────────────────────────────────────────
 
 onMounted(() => {
-  mobileQuery = window.matchMedia("(max-width: 768px)");
-  handleMobileChange(mobileQuery);
-  mobileQuery.addEventListener("change", handleMobileChange);
   connect();
 });
 
 onUnmounted(() => {
-  mobileQuery?.removeEventListener("change", handleMobileChange);
   unmountActiveTerminal();
   // Dispose all terminal instances
   for (const entry of termMap.values()) {

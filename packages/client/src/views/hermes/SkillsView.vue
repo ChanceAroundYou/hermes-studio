@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { NBadge, NButton, NDrawer, NDrawerContent, NInput } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import SkillList from '@/components/hermes/skills/SkillList.vue'
@@ -11,6 +11,7 @@ import PendingWriteApprovals from '@/components/hermes/skills/PendingWriteApprov
 import { deleteSkillApi, importSkill, fetchSkills, type SkillCategory, type SkillSource, type SkillInfo, type SkillTarget } from '@/api/hermes/skills'
 import { fetchPendingWrites } from '@/api/hermes/write-gate'
 import { useProfilesStore } from '@/stores/hermes/profiles'
+import { useMobileLayout } from '@/composables/useMediaQuery'
 
 type SourceFilter = SkillSource | 'modified'
 
@@ -38,7 +39,6 @@ const showExternalDirsModal = ref(false)
 const showWriteApprovalDrawer = ref(false)
 const pendingWriteCount = ref(0)
 const writeApprovalSupported = ref(true)
-let mobileQuery: MediaQueryList | null = null
 
 const selectedSkillData = computed(() => {
   if (!selectedCategory.value || !selectedSkill.value) return null
@@ -57,20 +57,15 @@ const selectedSkillReadonly = computed(() => {
   return (selectedSkillData.value.source || 'local') !== 'local'
 })
 
-function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
-  showSidebar.value = !e.matches
-}
+const isMobile = useMobileLayout()
+
+watch(isMobile, (mobile) => {
+  showSidebar.value = !mobile
+}, { immediate: true })
 
 onMounted(() => {
-  mobileQuery = window.matchMedia('(max-width: 768px)')
-  handleMobileChange(mobileQuery)
-  mobileQuery.addEventListener('change', handleMobileChange)
   loadSkills()
   loadPendingWriteCount()
-})
-
-onUnmounted(() => {
-  mobileQuery?.removeEventListener('change', handleMobileChange)
 })
 
 watch(() => props.target, () => {
@@ -123,7 +118,7 @@ function handleSelect(category: string, skill: string) {
   }
   selectedCategory.value = category
   selectedSkill.value = skill
-  if (window.innerWidth <= 768) {
+  if (isMobile.value) {
     showSidebar.value = false
   }
 }
