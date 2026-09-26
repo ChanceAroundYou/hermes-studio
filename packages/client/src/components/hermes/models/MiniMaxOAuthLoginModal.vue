@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { onUnmounted, ref } from 'vue'
-import { NButton, NModal, NRadioButton, NRadioGroup, NSpin, useMessage } from 'naive-ui'
+import { ref } from 'vue'
+import { NButton, NRadioButton, NRadioGroup, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import OAuthLoginShell from './OAuthLoginShell.vue'
+import { useOAuthLoginFlow } from '@/composables/useOAuthLoginFlow'
 import { pollMiniMaxLogin, startMiniMaxLogin } from '@/api/hermes/minimax-auth'
 import { copyToClipboard } from '@/utils/clipboard'
 
@@ -9,18 +11,30 @@ const { t } = useI18n()
 const emit = defineEmits<{ close: []; success: [] }>()
 const message = useMessage()
 
-const showModal = ref(true)
-const status = ref<'idle' | 'loading' | 'waiting' | 'approved' | 'expired' | 'error'>('idle')
 const region = ref<'global' | 'cn'>('global')
-const sessionId = ref('')
 const userCode = ref('')
 const verificationUrl = ref('')
-const errorMessage = ref('')
-let pollTimer: ReturnType<typeof setTimeout> | null = null
+
+const {
+  show,
+  status,
+  sessionId,
+  errorMessage,
+  begin,
+  fail,
+  reset,
+  close,
+  startPolling,
+} = useOAuthLoginFlow({
+  approvedMessage: () => t('models.minimaxApproved'),
+  notifySuccess: text => message.success(text),
+  notifyError: text => message.error(text),
+  onApproved: () => emit('success'),
+  onClosed: () => emit('close'),
+})
 
 async function startLogin() {
-  status.value = 'loading'
-  errorMessage.value = ''
+  begin()
   try {
     const result = await startMiniMaxLogin(region.value)
     sessionId.value = result.session_id
@@ -28,58 +42,23 @@ async function startLogin() {
     verificationUrl.value = result.verification_url
     status.value = 'waiting'
     window.open(verificationUrl.value, '_blank')
-    schedulePoll()
-  } catch (err: any) {
-    status.value = 'error'
-    errorMessage.value = err?.message || String(err)
-    message.error(errorMessage.value)
+    startPolling({
+      intervalMs: 2_000,
+      poll: async id => {
+        const result = await pollMiniMaxLogin(id)
+        if (result.status === 'pending') return { kind: 'pending' }
+        if (result.status === 'approved') return { kind: 'approved' }
+        if (result.status === 'expired') return { kind: 'expired' }
+        return { kind: 'failed', message: result.error || 'Unknown error' }
+      },
+    })
+  } catch (error) {
+    fail(error)
   }
 }
 
-function schedulePoll() {
-  stopPolling()
-  pollTimer = setTimeout(async () => {
-    try {
-      const result = await pollMiniMaxLogin(sessionId.value)
-      if (result.status === 'pending') {
-        schedulePoll()
-      } else if (result.status === 'approved') {
-        status.value = 'approved'
-        message.success(t('models.minimaxApproved'))
-        setTimeout(() => {
-          showModal.value = false
-          setTimeout(() => emit('success'), 200)
-        }, 1_000)
-      } else if (result.status === 'expired') {
-        status.value = 'expired'
-      } else {
-        status.value = 'error'
-        errorMessage.value = result.error || 'Unknown error'
-      }
-    } catch {
-      schedulePoll()
-    }
-  }, 2_000)
-}
-
-function stopPolling() {
-  if (pollTimer) clearTimeout(pollTimer)
-  pollTimer = null
-}
-
-function handleClose() {
-  stopPolling()
-  showModal.value = false
-  setTimeout(() => emit('close'), 200)
-}
-
-function retry() {
-  stopPolling()
-  status.value = 'idle'
-  sessionId.value = ''
-  userCode.value = ''
-  verificationUrl.value = ''
-  errorMessage.value = ''
+function openLink() {
+  window.open(verificationUrl.value, '_blank')
 }
 
 async function copyCode() {
@@ -88,122 +67,37 @@ async function copyCode() {
   else message.error(t('chat.copyFailed'))
 }
 
-function openLink() {
-  window.open(verificationUrl.value, '_blank')
+/** Back to the region picker; this provider starts on the user's click. */
+function retry() {
+  reset()
+  userCode.value = ''
+  verificationUrl.value = ''
 }
-
-onUnmounted(stopPolling)
 </script>
 
 <template>
-  <NModal
-    v-model:show="showModal"
-    preset="card"
+  <OAuthLoginShell
+    v-model:show="show"
+    provider="minimax"
     :title="t('models.minimaxLoginTitle')"
-    :style="{ width: 'min(440px, calc(100vw - 32px))' }"
+    :status="status"
+    :error-message="errorMessage"
+    :user-code="userCode"
     :mask-closable="status !== 'waiting' && status !== 'loading'"
-    @after-leave="emit('close')"
+    :cancel-disabled="status === 'waiting' || status === 'loading'"
+    @cancel="close()"
+    @retry="retry()"
+    @open-link="openLink()"
+    @copy-code="copyCode()"
+    @close="emit('close')"
   >
-    <div class="minimax-login">
-      <div v-if="status === 'idle'" class="minimax-login__state">
-        <p class="minimax-login__hint">{{ t('models.minimaxRegionHint') }}</p>
-        <NRadioGroup v-model:value="region">
-          <NRadioButton value="global">{{ t('models.minimaxGlobal') }}</NRadioButton>
-          <NRadioButton value="cn">{{ t('models.minimaxChina') }}</NRadioButton>
-        </NRadioGroup>
-        <NButton type="primary" block @click="startLogin">{{ t('models.minimaxStart') }}</NButton>
-      </div>
-
-      <div v-else-if="status === 'loading'" class="minimax-login__state">
-        <NSpin size="small" />
-      </div>
-
-      <div v-else-if="status === 'waiting'" class="minimax-login__state">
-        <p class="minimax-login__hint">{{ t('models.minimaxWaiting') }}</p>
-        <button type="button" class="minimax-login__code" @click="copyCode">
-          <span>{{ userCode }}</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-        </button>
-        <NButton type="primary" block @click="openLink">{{ t('models.minimaxOpenLink') }}</NButton>
-      </div>
-
-      <div v-else-if="status === 'approved'" class="minimax-login__state minimax-login__success">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-        <p>{{ t('models.minimaxApproved') }}</p>
-      </div>
-
-      <div v-else-if="status === 'expired'" class="minimax-login__state">
-        <p class="minimax-login__error">{{ t('models.minimaxExpired') }}</p>
-        <NButton size="small" @click="retry">{{ t('common.retry') }}</NButton>
-      </div>
-
-      <div v-else class="minimax-login__state">
-        <p class="minimax-login__error">{{ errorMessage }}</p>
-        <NButton size="small" @click="retry">{{ t('common.retry') }}</NButton>
-      </div>
-    </div>
-
-    <template #footer>
-      <div class="modal-footer">
-        <NButton :disabled="status === 'waiting' || status === 'loading'" @click="handleClose">
-          {{ t('common.cancel') }}
-        </NButton>
-      </div>
+    <template #idle>
+      <p class="oauth-login__hint">{{ t('models.minimaxRegionHint') }}</p>
+      <NRadioGroup v-model:value="region">
+        <NRadioButton value="global">{{ t('models.minimaxGlobal') }}</NRadioButton>
+        <NRadioButton value="cn">{{ t('models.minimaxChina') }}</NRadioButton>
+      </NRadioGroup>
+      <NButton type="primary" block @click="startLogin">{{ t('models.minimaxStart') }}</NButton>
     </template>
-  </NModal>
+  </OAuthLoginShell>
 </template>
-
-<style scoped lang="scss">
-.minimax-login,
-.minimax-login__state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-}
-
-.minimax-login {
-  padding: 8px 0;
-}
-
-.minimax-login__state {
-  min-height: 140px;
-  justify-content: center;
-  gap: 16px;
-}
-
-.minimax-login__hint,
-.minimax-login__error {
-  margin: 0;
-  text-align: center;
-  line-height: 1.6;
-}
-
-.minimax-login__code {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 20px;
-  border: 1px solid var(--n-border-color, #e0e0e6);
-  border-radius: 8px;
-  color: inherit;
-  background: transparent;
-  cursor: pointer;
-  font: inherit;
-  letter-spacing: 0.12em;
-}
-
-.minimax-login__success {
-  color: #18a058;
-}
-
-.minimax-login__error {
-  color: #d03050;
-  word-break: break-word;
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-}
-</style>
