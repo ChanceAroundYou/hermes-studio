@@ -65,13 +65,18 @@ function quote(value: string): string {
   return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
 }
 
-/** Insert raw member lines before the closing brace of `frame`. */
+/**
+ * Insert member lines before the closing brace of `frame`.
+ *
+ * `members` carry *relative* indentation; the frame's member indent is applied
+ * here, exactly once, so a nested block keeps the depth it was built for.
+ */
 function insertIntoFrame(text: string, frame: Frame, members: string[], inlineMembers: string[]): string {
   const before = text.slice(0, frame.close)
   const after = text.slice(frame.close)
   const singleLine = !text.slice(frame.open, frame.close).includes('\n')
 
-  if (singleLine) {
+  if (singleLine && inlineMembers.length) {
     const needsComma = /[^,\s]\s*$/.test(before)
     return `${before}${needsComma ? ', ' : ''}${inlineMembers.join(', ')}${after}`
   }
@@ -82,22 +87,24 @@ function insertIntoFrame(text: string, frame: Frame, members: string[], inlineMe
   // whitespace-only line.
   const railing = /(\n[ \t]*)$/.exec(before)
   const closingIndent = railing ? railing[1] : '\n'
-  const body = before.slice(0, before.length - closingIndent.length)
+  let body = before.slice(0, before.length - closingIndent.length)
+  // Expanding a single-line object needs a comma after its last member.
+  if (!/[,\s{]\s*$/.test(body)) body = `${body},`
   return `${body}\n${block}${closingIndent}${after}`
 }
 
-/** Nest `leaf` under the missing `tail` objects, indented as a member of `depth`. */
-function nestMissing(tail: string[], leaf: string, value: string, depth: number): { lines: string[]; inline: string[] } {
+/** Nest `leaf` under the missing `tail` objects, with relative indentation. */
+function nestMissing(tail: string[], leaf: string, value: string): string[] {
   const pad = (levels: number) => '  '.repeat(levels)
   const lines: string[] = []
   tail.forEach((segment, index) => {
-    lines.push(`${pad(depth + index)}${segment}: {`)
+    lines.push(`${pad(index)}${segment}: {`)
   })
-  lines.push(`${pad(depth + tail.length)}${leaf}: ${quote(value)},`)
+  lines.push(`${pad(tail.length)}${leaf}: ${quote(value)},`)
   for (let index = tail.length - 1; index >= 0; index -= 1) {
-    lines.push(`${pad(depth + index)}},`)
+    lines.push(`${pad(index)}},`)
   }
-  return { lines, inline: [] }
+  return lines
 }
 
 /** Resolve every object frame a dotted path names, outermost first. */
@@ -122,7 +129,18 @@ function leafExists(text: string, frames: Frame[], segments: string[], leaf: str
   if (frames.length !== segments.length) return false
   const frame = frames[frames.length - 1]
   const body = text.slice(frame.open + 1, frame.close)
-  return new RegExp(`(?:^|[{,\\s])['"]?${leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]?\\s*:`, 'm').test(body)
+  const name = leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+  // A member of this object sits exactly one level in, so its indentation
+  // identifies it; a deeper `title:` belongs to a nested object.
+  const memberIndent = ' '.repeat(frame.indent + 2)
+  if (new RegExp(`^${memberIndent}['"]?${name}['"]?\\s*:`, 'm').test(body)) return true
+
+  // Single-line objects keep their members inline.
+  const singleLine = !body.includes('\n')
+  return singleLine
+    ? new RegExp(`(?:^|[{,\\s])['"]?${name}['"]?\\s*:`).test(body)
+    : false
 }
 
 function applyKey(text: string, dotted: string, value: string): string {
@@ -137,13 +155,16 @@ function applyKey(text: string, dotted: string, value: string): string {
   }
 
   const depth = frames.length
-  const nested = nestMissing(segments.slice(depth), leaf, value, 1 + depth)
+  const nested = nestMissing(segments.slice(depth), leaf, value)
   if (depth === 0) {
+    // A brand new top-level namespace sits two spaces in.
     const end = text.lastIndexOf('}')
-    const block = `${nested.lines.map(line => `  ${line}`).join('\n')}\n`
-    return `${text.slice(0, end)}${block}${text.slice(end)}`
+    const before = text.slice(0, end)
+    const pad = /[,\s{]\s*$/.test(before) ? '' : ','
+    const block = `${nested.map(line => `  ${line}`).join('\n')}\n`
+    return `${before}${pad}${block}${text.slice(end)}`
   }
-  return insertIntoFrame(text, frames[depth - 1], nested.lines, nested.inline)
+  return insertIntoFrame(text, frames[depth - 1], nested, [])
 }
 
 const patchPath = process.argv[2]
