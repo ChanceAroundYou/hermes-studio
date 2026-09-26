@@ -736,6 +736,7 @@ export class AgentRuntime {
           maxRetries,
           error: error instanceof Error ? error.message : String(error),
         })
+        await sleepWithSignal(modelRetryDelayMs(error, attempt), request.signal)
       }
     }
     throw new Error('Model request retry loop exited unexpectedly.')
@@ -1700,6 +1701,43 @@ function removeHistoricalSkillViews(
       toolCalls: remainingToolCalls.length ? remainingToolCalls : undefined,
     }
   }
+}
+
+const MODEL_RETRY_BASE_DELAY_MS = 300
+const MODEL_RETRY_MAX_DELAY_MS = 10_000
+
+/**
+ * How long to wait before re-asking the model. Providers frequently throttle with
+ * 429 (free tiers especially); retrying instantly just burns the whole budget, so
+ * every retry is spaced, honouring Retry-After when the provider sent one.
+ */
+function modelRetryDelayMs(error: unknown, attempt: number): number {
+  const retryAfterMs = error && typeof error === 'object'
+    ? (error as { retryAfterMs?: unknown }).retryAfterMs
+    : undefined
+  if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return Math.min(retryAfterMs, MODEL_RETRY_MAX_DELAY_MS)
+  }
+  const exponential = MODEL_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1)
+  const capped = Math.min(exponential, MODEL_RETRY_MAX_DELAY_MS)
+  // Jittered so concurrent sessions do not retry in lockstep against a throttled provider.
+  return Math.round(capped / 2 + Math.random() * (capped / 2))
+}
+
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  if (signal?.aborted) return Promise.reject(abortError())
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(abortError())
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

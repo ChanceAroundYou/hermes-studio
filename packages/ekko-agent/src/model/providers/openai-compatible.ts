@@ -171,6 +171,7 @@ export class OpenAICompatibleModelClient implements ModelClient {
     const toolCalls = new Map<number, { id: string; name: string; argumentsText: string }>()
     let buffer = ''
     let finishReason: string | undefined
+    let producedOutput = false
     let responseId: string | undefined
     let responseModel: string | undefined
     const reasoningDetails = new Map<string, Record<string, unknown>>()
@@ -218,14 +219,19 @@ export class OpenAICompatibleModelClient implements ModelClient {
 
           const content = choice.delta?.content
           if (content) {
+            producedOutput = true
             yield { type: 'text-delta', text: content }
           }
           const reasoning = choice.delta?.reasoning_content ?? choice.delta?.reasoning
           if (reasoning) {
+            producedOutput = true
             yield { type: 'reasoning-delta', text: reasoning }
           } else {
             const detailsText = reasoningDetailsText(choice.delta?.reasoning_details)
-            if (detailsText) yield { type: 'reasoning-delta', text: detailsText }
+            if (detailsText) {
+              producedOutput = true
+              yield { type: 'reasoning-delta', text: detailsText }
+            }
           }
           mergeOpenAIReasoningDetails(reasoningDetails, choice.delta?.reasoning_details)
 
@@ -248,7 +254,12 @@ export class OpenAICompatibleModelClient implements ModelClient {
             }
             toolCalls.clear()
             if (validToolCalls === 0) {
-              throw invalidOpenAIToolCallError(this.provider)
+              // Upstream proxies intermittently stream a tool call without a usable
+              // id/function name. When the stream produced nothing else we let the
+              // caller re-ask over the non-streaming transport instead of failing
+              // the whole turn; a partially emitted reply still fails, so a usable
+              // answer is never silently truncated.
+              if (producedOutput) throw invalidOpenAIToolCallError(this.provider)
             }
           }
         }

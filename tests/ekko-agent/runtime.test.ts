@@ -1392,6 +1392,49 @@ describe('ekko-agent runtime', () => {
     expect(events.at(-1)).toBe('run.failed')
   })
 
+  it('waits before retrying so throttled providers are not hammered', async () => {
+    const stamps: number[] = []
+    const client = modelClient(() => {
+      stamps.push(Date.now())
+      throw new ModelProviderError('Provider returned 429 Too Many Requests', {
+        provider: 'test',
+        statusCode: 429,
+        retryable: true,
+      })
+    })
+    const runtime = new AgentRuntime({ modelClient: client, tools: new AgentToolRegistry() })
+
+    await expect(runtime.run({ messages: ['hi'] })).rejects.toThrow('429')
+
+    expect(stamps).toHaveLength(4)
+    for (let i = 1; i < stamps.length; i += 1) {
+      expect(stamps[i] - stamps[i - 1]).toBeGreaterThanOrEqual(100)
+    }
+  })
+
+  it('honours Retry-After when the provider asks for a specific wait', async () => {
+    const stamps: number[] = []
+    const client = modelClient(() => {
+      stamps.push(Date.now())
+      if (stamps.length === 1) {
+        throw new ModelProviderError('Provider returned 429 Too Many Requests', {
+          provider: 'test',
+          statusCode: 429,
+          retryable: true,
+          retryAfterMs: 250,
+        })
+      }
+      return { content: 'recovered after retry-after' }
+    })
+    const runtime = new AgentRuntime({ modelClient: client, tools: new AgentToolRegistry() })
+
+    const result = await runtime.run({ messages: ['hi'] })
+
+    expect(result.output.content).toBe('recovered after retry-after')
+    expect(stamps).toHaveLength(2)
+    expect(stamps[1] - stamps[0]).toBeGreaterThanOrEqual(240)
+  })
+
   it('does not retry a model provider error explicitly marked non-retryable', async () => {
     const client = modelClient(() => {
       throw new ModelProviderError('Not Found', {

@@ -90,25 +90,30 @@ describe('ekko-agent model requests', () => {
     ]))
   })
 
-  it('retries a streamed response whose tool call has an empty function name', async () => {
+  it('recovers a streamed response whose only tool call has an empty function name', async () => {
+    // Some upstream proxies stream a tool call without a usable id/function name.
+    // That used to fail the whole turn even though nothing else was produced;
+    // it now falls back to the non-streaming transport for the same step.
     const encoder = new TextEncoder()
     let call = 0
     const fetchMock = vi.fn(async () => {
       call += 1
-      const frames = call === 1
-        ? [
-            'data: {"id":"chatcmpl_invalid","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_invalid","type":"function","function":{"name":"","arguments":""}}]},"finish_reason":"tool_calls"}]}\n\n',
-            'data: [DONE]\n\n',
-          ]
-        : [
-            'data: {"id":"chatcmpl_recovered","choices":[{"delta":{"content":"Recovered"},"finish_reason":"stop"}]}\n\n',
-            'data: [DONE]\n\n',
-          ]
-      return new Response(new ReadableStream({
-        start(controller) {
-          for (const frame of frames) controller.enqueue(encoder.encode(frame))
-          controller.close()
-        },
+      if (call === 1) {
+        const frames = [
+          'data: {"id":"chatcmpl_invalid","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_invalid","type":"function","function":{"name":"","arguments":""}}]},"finish_reason":"tool_calls"}]}\n\n',
+          'data: [DONE]\n\n',
+        ]
+        return new Response(new ReadableStream({
+          start(controller) {
+            for (const frame of frames) controller.enqueue(encoder.encode(frame))
+            controller.close()
+          },
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({
+        id: 'chatcmpl_recovered',
+        model: 'deepseek-chat',
+        choices: [{ message: { content: 'Recovered' }, finish_reason: 'stop' }],
       }), { status: 200 })
     })
     const client = createModelClient(providerConfig, { fetch: fetchMock })
@@ -118,12 +123,34 @@ describe('ekko-agent model requests', () => {
 
     expect(result.output.content).toBe('Recovered')
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(result.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'model.retry',
-        error: expect.stringContaining('complete id and function name'),
-      }),
-    ]))
+  })
+
+  it('still fails when a stream emits content before an unusable tool call', async () => {
+    // The tolerance above must never silently truncate a reply that already
+    // produced output: a partially emitted answer still surfaces as an error.
+    const encoder = new TextEncoder()
+    const frames = [
+      'data: {"id":"chatcmpl_partial","choices":[{"delta":{"content":"Working on it"},"finish_reason":null}]}\n\n',
+      'data: {"id":"chatcmpl_partial","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_invalid","type":"function","function":{"name":"","arguments":""}}]},"finish_reason":"tool_calls"}]}\n\n',
+      'data: [DONE]\n\n',
+    ]
+    const fetchMock = vi.fn(async () => new Response(new ReadableStream({
+      start(controller) {
+        for (const frame of frames) controller.enqueue(encoder.encode(frame))
+        controller.close()
+      },
+    }), { status: 200 }))
+    const client = createModelClient(providerConfig, { fetch: fetchMock })
+    const runtime = new AgentRuntime({ modelClient: client, maxModelRetries: 0 })
+    const events: string[] = []
+
+    await expect(runtime.run({
+      messages: ['Say something then break the tool call.'],
+      onEvent: event => events.push(event.type),
+    })).rejects.toThrow('complete id and function name')
+
+    expect(events).toContain('model.delta')
+    expect(events.at(-1)).toBe('run.failed')
   })
 
   it('filters invalid Chat tool history and its orphaned tool result', () => {

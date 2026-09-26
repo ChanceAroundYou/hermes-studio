@@ -62,6 +62,15 @@ export async function parseResponseJson<T>(provider: string, response: Response)
   }
 }
 
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined
+  const seconds = Number(value.trim())
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000)
+  const date = Date.parse(value)
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now())
+  return undefined
+}
+
 export async function providerHttpError(provider: string, response: Response): Promise<ModelProviderError> {
   let details: unknown
   let message = `Model provider request failed with HTTP ${response.status}.`
@@ -85,6 +94,7 @@ export async function providerHttpError(provider: string, response: Response): P
     statusCode: response.status,
     retryable: isRetryableStatus(response.status),
     details,
+    retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after')),
   })
 }
 
