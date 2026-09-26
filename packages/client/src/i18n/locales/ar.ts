@@ -681,6 +681,13 @@ export default {
       deleteFailed: 'تعذر حذف اتصال التطبيق',
       empty: 'لا توجد تطبيقات متصلة',
       loadFailed: 'تعذّر تحميل التطبيقات المتصلة',
+      cloudflareRoute: 'Cloudflare',
+      officialRoute: 'الاتصال المباشر الرسمي',
+      qrRouteDescription: 'يحدد رمز QR مسار Studio دون تغيير مسار التطبيق',
+      routeDescription: 'المسار الذي يستخدمه Studio للاتصالات السحابية؛ يمكنك تبديله في أي وقت',
+      routeSwitched: 'تم تبديل المسار السحابي',
+      routeSwitchFailed: 'فشل تبديل المسار السحابي',
+      routeTitle: 'المسار السحابي',
     },
   },
 
@@ -1764,6 +1771,7 @@ export default {
       saveFailed: 'فشل الحفظ',
       loadFailed: 'تعذّر تحميل المجلدات الخارجية',
       removeRow: 'إزالة',
+      reset: 'استخدام اسم البروفايل',
     },
     pathCopied: 'تم نسخ المسار',
     pathCopyFailed: 'تعذّر نسخ المسار',
@@ -2480,6 +2488,8 @@ export default {
       linkOpenTargetHint: 'اختر مكان فتح الروابط من الرسائل ومعاينات Markdown.',
       linkOpenTargetHermesStudio: 'Ekko Studio',
       linkOpenTargetDefaultBrowser: 'المتصفح الافتراضي',
+      approvalBell: 'صوت الموافقات',
+      approvalBellHint: 'تشغيل صوت عند وصول موافقة أو توضيح جديد يحتاج إلى انتباه',
     },
     agent: {
       maxTurns: 'الحد الأقصى للدورات',
@@ -3061,6 +3071,12 @@ export default {
       claudeRun: "وضع الطباعة هو المسار الأنظف للمهام الفورية المعتمدة على API.",
       codexRun: "يجب تشغيل مهام Codex الفورية داخل مستودع git.",
     },
+    checkingUpdate: 'جارٍ التحقق...',
+    checkUpdate: 'التحقق من وجود تحديث',
+    checkUpdateFailed: 'فشل التحقق من التحديث',
+    newVersionAvailable: 'يتوفر إصدار جديد',
+    updateNow: 'تحديث',
+    upToDate: 'محدَّث بالفعل',
   },
 
   // Platform channel settings

@@ -1771,6 +1771,7 @@ export default {
       saveFailed: '保存失败',
       loadFailed: '加载外部目录失败',
       removeRow: '移除',
+      reset: '使用 Profile 名称',
     },
     pathCopied: '路径已复制',
     pathCopyFailed: '复制路径失败',
