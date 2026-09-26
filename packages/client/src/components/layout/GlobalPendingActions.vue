@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { h, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { NButton, NInput, useMessage, useNotification, type NotificationReactive } from 'naive-ui'
+import { NButton, useMessage, useNotification, type NotificationReactive } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { getBaseUrlValue } from '@/api/client'
 import { useRoute, useRouter } from 'vue-router'
 import { useChatStore, type PendingApproval, type PendingClarify } from '@/stores/hermes/chat'
 import { useGroupChatStore, type GroupPendingApproval, type GroupPendingClarify } from '@/stores/hermes/group-chat'
 import PendingInteractionCountdown from '@/components/hermes/chat/PendingInteractionCountdown.vue'
+import PendingInteractionCard from '@/components/hermes/chat/PendingInteractionCard.vue'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -14,7 +15,6 @@ import { playCompletionSound } from '@/utils/completion-sound'
 import { showSystemNotification } from '@/utils/completion-notification'
 import { workflowApprovalKey } from '@/utils/workflow-approval-key'
 import { PENDING_INTERACTION_EXPIRED_EVENT } from '@/utils/pending-interaction'
-import { useMobileChatInputViewport } from '@/composables/useMobileChatInputViewport'
 import { approveWorkflowNode, type WorkflowRecord } from '@/api/studio/workflows'
 import { listWorkflowsSocket, onWorkflowStatusUpdated, subscribeWorkflowStatuses, disconnectWorkflowSocket, type WorkflowRuntimeStatus } from '@/api/studio/workflow-socket'
 
@@ -35,7 +35,6 @@ const pendingNotificationKeys = new Set<string>()
 const clarifyDrafts = reactive<Record<string, string>>({})
 const submitting = reactive<Record<string, boolean>>({})
 const copiedCommandKey = ref<string | null>(null)
-const isMobileViewport = useMobileChatInputViewport()
 const workflows = ref<WorkflowRecord[]>([])
 const workflowStatuses = reactive<Record<string, WorkflowRuntimeStatus>>({})
 const visibleWorkflowApprovalKeys = reactive(new Set<string>())
@@ -255,40 +254,49 @@ async function submitApproval(action: Extract<GlobalPendingAction, { kind: 'chat
 }
 
 function clarifyContent(action: Extract<GlobalPendingAction, { kind: 'chat-clarify' | 'group-clarify' }>) {
-  return h('div', { class: 'global-clarify-content' }, [
-    interactionCountdown(action),
-    h('div', { class: 'global-clarify-question' }, action.pending.question),
-    action.pending.choices?.length
-      ? h('div', { class: 'global-clarify-choices' }, action.pending.choices.map(choice => h(NButton, {
-          size: 'small', secondary: clarifyDrafts[action.key] !== choice,
-          type: clarifyDrafts[action.key] === choice ? 'primary' : 'default',
-          onClick: () => { clarifyDrafts[action.key] = choice },
-        }, { default: () => choice })))
-      : null,
-    h(NInput, {
-      value: clarifyDrafts[action.key] || '',
-      placeholder: t('chat.clarifyPlaceholder'),
-      'onUpdate:value': (value: string) => { clarifyDrafts[action.key] = value },
-      onKeydown: (event: KeyboardEvent) => {
-        if (event.key !== 'Enter' || event.shiftKey) return
-        // 移动端：确认/换行键不提交，只有按钮生效（与聊天输入框保持一致）。
-        if (isMobileViewport.value) return
-        event.preventDefault()
-        void submitClarify(action)
-      },
-    }),
-  ])
+  // The very same card the main chat and the group chat render, so the
+  // notification window cannot drift from them again.
+  return h(PendingInteractionCard, {
+    variant: 'notification',
+    question: action.pending.question,
+    choices: action.pending.choices || null,
+    responseMode: action.pending.responseMode || 'input',
+    countdownDeadline: action.pending.countdownDeadline,
+    submitting: !!submitting[action.key],
+    modelValue: clarifyDrafts[action.key] || '',
+    'onUpdate:modelValue': (value: string) => { clarifyDrafts[action.key] = value },
+    onSelect: (choice: string) => { void submitClarify(action, choice) },
+    onSubmit: (response: string) => { void submitClarify(action, response) },
+    onDismiss: () => { dismissClarify(action) },
+  })
 }
 
-async function submitClarify(action: Extract<GlobalPendingAction, { kind: 'chat-clarify' | 'group-clarify' }>) {
-  const response = (clarifyDrafts[action.key] || '').trim()
-  if (!response || submitting[action.key]) return
+async function submitClarify(
+  action: Extract<GlobalPendingAction, { kind: 'chat-clarify' | 'group-clarify' }>,
+  response?: string,
+) {
+  const answer = (response ?? clarifyDrafts[action.key] ?? '').trim()
+  if (!answer || submitting[action.key]) return
   submitting[action.key] = true
   try {
-    if (action.kind === 'chat-clarify') chatStore.respondToClarifyFor(action.pending.sessionId, action.pending.clarifyId, response)
-    else await groupChatStore.respondClarifyFor(action.pending.roomId, action.pending.clarifyId, response)
+    if (action.kind === 'chat-clarify') chatStore.respondToClarifyFor(action.pending.sessionId, action.pending.clarifyId, answer)
+    else await groupChatStore.respondClarifyFor(action.pending.roomId, action.pending.clarifyId, answer)
+    delete clarifyDrafts[action.key]
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    submitting[action.key] = false
+  }
+}
+
+/** Mirrors the in-chat Dismiss button: answers with an empty response. */
+function dismissClarify(action: Extract<GlobalPendingAction, { kind: 'chat-clarify' | 'group-clarify' }>) {
+  if (submitting[action.key]) return
+  submitting[action.key] = true
+  try {
+    if (action.kind === 'chat-clarify') chatStore.respondToClarifyFor(action.pending.sessionId, action.pending.clarifyId, '')
+    else void groupChatStore.respondClarifyFor(action.pending.roomId, action.pending.clarifyId, '')
+    delete clarifyDrafts[action.key]
   } finally {
     submitting[action.key] = false
   }
@@ -394,11 +402,10 @@ function createGlobalNotification(action: GlobalPendingAction): NotificationReac
               : null,
             approvalCommand(action),
           ]),
+    // The clarify card brings its own input + submit + dismiss row; the
+    // notification footer is only used by the approval variants.
     action: clarify
-      ? () => h(NButton, {
-          size: 'small', type: 'primary', disabled: !(clarifyDrafts[action.key] || '').trim(),
-          loading: submitting[action.key], onClick: () => void submitClarify(action),
-        }, { default: () => t('chat.clarifySubmit') })
+      ? undefined
       : action.kind === 'workflow-approval'
         ? () => h('div', { class: 'global-pending-actions' }, [
             h(NButton, { size: 'small', type: 'error', secondary: true, loading: submitting[action.key], onClick: () => void submitWorkflowApproval(action, false) }, { default: () => t('chat.approvalDeny') }),
@@ -486,30 +493,29 @@ onUnmounted(() => {
 
 <style scoped>.global-pending-actions-host { display: none; }</style>
 <style>
-.n-notification:has(.global-approval-content, .global-clarify-content) {
+.n-notification:has(.global-approval-content, .pending-interaction-card--notification) {
   width: min(560px, calc(100vw - 32px));
   border: 1px solid var(--border-color);
   border-radius: 14px;
   background: var(--bg-main-surface);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14);
 }
-.n-notification:has(.global-approval-content, .global-clarify-content) .n-notification-main { margin-inline-start: 0; }
-.n-notification:has(.global-approval-content, .global-clarify-content) .n-notification-main__header { color: var(--text-primary); font-size: 15px; font-weight: 600; }
-.n-notification:has(.global-approval-content, .global-clarify-content) .n-notification-main-footer { padding-top: 12px; border-top: 1px solid var(--border-light); }
+.n-notification:has(.global-approval-content, .pending-interaction-card--notification) .n-notification-main { margin-inline-start: 0; }
+.n-notification:has(.global-approval-content, .pending-interaction-card--notification) .n-notification-main__header { color: var(--text-primary); font-size: 15px; font-weight: 600; }
+.n-notification:has(.global-approval-content, .pending-interaction-card--notification) .n-notification-main-footer { padding-top: 12px; border-top: 1px solid var(--border-light); }
 .global-pending-title { appearance: none; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }
 .global-pending-title:hover { text-decoration-color: currentcolor; }
 .global-pending-title:focus-visible { border-radius: 2px; outline: 2px solid var(--accent-info); outline-offset: 3px; }
-.global-pending-actions, .global-clarify-choices { display: flex; flex-wrap: wrap; gap: 8px; }
-.global-approval-content, .global-clarify-content { display: grid; gap: 12px; max-width: 520px; max-height: min(420px, calc(100dvh - 190px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+.global-pending-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.global-approval-content { display: grid; gap: 12px; max-width: 520px; max-height: min(420px, calc(100dvh - 190px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
 .global-approval-description { padding: 10px 12px; border: 1px solid rgba(var(--warning-rgb), 0.28); border-radius: 10px; background: rgba(var(--warning-rgb), 0.08); color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
 .global-approval-command { min-width: 0; overflow: hidden; border: 1px solid rgba(var(--text-primary-rgb), 0.1); border-radius: 10px; background: rgba(var(--accent-primary-rgb), 0.055); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.035); }
 .global-approval-command-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; padding: 4px 6px 4px 12px; border-bottom: 1px solid rgba(var(--text-primary-rgb), 0.08); }
 .global-approval-command-label { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
 .global-approval-command pre { max-height: 240px; margin: 0; padding: 12px; overflow: auto; overscroll-behavior: contain; white-space: pre; }
 .global-approval-command code { display: block; width: max-content; min-width: 100%; color: var(--text-primary); font-family: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace; font-size: 12px; line-height: 1.55; }
-.global-clarify-question { font-weight: 600; }
 
 @media (max-width: 600px) {
-  .n-notification:has(.global-approval-content, .global-clarify-content) { width: calc(100vw - 24px); }
+  .n-notification:has(.global-approval-content, .pending-interaction-card--notification) { width: calc(100vw - 24px); }
 }
 </style>

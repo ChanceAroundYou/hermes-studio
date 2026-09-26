@@ -37,8 +37,8 @@ import PendingInteractionCountdown from '@/components/hermes/chat/PendingInterac
 import FolderPicker from '@/components/hermes/chat/FolderPicker.vue'
 import ProfileAvatar from '@/components/hermes/profiles/ProfileAvatar.vue'
 import PageSidebarNav from '@/components/layout/PageSidebarNav.vue'
+import PendingInteractionCard from '@/components/hermes/chat/PendingInteractionCard.vue'
 import { copyToClipboard } from '@/utils/clipboard'
-import { useMobileChatInputViewport } from '@/composables/useMobileChatInputViewport'
 import type { Attachment } from '@/stores/hermes/chat'
 import type {
     GroupAgentPreset,
@@ -222,7 +222,6 @@ const toolPanelTransitionReady = ref(false)
 const activeWorkspacePanel = ref<'files' | 'terminal' | 'browser'>('files')
 const desktopBrowserAvailable = hasDesktopBrowserBridge()
 const workspacePanelMobile = ref(window.innerWidth <= 768)
-const isMobileViewport = useMobileChatInputViewport()
 const GROUP_CHAT_REFACTOR_NOTICE_STORAGE_KEY = 'hermes.groupChat.refactorNotice.v1.acknowledged'
 const WORKSPACE_PANEL_MIN_WIDTH = 360
 const WORKSPACE_PANEL_DEFAULT_WIDTH = 560
@@ -2089,14 +2088,6 @@ async function handleClarify(response?: string) {
     }
 }
 
-function handleClarifyKeydown(event: KeyboardEvent) {
-    if (visibleClarify.value?.responseMode === 'editor') return
-    // 移动端：确认/换行键不提交，只有“提交”按钮生效（与聊天输入框保持一致）。
-    if (isMobileViewport.value) return
-    event.preventDefault()
-    void handleClarify()
-}
-
 </script>
 
 <template>
@@ -2542,37 +2533,18 @@ function handleClarifyKeydown(event: KeyboardEvent) {
                             </div>
                         </Transition>
                         <Transition name="approval-float">
-                            <div v-if="!visibleApproval && visibleClarify" class="approval-float-panel">
-                                <div class="approval-float-header">
-                                    <span class="approval-float-icon" aria-hidden="true">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <circle cx="12" cy="12" r="10" />
-                                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                                            <line x1="12" y1="17" x2="12.01" y2="17" />
-                                        </svg>
-                                    </span>
-                                    <span>{{ t('chat.clarifyKicker') }}</span>
-                                    <PendingInteractionCountdown :deadline="visibleClarify.countdownDeadline" />
-                                </div>
-                                <div class="approval-float-title">
-                                    <span v-if="visibleClarify.agentName">@{{ visibleClarify.agentName }} · </span>{{ t('chat.clarifyTitle') }}
-                                </div>
-                                <div class="approval-float-desc">{{ visibleClarify.question }}</div>
-                                <div v-if="visibleClarify.choices?.length" class="approval-float-actions">
-                                    <NButton v-for="choice in visibleClarify.choices" :key="choice" size="small" type="primary" @click="handleClarify(choice)">
-                                        {{ choice }}
-                                    </NButton>
-                                    <NButton size="small" type="error" secondary @click="handleClarify('')">
-                                        {{ t('chat.clarifyDismiss') }}
-                                    </NButton>
-                                </div>
-                                <div class="clarify-float-input-row">
-                                    <NInput v-model:value="clarifyResponse" size="small" :type="visibleClarify.responseMode === 'editor' ? 'textarea' : 'text'" :placeholder="t('chat.clarifyPlaceholder')" @keydown.enter="handleClarifyKeydown" />
-                                    <NButton size="small" type="primary" :disabled="visibleClarify.responseMode !== 'editor' && !clarifyResponse.trim()" @click="handleClarify()">
-                                        {{ t('chat.clarifySubmit') }}
-                                    </NButton>
-                                </div>
-                            </div>
+                            <PendingInteractionCard
+                                v-if="!visibleApproval && visibleClarify"
+                                v-model="clarifyResponse"
+                                :question="visibleClarify.question"
+                                :choices="visibleClarify.choices"
+                                :response-mode="visibleClarify.responseMode"
+                                :countdown-deadline="visibleClarify.countdownDeadline"
+                                :agent-name="visibleClarify.agentName"
+                                @select="handleClarify"
+                                @submit="handleClarify"
+                                @dismiss="handleClarify('')"
+                            />
                         </Transition>
                     </div>
                     <Transition name="summary-inline">
@@ -3645,15 +3617,6 @@ export default defineComponent({ components: { CreateRoomForm } })
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-start;
-    gap: 8px;
-    margin-top: 10px;
-    padding: 10px 4px 0;
-    border-top: 1px solid $border-color;
-}
-
-.clarify-float-input-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
     margin-top: 10px;
     padding: 10px 4px 0;

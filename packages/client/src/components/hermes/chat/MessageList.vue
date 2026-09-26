@@ -12,7 +12,7 @@ const sessionScrollPositions = new Map<string, MessageViewportScrollSnapshot>();
 <script setup lang="ts">
 import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { NButton, NInput } from "naive-ui";
+import { NButton } from "naive-ui";
 import VirtualMessageList from "./VirtualMessageList.vue";
 import MessageItem from "./MessageItem.vue";
 import { positionTaskPlansAtTurnEnd } from "@/utils/task-plan";
@@ -20,6 +20,7 @@ import LiveReasoningStatus from "./LiveReasoningStatus.vue";
 import ToolRunCard from "./ToolRunCard.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
 import PendingInteractionCountdown from "./PendingInteractionCountdown.vue";
+import PendingInteractionCard from "./PendingInteractionCard.vue";
 import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message } from "@/stores/hermes/chat";
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
@@ -919,57 +920,22 @@ defineExpose({
         </div>
       </Transition>
     </Teleport>
+    <Teleport to="body" :disabled="!props.approvalPortalToBody">
       <Transition name="queue-float">
-        <div v-if="!visibleApproval && visibleClarify" class="approval-float-panel">
-          <div class="float-panel-header">
-            <span class="approval-float-icon" aria-hidden="true">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                <line x1="12" y1="17" x2="12.01" y2="17" />
-              </svg>
-            </span>
-            <span>{{ t("chat.clarifyKicker") }}</span>
-            <PendingInteractionCountdown :deadline="visibleClarify.countdownDeadline" />
-          </div>
-          <div class="approval-float-title">{{ t("chat.clarifyTitle") }}</div>
-          <div class="approval-float-desc">{{ visibleClarify.question }}</div>
-          <div v-if="visibleClarify.choices && visibleClarify.choices.length" class="approval-float-actions">
-            <NButton
-              v-for="choice in visibleClarify.choices"
-              :key="choice"
-              size="small"
-              type="primary"
-              @click="handleClarify(choice)"
-            >
-              {{ choice }}
-            </NButton>
-            <NButton size="small" type="error" secondary @click="handleClarify('')">
-              {{ t("chat.clarifyDismiss") }}
-            </NButton>
-          </div>
-          <div class="clarify-float-input-row">
-            <NInput
-              v-model:value="clarifyResponse"
-              size="small"
-              :type="visibleClarify.responseMode === 'editor' ? 'textarea' : 'text'"
-              :placeholder="t('chat.clarifyPlaceholder')"
-            />
-            <NButton size="small" type="primary" @click="handleClarify()">
-              {{ t("chat.clarifySubmit") }}
-            </NButton>
-          </div>
-        </div>
+        <PendingInteractionCard
+          v-if="!visibleApproval && visibleClarify"
+          v-model="clarifyResponse"
+          :variant="props.approvalPortalToBody ? 'portal' : 'inline'"
+          :question="visibleClarify.question"
+          :choices="visibleClarify.choices"
+          :response-mode="visibleClarify.responseMode"
+          :countdown-deadline="visibleClarify.countdownDeadline"
+          @select="handleClarify"
+          @submit="handleClarify"
+          @dismiss="handleClarify('')"
+        />
       </Transition>
+    </Teleport>
       <Transition name="queue-float">
         <MessageQueueFloatPanel
           :items="queuedFloatItems"
@@ -1141,23 +1107,6 @@ defineExpose({
   margin-top: 10px;
   padding: 10px 4px 0;
   border-top: 1px solid $border-color;
-}
-
-.clarify-float-input-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px 4px 0;
-  border-top: 1px solid $border-color;
-
-  :deep(.n-input) {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  :deep(.n-button) {
-    flex: 0 0 auto;
-  }
 }
 
 .queue-float-header {
@@ -1381,14 +1330,6 @@ defineExpose({
     :deep(.n-button__content) {
       white-space: normal;
       text-align: start;
-    }
-  }
-
-  .clarify-float-input-row {
-    flex-direction: column;
-
-    :deep(.n-button) {
-      width: 100%;
     }
   }
 

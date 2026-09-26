@@ -82,6 +82,12 @@ async function render(node: (() => any) | undefined) {
   return mount(component)
 }
 
+async function clickButtonByText(wrapper: any, text: string) {
+  const button = wrapper.findAll('button').find((candidate: any) => candidate.text() === text)
+  expect(button).toBeTruthy()
+  await button!.trigger('click')
+}
+
 function notificationTitleText(entry: any): string {
   const title = typeof entry.options.title === 'function' ? entry.options.title() : entry.options.title
   return typeof title === 'string' ? title : String(title?.children || '')
@@ -501,11 +507,41 @@ describe('GlobalPendingActions', () => {
     mount(GlobalPendingActions)
     await nextTick()
 
+    // The card owns its submit row, so the notification footer stays empty.
+    expect(created[0].options.action).toBeUndefined()
+
     const content = await render(created[0].options.content)
     await content.get('input').setValue('staging')
-    const action = await render(created[0].options.action)
-    await action.get('button').trigger('click')
+    await clickButtonByText(content, 'chat.clarifySubmit')
     expect(chatState.respondToClarifyFor).toHaveBeenCalledWith('session-b', 'clarify-b', 'staging')
+  })
+
+  it('answers a choice from the notification with a single click', async () => {
+    chatState.sessions = [{ id: 'session-b', title: 'B' }]
+    chatState.pendingClarifies = new Map([['session-b', {
+      sessionId: 'session-b', clarifyId: 'clarify-b', question: 'Which environment?', choices: ['staging', 'prod'],
+    }]])
+
+    mount(GlobalPendingActions)
+    await nextTick()
+
+    const content = await render(created[0].options.content)
+    await clickButtonByText(content, 'prod')
+    expect(chatState.respondToClarifyFor).toHaveBeenCalledWith('session-b', 'clarify-b', 'prod')
+  })
+
+  it('dismisses a clarification from the notification like the in-chat button', async () => {
+    chatState.sessions = [{ id: 'session-b', title: 'B' }]
+    chatState.pendingClarifies = new Map([['session-b', {
+      sessionId: 'session-b', clarifyId: 'clarify-b', question: 'Which environment?', choices: null,
+    }]])
+
+    mount(GlobalPendingActions)
+    await nextTick()
+
+    const content = await render(created[0].options.content)
+    await clickButtonByText(content, 'chat.clarifyDismiss')
+    expect(chatState.respondToClarifyFor).toHaveBeenCalledWith('session-b', 'clarify-b', '')
   })
 
   it('submits a clarify response with Enter on a desktop viewport', async () => {
@@ -541,8 +577,7 @@ describe('GlobalPendingActions', () => {
 
     expect(chatState.respondToClarifyFor).not.toHaveBeenCalled()
 
-    const action = await render(created[0].options.action)
-    await action.get('button').trigger('click')
+    await clickButtonByText(content, 'chat.clarifySubmit')
     expect(chatState.respondToClarifyFor).toHaveBeenCalledWith('session-b', 'clarify-b', 'staging')
   })
 
@@ -569,8 +604,7 @@ describe('GlobalPendingActions', () => {
     expect(routerPush).toHaveBeenCalledWith({ name: 'hermes.groupChatRoom', params: { roomId: 'room-b' } })
     const content = await render(created[0].options.content)
     await content.get('input').setValue('staging')
-    const action = await render(created[0].options.action)
-    await action.get('button').trigger('click')
+    await clickButtonByText(content, 'chat.clarifySubmit')
     expect(groupState.respondClarifyFor).toHaveBeenCalledWith('room-b', 'clarify-b', 'staging')
   })
 

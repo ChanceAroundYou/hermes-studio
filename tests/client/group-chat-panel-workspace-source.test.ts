@@ -23,13 +23,21 @@ describe('GroupChatPanel workspace save handling', () => {
     ]
 
     for (const source of sources) {
-      const start = source.indexOf('v-if="!visibleApproval && visibleClarify"')
-      const clarifyPanel = source.slice(start, source.indexOf('</Transition>', start))
+      const marker = source.indexOf('v-if="!visibleApproval && visibleClarify"')
+      const start = source.lastIndexOf('<PendingInteractionCard', marker)
+      const clarifyPanel = source.slice(start, source.indexOf('</Transition>', marker))
 
-      expect(clarifyPanel).toContain('visibleClarify.choices')
-      expect(clarifyPanel).toContain('<div class="clarify-float-input-row">')
-      expect(clarifyPanel).not.toContain('<div v-else class="clarify-float-input-row">')
+      // Both conversations render the one shared card now, so free text and
+      // choices can no longer drift apart between them.
+      expect(clarifyPanel).toContain('<PendingInteractionCard')
+      expect(clarifyPanel).toContain(':choices="visibleClarify.choices"')
+      expect(clarifyPanel).toContain('@submit="handleClarify"')
+      expect(clarifyPanel).not.toContain('v-if="visibleClarify.choices')
     }
+
+    const card = readFileSync('packages/client/src/components/hermes/chat/PendingInteractionCard.vue', 'utf8')
+    expect(card).toContain('<div class="clarify-float-input-row">')
+    expect(card).toContain('<NInput')
   })
 
   it('coerces null picker values before trimming so clearing the input saves an empty workspace', () => {
