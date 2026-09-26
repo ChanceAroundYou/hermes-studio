@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 
 const openSessionSearchMock = vi.hoisted(() => vi.fn())
 const mockAppStore = vi.hoisted(() => ({
@@ -109,6 +110,11 @@ function fakeJwt(payload: Record<string, unknown>) {
 
 describe('AppSidebar navigation', () => {
   beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
     localStorage.clear()
     delete (window as typeof window & { hermesDesktop?: unknown }).hermesDesktop
     openSessionSearchMock.mockClear()
@@ -127,6 +133,7 @@ describe('AppSidebar navigation', () => {
   it('keeps page-sidebar-only actions out of the app sidebar', () => {
     const wrapper = mount(AppSidebar, {
       global: {
+        plugins: [createPinia()],
         stubs: {
           ProfileSelector: true,
           ModelSelector: true,
@@ -145,6 +152,7 @@ describe('AppSidebar navigation', () => {
   it('no longer hosts version management inside the app sidebar', async () => {
     const webWrapper = mount(AppSidebar, {
       global: {
+        plugins: [createPinia()],
         stubs: {
           ProfileSelector: true,
           ModelSelector: true,
@@ -160,6 +168,7 @@ describe('AppSidebar navigation', () => {
     ;(window as typeof window & { hermesDesktop?: unknown }).hermesDesktop = { isDesktop: true }
     const desktopWrapper = mount(AppSidebar, {
       global: {
+        plugins: [createPinia()],
         stubs: {
           ProfileSelector: true,
           ModelSelector: true,
@@ -177,6 +186,7 @@ describe('AppSidebar navigation', () => {
     mockAppStore.sidebarCollapsed = true
     const wrapper = mount(AppSidebar, {
       global: {
+        plugins: [createPinia()],
         stubs: {
           ProfileSelector: true,
           ModelSelector: true,
@@ -194,6 +204,7 @@ describe('AppSidebar navigation', () => {
   it('keeps removed entries out of the app sidebar while preserving settings', async () => {
     const wrapper = mount(AppSidebar, {
       global: {
+        plugins: [createPinia()],
         stubs: {
           ProfileSelector: true,
           ModelSelector: true,

@@ -246,10 +246,10 @@ onMounted(() => {
 <template>
   <div class="profile-selector">
     <div class="selector-label">{{ t('sidebar.profiles') }}</div>
-    <div class="profile-display" data-testid="profile-selector-select" @click="openProfileModal">
+    <button class="profile-display" type="button" :aria-label="t('sidebar.profiles')" data-testid="profile-selector-select" @click="openProfileModal">
       <ProfileAvatarView class="profile-avatar" :name="displayName" :avatar="activeProfile?.avatar" :size="24" />
       <span class="profile-name">{{ displayName }}</span>
-    </div>
+    </button>
 
     <NModal
       :show="showProfileModal"
@@ -418,6 +418,9 @@ onMounted(() => {
 
 .profile-display {
   display: flex;
+  width: 100%;
+  font: inherit;
+  text-align: start;
   align-items: center;
   gap: 8px;
   min-width: 0;
