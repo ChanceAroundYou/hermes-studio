@@ -976,78 +976,6 @@ defineExpose({
   width: min(380px, 100%);
 }
 
-.float-panel-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 4px 8px;
-  color: var(--accent-primary);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.approval-float-icon {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent-primary);
-  background: rgba(var(--accent-primary-rgb), 0.12);
-  border: 1px solid rgba(var(--accent-primary-rgb), 0.24);
-}
-
-.approval-float-title {
-  padding: 0 4px;
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.3;
-  color: $text-primary;
-}
-
-.approval-float-desc {
-  padding: 0 4px;
-  margin-top: 5px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: $text-secondary;
-}
-
-.approval-float-command {
-  display: block;
-  margin: 8px 4px 0;
-  max-height: 96px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.45;
-  color: $text-primary;
-  background: rgba(255, 255, 255, 0.68);
-  border: 1px solid $border-color;
-  border-radius: 11px;
-  padding: 8px 10px;
-
-  .dark & {
-    background: rgba(255, 255, 255, 0.08);
-  }
-}
-
-.approval-float-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px 4px 0;
-  border-top: 1px solid $border-color;
-}
-
 .queue-float-header {
   display: flex;
   align-items: center;
@@ -1254,24 +1182,6 @@ defineExpose({
     height: 22px;
   }
 
-  .approval-float-actions {
-    // Buttons must size themselves to their label; fixed-width columns drop
-    // long clarify choices.
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-
-    :deep(.n-button) {
-      width: auto;
-      max-width: 100%;
-    }
-
-    :deep(.n-button__content) {
-      white-space: normal;
-      text-align: start;
-    }
-  }
-
   .tool-calls-panel .tool-call-item {
     width: 100%;
   }
@@ -1445,7 +1355,6 @@ defineExpose({
   color: var(--accent-primary);
   text-decoration: underline;
 }
-
 
 @media (max-width: 640px) {
   .fork-divider {
