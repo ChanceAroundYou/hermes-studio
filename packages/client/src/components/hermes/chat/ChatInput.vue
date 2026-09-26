@@ -22,6 +22,7 @@ import { normalizeComposerVoiceTranscript, useComposerVoiceInput } from '@/compo
 import { extractRepresentativeVideoFrames, isVideoFile } from '@/utils/video-frame-extraction'
 import ImagePreviewOverlay from './ImagePreviewOverlay.vue'
 import { formatBytes, formatCompactCount } from '@/utils/format'
+import { isImageMime as isImage } from '@/utils/attachments'
 
 const chatStore = useChatStore()
 const appStore = useAppStore()
@@ -1115,10 +1116,6 @@ function removeAttachment(id: string) {
   }
   for (const attachment of removed) URL.revokeObjectURL(attachment.url)
   attachments.value = attachments.value.filter(attachment => !removedIds.has(attachment.id))
-}
-
-function isImage(type: string): boolean {
-  return type.startsWith('image/')
 }
 
 function openAttachmentPreview(attachment: Attachment) {

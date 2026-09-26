@@ -51,6 +51,7 @@ import {
     uploadGroupChatAttachments,
 } from '@/api/studio/group-chat-attachments'
 import { groupMessageAgent } from '@/utils/group-agent-avatar'
+import { isImageMime } from '@/utils/attachments'
 
 type GroupChatSocket = ReturnType<typeof connectGroupChat>
 export const GROUP_CHAT_MEMBER_REMOVED = 'ROOM_MEMBER_REMOVED'
@@ -69,7 +70,7 @@ function buildGroupContentBlocks(content: string, attachments: Attachment[], fil
     for (let i = 0; i < files.length; i += 1) {
         const file = files[i]
         const attachment = attachments[i]
-        if (attachment?.type.startsWith('image/')) {
+        if (isImageMime(attachment?.type)) {
             blocks.push({
                 type: 'image',
                 name: file.name,

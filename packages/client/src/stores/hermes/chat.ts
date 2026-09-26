@@ -24,6 +24,7 @@ import {
   pendingInteractionDeadline,
   type PendingInteractionSubmitResult,
 } from '@/utils/pending-interaction'
+import { isImageMime } from '@/utils/attachments'
 
 // Re-export ContentBlock for convenience
 export type ContentBlock = ContentBlockImport
@@ -626,7 +627,7 @@ export async function buildContentBlocks(
       const attachment = attachments[i]
 
       // Check if it's an image
-      if (attachment?.type.startsWith('image/')) {
+      if (isImageMime(attachment?.type)) {
         blocks.push({
           type: 'image',
           name: uploaded.name,

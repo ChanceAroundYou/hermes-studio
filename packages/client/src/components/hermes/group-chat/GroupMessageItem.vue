@@ -37,6 +37,7 @@ import GroupAgentMessageAvatar from './GroupAgentMessageAvatar.vue'
 import GroupAgentRobotIcon from './GroupAgentRobotIcon.vue'
 import ImagePreviewOverlay from '@/components/hermes/chat/ImagePreviewOverlay.vue'
 import { formatBytes } from '@/utils/format'
+import { isImageMime as isImage, isVideoMime as isVideo } from '@/utils/attachments'
 
 const MarkdownRenderer = defineAsyncComponent(async () => (await import('../chat/MarkdownRenderer.vue')).default)
 
@@ -604,13 +605,6 @@ function referenceBubbleContent() {
     })
 }
 
-function isImage(type: string): boolean {
-    return type.startsWith('image/')
-}
-
-function isVideo(type: string, name: string): boolean {
-    return type.startsWith('video/') || /\.(?:mp4|mov|m4v|webm)$/i.test(name)
-}
 
 function attachmentPath(attachment: { path?: string; url?: string }): string | null {
     if (attachment.path) return attachment.path

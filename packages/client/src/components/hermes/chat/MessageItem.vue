@@ -37,6 +37,8 @@ import type { ProfileAvatar as ProfileAvatarData } from "@/api/hermes/profiles";
 import ProfileAvatar from "@/components/hermes/profiles/ProfileAvatar.vue";
 import ImagePreviewOverlay from "./ImagePreviewOverlay.vue";
 import { formatBytes } from '@/utils/format'
+import { isImageMime as isImage } from '@/utils/attachments'
+import { isVideoMime as isVideo } from '@/utils/attachments'
 
 const MarkdownRenderer = defineAsyncComponent(async () => (await import("./MarkdownRenderer.vue")).default);
 
@@ -385,14 +387,6 @@ function formatDuration(ms: number): string {
 }
 
 const timeStr = computed(() => formatChatTimestamp(props.message.timestamp));
-
-function isImage(type: string): boolean {
-  return type.startsWith("image/");
-}
-
-function isVideo(type: string, name: string): boolean {
-  return type.startsWith("video/") || /\.(?:mp4|mov|m4v|webm)$/i.test(name);
-}
 
 /**
  * Extract the upload file path from message content for a given attachment.

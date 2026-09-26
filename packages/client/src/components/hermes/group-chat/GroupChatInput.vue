@@ -20,6 +20,7 @@ import {
     saveGroupChatRoomDraft,
     type GroupChatTrackedMention,
 } from './group-chat-room-drafts'
+import { isImageMime as isImage } from '@/utils/attachments'
 
 const { t } = useI18n()
 const props = withDefaults(defineProps<{
@@ -715,10 +716,6 @@ function removeAttachment(id: string) {
         URL.revokeObjectURL(attachments.value[idx].url)
         attachments.value.splice(idx, 1)
     }
-}
-
-function isImage(type: string): boolean {
-    return type.startsWith('image/')
 }
 
 function openAttachmentPreview(attachment: Attachment) {

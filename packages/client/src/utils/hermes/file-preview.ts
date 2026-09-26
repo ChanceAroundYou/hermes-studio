@@ -1,3 +1,5 @@
+import { isImageMime, isVideoMime } from '@/utils/attachments'
+
 export type FilePreviewKind =
   | 'image'
   | 'video'
@@ -178,8 +180,8 @@ export function isPreviewableFile(name: string): boolean {
 
 export function previewMimeMatches(kind: FilePreviewKind, mime: string): boolean {
   const normalized = mime.split(';')[0].trim().toLowerCase()
-  if (kind === 'image') return normalized.startsWith('image/')
-  if (kind === 'video') return normalized.startsWith('video/')
+  if (kind === 'image') return isImageMime(normalized)
+  if (kind === 'video') return isVideoMime(normalized)
   if (kind === 'html') return normalized === 'text/html'
   if (kind === 'pdf') return normalized === 'application/pdf'
   if (kind === 'docx') return normalized === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'

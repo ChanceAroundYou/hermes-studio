@@ -1,3 +1,5 @@
+import { isImageMime } from '@/utils/attachments'
+
 export function extractClipboardFiles(clipboardData: DataTransfer | null): File[] {
   if (!clipboardData) return []
 
@@ -9,7 +11,7 @@ export function extractClipboardFiles(clipboardData: DataTransfer | null): File[
   const pastedAt = Date.now()
 
   return files.map((file, index) => {
-    if (!file.type.startsWith('image/')) return file
+    if (!isImageMime(file.type)) return file
     const extension = file.type.split('/')[1]?.replace(/[^a-z0-9.+-]/gi, '') || 'png'
     const suffix = index > 0 ? `-${index + 1}` : ''
     return new File([file], `pasted-${pastedAt}${suffix}.${extension}`, {
