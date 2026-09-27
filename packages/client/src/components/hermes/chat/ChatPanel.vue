@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { AGENT_OPTIONS } from "@/utils/agent-options"
 import { setSessionPinned } from "@/api/studio/sessions";
 import DshSessionPresetSelect from "@/components/coding-agents/dsh/DshSessionPresetSelect.vue";
 import {
@@ -935,17 +936,7 @@ const getFolderName = workspaceFolderName;
 // so there is nothing to paginate and no "more" menu.
 const mostRecentDefaultWorkspace = computed(() => profileDefaultWorkspace.value || null);
 
-const newChatAgentOptions = computed(() => [
-  { label: "Hermes", value: "hermes" },
-  { label: "Ekko", value: "ekko-agent" },
-  { label: "Claude", value: "claude-code" },
-  { label: "Codex", value: "codex" },
-  { label: "Pi", value: "pi" },
-  { label: "Grok", value: "grok" },
-  { label: "OpenCode", value: "opencode" },
-  { label: "DeepSeek Harness", value: "dsh" },
-  { label: "Cursor", value: "cursor" },
-]);
+const newChatAgentOptions = computed(() => AGENT_OPTIONS.map(option => ({ ...option })));
 
 const newChatApiModeOptions = computed(() => [
   { label: t("codingAgents.protocolOpenAiChat"), value: "chat_completions" },
