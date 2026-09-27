@@ -281,7 +281,7 @@ onMounted(() => {
               <div class="profile-runtime-info">
                 <div class="profile-runtime-name-row">
                   <span class="profile-runtime-name" :title="profile.name">
-                    {{ profile.displayName || profile.name }}
+                    {{ resolveProfileDisplayName(profilesStore.profiles, profile.name) || profile.name }}
                   </span>
                   <span v-if="profile.name === activeProfileKey" class="active-badge">{{ t('profiles.runtime.activeTag') }}</span>
                 </div>

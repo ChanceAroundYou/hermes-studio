@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { getDb } from '../infrastructure/database'
-import { USER_PROFILES_TABLE, USER_THEMES_TABLE, USERS_TABLE } from '../infrastructure/database/schemas'
+import { USER_PROFILE_WORKSPACES_TABLE, USER_PROFILES_TABLE, USER_THEMES_TABLE, USERS_TABLE } from '../infrastructure/database/schemas'
 
 export type UserRole = 'super_admin' | 'admin'
 export type UserStatus = 'active' | 'disabled'
@@ -126,6 +126,24 @@ export function userCanAccessProfile(userId: UserId, profileName: string): boole
   return !!row
 }
 
+/**
+ * Whether `userId` may use `profileName`, using the same rule as every other
+ * profile gate in the server (`middleware/auth.ts`, `chat-run.ts`,
+ * `global-agent.ts`, `kanban-events.ts`, `workflow/schedule.ts`): a super admin
+ * is deliberately NOT profile-scoped — `updateManagedUser` hard-codes an empty
+ * allowlist for them — while everyone else needs the profile in their list.
+ *
+ * Without the bypass here the per-profile workspace was unreachable for exactly
+ * the accounts that use it, and every write failed the ownership check.
+ */
+function canUseProfile(userId: UserId, profileName: string): boolean {
+  // Strictly additive: the allowlist stays the only authority for everyone
+  // else, so a missing user record narrows rather than widens access. The
+  // super-admin case is a bypass, not a gate — see the note above.
+  if (findUserById(userId)?.role === 'super_admin') return true
+  return userCanAccessProfile(userId, profileName)
+}
+
 export function getDefaultProfileForUser(userId: UserId): string {
   const db = getDb()
   if (!db) return DEFAULT_PROFILE_NAME
@@ -135,6 +153,41 @@ export function getDefaultProfileForUser(userId: UserId): string {
     `SELECT profile_name FROM ${USER_PROFILES_TABLE} WHERE user_id = ? AND is_default = 1 LIMIT 1`
   ).get(id) as { profile_name?: string } | undefined
   return row?.profile_name || DEFAULT_PROFILE_NAME
+}
+
+/**
+ * The single directory a profile works in by default. Kept on the profile row
+ * (not in a global list) so two profiles can default to different directories,
+ * and so the value travels with the account.
+ */
+export function getProfileWorkspace(userId: UserId, profileName: string): string {
+  const db = getDb()
+  if (!db) return ''
+  const id = normalizeUserId(userId)
+  if (!id) return ''
+  const name = String(profileName || '').trim()
+  if (!name || !canUseProfile(id, name)) return ''
+  const row = db.prepare(
+    `SELECT workspace FROM ${USER_PROFILE_WORKSPACES_TABLE} WHERE user_id = ? AND profile_name = ?`,
+  ).get(id, name) as { workspace?: unknown } | undefined
+  return row?.workspace == null ? '' : String(row.workspace)
+}
+
+export function setProfileWorkspace(userId: UserId, profileName: string, workspace: string | null): boolean {
+  const db = getDb()
+  const id = normalizeUserId(userId)
+  const name = String(profileName || '').trim()
+  if (!db || !id || !name) return false
+  if (!canUseProfile(id, name)) return false
+  const value = workspace == null || String(workspace).trim() === '' ? null : String(workspace).trim()
+  // Upsert: the slot is created on first write, so it does not matter whether
+  // the profile happens to have an allowlist row.
+  db.prepare(
+    `INSERT INTO ${USER_PROFILE_WORKSPACES_TABLE} (user_id, profile_name, workspace, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, profile_name) DO UPDATE SET workspace = excluded.workspace, updated_at = excluded.updated_at`,
+  ).run(id, name, value, Date.now())
+  return true
 }
 
 export function countUsers(): number {
@@ -265,6 +318,7 @@ export function deleteUser(userId: UserId): boolean {
   db.exec('BEGIN')
   try {
     db.prepare(`DELETE FROM ${USER_PROFILES_TABLE} WHERE user_id = ?`).run(id)
+    db.prepare(`DELETE FROM ${USER_PROFILE_WORKSPACES_TABLE} WHERE user_id = ?`).run(id)
     db.prepare(`DELETE FROM ${USER_THEMES_TABLE} WHERE user_id = ?`).run(id)
     const result = db.prepare(`DELETE FROM ${USERS_TABLE} WHERE id = ?`).run(id)
     db.exec('COMMIT')
@@ -287,6 +341,8 @@ export function replaceUserProfiles(userId: UserId, profiles: string[], defaultP
 
   db.exec('BEGIN')
   try {
+    // Only the allowlist is rewritten here. The per-profile defaults live in
+    // their own table precisely so saving an account cannot discard them.
     db.prepare(`DELETE FROM ${USER_PROFILES_TABLE} WHERE user_id = ?`).run(id)
     const stmt = db.prepare(
       `INSERT INTO ${USER_PROFILES_TABLE} (user_id, profile_name, is_default, created_at) VALUES (?, ?, ?, ?)`

@@ -145,7 +145,7 @@ onUnmounted(() => {
                 !
               </button>
             </template>
-            {{ t('chat.profileMissingModelsTip', { profile: profileName }) }}
+            {{ t('chat.profileMissingModelsTip', { profile: profileDisplayName }) }}
           </NTooltip>
         </span>
         <span class="session-item-time">{{ formatTimestampMs(session.updatedAt) }}</span>

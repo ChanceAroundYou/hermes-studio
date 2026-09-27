@@ -1291,6 +1291,14 @@ export default {
     },
     forkedFrom: 'Issu de',
     previousLastMessage: 'Dernier message précédent',
+    workspaceFavorites: 'Favoris',
+    workspaceFavorite: 'Ajouter aux favoris',
+    workspaceUnfavorite: 'Retirer des favoris',
+    workspaceFavorited: 'Ajouté aux favoris',
+    workspaceUnfavorited: 'Retiré des favoris',
+    workspaceDefaultSet: 'Défini comme espace de travail par défaut de ce profil',
+    workspaceDefaultCleared: 'Espace de travail par défaut effacé',
+    workspaceShortcuts: 'Par défaut et favoris',
   },
 
   // Jobs

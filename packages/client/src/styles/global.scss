@@ -66,6 +66,14 @@ textarea {
 
 :root {
   --vh: 1vh;
+
+  // Geometry of the mobile menu button (the round logo button that sits to the
+  // left of the chat header on small screens). The chat header reserves room
+  // for it and lines its title/workspace block up on the same centre line, so
+  // both sides read the same numbers instead of duplicating magic pixels.
+  --app-menu-btn-size: 36px;
+  --app-menu-btn-top: calc(10px + env(safe-area-inset-top, 0px));
+  --app-menu-btn-inset: 12px;
 }
 
 // Fix mobile viewport height (address bar)
@@ -289,11 +297,11 @@ a {
 .hamburger-btn {
   display: none;
   position: fixed;
-  top: calc(10px + env(safe-area-inset-top, 0px));
-  left: 12px;
+  top: var(--app-menu-btn-top);
+  left: var(--app-menu-btn-inset);
   z-index: 99;
-  width: 36px;
-  height: 36px;
+  width: var(--app-menu-btn-size);
+  height: var(--app-menu-btn-size);
   border: none;
   background: $bg-card;
   border-radius: $radius-sm;

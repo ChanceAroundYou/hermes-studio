@@ -1210,6 +1210,27 @@ function sessionActivitySeconds(s: SessionSummary): number {
   )
 }
 
+/**
+ * Activity time is monotonic: it only ever moves forward.
+ *
+ * A background poll is a *possibly stale* observation. This client legitimately
+ * knows about activity the server has not persisted yet — a resumed run, socket
+ * deltas, a locally generated title — so the server's `last_active` can be
+ * OLDER than what we already have. Overwriting unconditionally made a session
+ * snap back to its old time (and down the list) one poll after it was promoted,
+ * which read as "two mechanisms fighting over the timestamp".
+ *
+ * Taking the max makes the local bump and the poll compose instead of clobber:
+ * whichever observation is newer wins, and a genuinely newer server value still
+ * takes over. Same rule the group-chat room list already uses.
+ */
+export function newerActivityTime(current: number | undefined, incoming: number | undefined): number | undefined {
+  const a = Number(current) || 0
+  const b = Number(incoming) || 0
+  if (!a && !b) return undefined
+  return Math.max(a, b)
+}
+
 function lastVisibleMessage(messages?: Message[] | null): Message | null {
   if (!messages?.length) return null
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -2145,7 +2166,12 @@ export const useChatStore = defineStore('chat', () => {
   // and live messages would stop appearing until a manual reload. Mutating the
   // existing objects preserves referential identity so streaming keeps working.
   async function refreshSessionListOnly(profile?: string | null): Promise<void> {
-    if (isStreaming.value) return
+    // Deliberately NOT gated on isStreaming. This refresh is the only thing
+    // that applies the server's authoritative `working-sessions` snapshot, and
+    // the moment a user is most likely to be watching another session work is
+    // while their own session is streaming. Gating here silently froze the
+    // working flags of every *other* session for the whole run, so a
+    // background delegation only lit up once you opened it by hand.
     if (isLoadingSessions.value) return
     if (sessionListRefreshInFlight) return
     sessionListRefreshInFlight = true
@@ -2176,8 +2202,9 @@ export const useChatStore = defineStore('chat', () => {
           // (messages, loadedMessageCount, hasMoreBefore, contextTokens).
           existing.title = fresh.title
           existing.source = fresh.source
-          existing.updatedAt = fresh.updatedAt
-          existing.lastActiveAt = fresh.lastActiveAt
+          existing.updatedAt = newerActivityTime(existing.updatedAt, fresh.updatedAt) ?? 0
+          const lastActive = newerActivityTime(existing.lastActiveAt, fresh.lastActiveAt)
+          if (lastActive != null) existing.lastActiveAt = lastActive
           existing.endedAt = fresh.endedAt
           existing.model = fresh.model
           existing.provider = fresh.provider
@@ -2234,6 +2261,29 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
+   * How long a locally observed run start outranks a `working-sessions`
+   * snapshot that does not list it. One poll interval plus a little slack: long
+   * enough that a poll which raced the start cannot clear the flag, short
+   * enough that a genuinely leaked flag is still healed.
+   */
+  const WORKING_SNAPSHOT_FRESHNESS_MS = 15_000
+
+  /**
+   * Whether this client has evidence that `sessionId` is running right now,
+   * which a lagging snapshot must not talk it out of: an attached stream, a
+   * live subagent delegation, or a start observed so recently that the
+   * snapshot could predate it.
+   */
+  function hasLocalRunEvidence(sessionId: string, now: number): boolean {
+    if (streamStates.value.has(sessionId)) return true
+    for (const subagent of subagentStreams.value.values()) {
+      if (subagent.sessionId === sessionId && subagent.status === 'running') return true
+    }
+    const startedAt = runStartedAt.value.get(sessionId) || 0
+    return startedAt > 0 && now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS
+  }
+
+  /**
    * Converge the sidebar to the authoritative server state of "which sessions
    * are still running" without opening each conversation. Called by
    * refreshSessionListOnly so a freshly opened Studio repairs the working
@@ -2242,12 +2292,14 @@ export const useChatStore = defineStore('chat', () => {
   async function applyWorkingSessionsSnapshot(): Promise<void> {
     try {
       const snapshot = await fetchWorkingSessions()
+      const now = Date.now()
       const live = new Set(snapshot.map(session => String(session.session_id)))
-      // A session this client is actively streaming re-asserts its own working
-      // state via socket events; never relax it from a snapshot that may lag a
-      // just-started or just-finished run.
-      const streamingIds = streamStates.value
-      const authoritativeRemove = [...serverWorking.value].filter(id => !live.has(id) && !streamingIds.has(id))
+      // The snapshot is a plain HTTP read, so it can be in flight while a run
+      // starts, and it knows nothing about the subagent streams this client is
+      // following. It may only relax a flag when the client has no local
+      // evidence of a live run to contradict it.
+      const authoritativeRemove = [...serverWorking.value]
+        .filter(id => !live.has(id) && !hasLocalRunEvidence(id, now))
       // Only relax flags for sessions this client has not observed a terminal
       // event for since the snapshot may lag behind a just-finished run.
       for (const id of authoritativeRemove) serverWorking.value.delete(id)
@@ -2264,7 +2316,7 @@ export const useChatStore = defineStore('chat', () => {
         reconcileCompressionState(String(entry.session_id), entry.compression ?? null, true)
       }
       for (const sid of [...compressionStates.value.keys()]) {
-        if (liveWorking.has(sid) || streamStates.value.has(sid)) continue
+        if (liveWorking.has(sid) || hasLocalRunEvidence(sid, now)) continue
         settleStaleCompression(sid)
       }
     } catch (err) {
@@ -5873,20 +5925,17 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
-  // Mild background polling for live session-list sync (covers sessions created
-  // on the VM via CLI/Telegram while this client is in the foreground). Only
-  // runs when the tab is visible and not streaming, so it's cheap and never
-  // disrupts an active run. visibilitychange (above) handles the wake-from-hidden
-  // case; this covers the "left it open and watching" case.
+  // Background polling for live session-list sync: sessions created or advanced
+  // on the VM via CLI/Telegram/another device must show up and re-sort here
+  // without a manual reload. It runs while the tab is visible, including during
+  // a local run — the refresh is a metadata-only HTTP read and cannot disrupt
+  // streaming, which arrives over the socket instead. visibilitychange (above)
+  // covers waking from a hidden tab; this covers "left it open and watching".
   if (typeof window !== 'undefined' && !(typeof process !== 'undefined' && process.env.VITEST) && !(globalThis as any).__vitest_worker__) {
     window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
-      // Deliberately NOT gated on isStreaming: while the user watches a session
-      // that is currently running (the common case), the sidebar must still
-      // see other sessions' working flags and last-activity changes. The list
-      // refresh is a metadata-only HTTP read and cannot disrupt the active
-      // run; the active session's own live state keeps coming from socket
-      // events / streamStates below.
+      // Not gated on isStreaming: watching a session run is exactly when the
+      // sidebar most needs other sessions' working flags and activity times.
       void refreshSessionListOnly()
       // Live-sync NEW messages only. The server paginates newest-first
       // (offset=0 = latest page). We re-fetch the latest page and prepend any

@@ -1183,6 +1183,14 @@ export default {
     resumeSpeech: 'استئناف',
     stopSpeech: 'إيقاف',
     speechNotSupported: 'تشغيل الصوت غير مدعوم في هذا المتصفح',
+    workspaceFavorites: 'المفضلة',
+    workspaceFavorite: 'إضافة إلى المفضلة',
+    workspaceUnfavorite: 'إزالة من المفضلة',
+    workspaceFavorited: 'أُضيف إلى المفضلة',
+    workspaceUnfavorited: 'أُزيل من المفضلة',
+    workspaceDefaultSet: 'تم تعيينه كمساحة عمل افتراضية لهذا الملف الشخصي',
+    workspaceDefaultCleared: 'تم مسح مساحة العمل الافتراضية',
+    workspaceShortcuts: 'الافتراضي والمفضلة',
   },
 
   workflow: {

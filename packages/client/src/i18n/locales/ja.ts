@@ -1291,6 +1291,14 @@ export default {
     },
     forkedFrom: 'フォーク元',
     previousLastMessage: '前回の最後のメッセージ',
+    workspaceFavorites: 'お気に入り',
+    workspaceFavorite: 'お気に入りに追加',
+    workspaceUnfavorite: 'お気に入りから削除',
+    workspaceFavorited: 'お気に入りに追加しました',
+    workspaceUnfavorited: 'お気に入りから削除しました',
+    workspaceDefaultSet: 'このプロフィルの既定のワークスペースに設定しました',
+    workspaceDefaultCleared: '既定のワークスペースを解除しました',
+    workspaceShortcuts: '既定とお気に入り',
   },
 
   // スケジュールジョブ

@@ -70,6 +70,14 @@ import { buildFileContentHeaders, getFilePreviewDescriptor } from '../services/f
 import { decorateWorkspaceEntries, getWorkspaceFileGitDiff } from '../services/files/workspace-git-status'
 import { copyFile, mkdir, readFile, readdir, rename as fsRename, rm as fsRm, stat as fsStat, writeFile } from 'fs/promises'
 import { normalize as pathNormalize, resolve as pathResolve } from 'path'
+import {
+  addFavorite as addWorkspaceFavorite,
+  listWorkspacePreferences,
+  removeFavorite as removeWorkspaceFavorite,
+  setDefaultWorkspace,
+} from './workspace-preferences'
+
+export { listWorkspacePreferences, addWorkspaceFavorite, removeWorkspaceFavorite, setDefaultWorkspace }
 
 function getPendingDeletedSessionIds(): Set<string> {
   return getGroupChatServer()?.getStorage().getPendingDeletedSessionIds() || new Set<string>()

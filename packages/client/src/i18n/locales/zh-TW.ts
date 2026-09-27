@@ -1184,6 +1184,14 @@ export default {
     setModel: '設定模型',
     newCliChat: '新增 CLI',
     cliEmptyState: '開始 CLI 對話',
+    workspaceFavorites: '收藏的工作區',
+    workspaceFavorite: '加入收藏',
+    workspaceUnfavorite: '取消收藏',
+    workspaceFavorited: '已加入收藏',
+    workspaceUnfavorited: '已取消收藏',
+    workspaceDefaultSet: '已設為該 profile 的預設工作區',
+    workspaceDefaultCleared: '已取消預設工作區',
+    workspaceShortcuts: '預設與收藏',
   },
 
   workflow: {

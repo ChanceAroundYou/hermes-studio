@@ -1291,6 +1291,14 @@ export default {
     },
     forkedFrom: 'Abgezweigt von',
     previousLastMessage: 'Vorherige letzte Nachricht',
+    workspaceFavorites: 'Favoriten',
+    workspaceFavorite: 'Zu Favoriten hinzufügen',
+    workspaceUnfavorite: 'Aus Favoriten entfernen',
+    workspaceFavorited: 'Zu Favoriten hinzugefügt',
+    workspaceUnfavorited: 'Aus Favoriten entfernt',
+    workspaceDefaultSet: 'Als Standard-Arbeitsbereich dieses Profils gesetzt',
+    workspaceDefaultCleared: 'Standard-Arbeitsbereich zurückgesetzt',
+    workspaceShortcuts: 'Standard & Favoriten',
   },
 
   // Jobs

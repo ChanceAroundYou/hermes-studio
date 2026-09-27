@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { NButton, NDropdown, NInput, NModal, NSpace, NSpin, useDialog, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { request } from '@/api/client'
+import { getActiveProfileName, request } from '@/api/client'
 import { copyToClipboard } from '@/utils/clipboard'
+import { useWorkspacePreferences } from '@/composables/useWorkspacePreferences'
+import { workspaceFolderName } from '@/utils/hermes/workspace-path'
 
 interface FolderEntry {
   name: string
@@ -29,15 +31,12 @@ interface FlatNode {
 
 const props = defineProps<{
   modelValue: string | null
-  showFavorite?: boolean
-  favorite?: boolean
-  favoriteDisabled?: boolean
-  favoriteTitle?: string
+  /** Which profile's default workspace the picker may set. */
+  profile?: string
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: string | null]
-  'toggle-favorite': []
 }>()
 
 const { t } = useI18n()
@@ -59,6 +58,67 @@ const renameModalVisible = ref(false)
 const renameMode = ref<'create' | 'rename'>('create')
 const renameInput = ref('')
 const actionLoading = ref(false)
+
+/**
+ * Favourites and the per-profile default both live on the server, so the row of
+ * favourites at the bottom of the list is the same in every browser and device,
+ * and the default is scoped to the profile this picker is editing.
+ */
+const {
+  favorites,
+  refresh: refreshPreferences,
+  isFavorite,
+  toggleFavorite,
+  setDefaultWorkspace,
+  defaultWorkspaceFor,
+} = useWorkspacePreferences()
+
+const activeProfile = computed(() => props.profile || getActiveProfileName() || 'default')
+
+/**
+ * The shortcuts row under the directory list: this profile's default first, then
+ * the account's favourites. A path that is both shows up once carrying both
+ * markers, because the two features are independent but the row is one list.
+ */
+const shortcutEntries = computed(() => {
+  const entries: Array<{ path: string; isDefault: boolean; isFavorite: boolean }> = []
+  const seen = new Set<string>()
+  const defaultPath = profileDefault.value
+  if (defaultPath && !seen.has(defaultPath)) {
+    seen.add(defaultPath)
+    entries.push({ path: defaultPath, isDefault: true, isFavorite: favorites.value.includes(defaultPath) })
+  }
+  for (const path of favorites.value) {
+    if (seen.has(path)) continue
+    seen.add(path)
+    entries.push({ path, isDefault: false, isFavorite: true })
+  }
+  return entries
+})
+const profileDefault = computed(() => defaultWorkspaceFor(activeProfile.value))
+
+/** A minimal FolderEntry so a favourite can drive the same context menu as a tree row. */
+function favoriteEntry(path: string): FolderEntry {
+  return { name: workspaceFolderName(path), path, fullPath: path }
+}
+
+function isProfileDefault(path: string | null | undefined): boolean {
+  const target = String(path || '')
+  return Boolean(target) && profileDefault.value === target
+}
+
+async function applyFavorite(path: string) {
+  await toggleFavorite(path)
+}
+
+async function applyDefault(path: string) {
+  await setDefaultWorkspace(activeProfile.value, path)
+}
+
+
+onMounted(() => {
+  void refreshPreferences(activeProfile.value)
+})
 
 watch(() => props.modelValue, (v) => { selectedPath.value = v || '' })
 
@@ -154,16 +214,62 @@ async function openFolder(folder: FolderEntry | null) {
   }
 }
 
-function showContextMenu(event: MouseEvent, folder: FolderEntry | null) {
-  event.preventDefault()
-  event.stopPropagation()
+function openContextMenuAt(x: number, y: number, folder: FolderEntry | null) {
   contextTarget.value = folder
-  contextMenuX.value = event.clientX
-  contextMenuY.value = event.clientY
+  contextMenuX.value = x
+  contextMenuY.value = y
   contextMenuVisible.value = false
   void nextTick(() => {
     contextMenuVisible.value = true
   })
+}
+
+function showContextMenu(event: MouseEvent, folder: FolderEntry | null) {
+  event.preventDefault()
+  event.stopPropagation()
+  openContextMenuAt(event.clientX, event.clientY, folder)
+}
+
+/**
+ * Touch devices (iOS Safari in particular) do not synthesise `contextmenu` for
+ * a long press on a plain element, so a right-click-only menu is unreachable on
+ * a phone. Fire the same menu from a long press instead.
+ */
+const LONG_PRESS_MS = 500
+let longPressTimer: number | null = null
+let longPressConsumed = false
+
+function cancelLongPress() {
+  if (longPressTimer != null) {
+    window.clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+function startLongPress(event: TouchEvent, folder: FolderEntry | null) {
+  if (event.touches.length !== 1) return
+  const touch = event.touches[0]
+  if (!touch) return
+  cancelLongPress()
+  longPressConsumed = false
+  longPressTimer = window.setTimeout(() => {
+    longPressTimer = null
+    longPressConsumed = true
+    // Suppress the click/long-press text selection and the synthetic contextmenu.
+    event.preventDefault()
+    openContextMenuAt(touch.clientX, touch.clientY, folder)
+  }, LONG_PRESS_MS)
+}
+
+onUnmounted(cancelLongPress)
+
+/** A long press must not also select the row it happened on. */
+function onRowClick(folder: FolderEntry) {
+  if (longPressConsumed) {
+    longPressConsumed = false
+    return
+  }
+  selectFolder(folder)
 }
 
 const contextOptions = computed(() => {
@@ -174,6 +280,17 @@ const contextOptions = computed(() => {
     { label: t('files.newFolder'), key: 'newFolder' },
   ]
   if (contextTarget.value) {
+    // Favourite (shared list) and default (this profile) are separate features
+    // and are toggled separately.
+    options.push({
+      label: isFavorite(contextTarget.value.fullPath) ? t('chat.workspaceUnfavorite') : t('chat.workspaceFavorite'),
+      key: 'favorite',
+    })
+    options.push({
+      label: isProfileDefault(contextTarget.value.fullPath) ? t('chat.workspaceUnpin') : t('chat.workspacePin'),
+      key: 'default',
+    })
+    options.push({ type: 'divider', key: 'd0' })
     if (!contextTarget.value.readonly) {
       options.push({ label: t('files.rename'), key: 'rename' })
       options.push({ type: 'divider', key: 'd2' })
@@ -204,6 +321,22 @@ async function handleContextSelect(key: string) {
       const path = folder?.fullPath || basePath.value
       const ok = await copyToClipboard(path)
       message[ok ? 'success' : 'error'](ok ? t('files.pathCopied') : `${t('files.pathCopied')} ✗`)
+      break
+    }
+    case 'favorite': {
+      const path = folder?.fullPath
+      if (!path) return
+      const nowFavorite = !isFavorite(path)
+      await applyFavorite(path)
+      message.success(nowFavorite ? t('chat.workspaceFavorited') : t('chat.workspaceUnfavorited'))
+      break
+    }
+    case 'default': {
+      const path = folder?.fullPath
+      if (!path) return
+      const wasDefault = isProfileDefault(path)
+      await applyDefault(path)
+      message.success(wasDefault ? t('chat.workspaceDefaultCleared') : t('chat.workspaceDefaultSet'))
       break
     }
     case 'newFolder':
@@ -341,8 +474,12 @@ const flatNodes = computed<FlatNode[]>(() => {
         class="folder-item"
         :class="{ selected: selectedPath === node.folder.fullPath }"
         :style="{ paddingLeft: `${12 + node.depth * 16}px` }"
-        @click="selectFolder(node.folder)"
+        @click="onRowClick(node.folder)"
         @contextmenu="showContextMenu($event, node.folder)"
+        @touchstart="startLongPress($event, node.folder)"
+        @touchend="cancelLongPress"
+        @touchmove="cancelLongPress"
+        @touchcancel="cancelLongPress"
       >
         <span class="folder-expand" @click.stop="toggleExpand(node.folder)">
           <template v-if="node.isLoading">⏳</template>
@@ -350,6 +487,18 @@ const flatNodes = computed<FlatNode[]>(() => {
         </span>
         <span class="folder-icon">📁</span>
         <span class="folder-name">{{ node.folder.name }}</span>
+        <span
+          v-if="isProfileDefault(node.folder.fullPath)"
+          class="folder-row-default"
+          :title="t('chat.defaultWorkspace')"
+          aria-hidden="true"
+        >●</span>
+        <span
+          v-if="isFavorite(node.folder.fullPath)"
+          class="folder-row-star is-pinned"
+          :title="t('chat.workspaceFavorites')"
+          aria-hidden="true"
+        >★</span>
       </div>
 
       <!-- Empty children indicator for expanded folders with no children -->
@@ -368,23 +517,43 @@ const flatNodes = computed<FlatNode[]>(() => {
       </div>
     </div>
 
+    <!--
+      Display-only row under the directory tree: this profile's default first,
+      then the account's favourites. Changing either is done from the context
+      menu (right click, or long press on touch) -- there is deliberately no
+      button here, so the tree keeps a single gesture vocabulary.
+    -->
+    <div v-if="shortcutEntries.length > 0" class="folder-shortcuts">
+      <div class="folder-shortcuts-row">
+        <button
+            v-for="entry in shortcutEntries"
+            :key="`shortcut-${entry.path}`"
+            class="folder-shortcut-chip"
+            :class="{ selected: selectedPath === entry.path }"
+            type="button"
+            :title="entry.path"
+            @click="updateSelectedPath(entry.path)"
+            @contextmenu="showContextMenu($event, favoriteEntry(entry.path))"
+            @touchstart="startLongPress($event, favoriteEntry(entry.path))"
+            @touchend="cancelLongPress"
+            @touchmove="cancelLongPress"
+            @touchcancel="cancelLongPress"
+          >
+            <span v-if="entry.isDefault" class="folder-shortcut-default" :title="t('chat.defaultWorkspace')">●</span>
+            <span v-if="entry.isFavorite" class="folder-shortcut-star" :title="t('chat.workspaceFavorites')">★</span>
+            <span class="folder-shortcut-name">{{ workspaceFolderName(entry.path) }}</span>
+          </button>
+      </div>
+    </div>
+
     <!-- Selected path display -->
     <div v-if="selectedPath" class="folder-selected">
       <span class="folder-selected-label">{{ t('chat.folderPickerSelected') }}</span>
       <span class="folder-selected-path" :title="selectedPath">{{ selectedPath }}</span>
-      <button
-        v-if="props.showFavorite"
-        class="folder-selected-favorite"
-        type="button"
-        :disabled="props.favoriteDisabled"
-        :title="props.favoriteTitle"
-        :aria-label="props.favoriteTitle"
-        @click.stop="emit('toggle-favorite')"
-      >
-        <span class="folder-selected-star" :class="{ 'is-pinned': props.favorite }">
-          {{ props.favorite ? '★' : '☆' }}
-        </span>
-      </button>
+      <span class="folder-selected-marks" aria-hidden="true">
+        <span v-if="isProfileDefault(selectedPath)" class="folder-shortcut-default">●</span>
+        <span v-if="isFavorite(selectedPath)" class="folder-shortcut-star">★</span>
+      </span>
     </div>
 
     <NDropdown
@@ -423,6 +592,8 @@ const flatNodes = computed<FlatNode[]>(() => {
 </template>
 
 <style scoped lang="scss">
+@use "@/styles/variables" as *;
+
 .folder-picker {
   max-height: 360px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -462,6 +633,10 @@ const flatNodes = computed<FlatNode[]>(() => {
   border-radius: 4px;
   cursor: pointer;
   transition: background 0.15s;
+  // A long press opens the context menu, so it must not also select text or
+  // trigger the iOS callout.
+  user-select: none;
+  -webkit-touch-callout: none;
 
   &:hover {
     background: rgba(255, 255, 255, 0.06);
@@ -541,33 +716,6 @@ const flatNodes = computed<FlatNode[]>(() => {
   min-width: 0;
 }
 
-.folder-selected-favorite {
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 4px;
-  padding: 0;
-  margin-inline-start: 2px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(255, 255, 255, 0.55);
-  background: transparent;
-  cursor: pointer;
-  transition: background 0.15s, transform 0.15s, color 0.15s;
-
-  &:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
-    transform: scale(1.08);
-  }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-}
-
 .folder-selected-star {
   font-size: 16px;
   line-height: 1;
@@ -576,4 +724,103 @@ const flatNodes = computed<FlatNode[]>(() => {
     color: #f5a623;
   }
 }
+
+.folder-shortcuts {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.folder-shortcuts-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  max-height: 76px;
+  overflow-y: auto;
+}
+
+.folder-shortcut-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 170px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  background: transparent;
+  color: $text-secondary;
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  user-select: none;
+  -webkit-touch-callout: none;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  &.selected {
+    border-color: rgba(var(--accent-primary-rgb), 0.6);
+    color: $text-primary;
+  }
+}
+
+.folder-shortcut-default {
+  color: #f5a623;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.folder-shortcut-star {
+  color: #f5a623;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.folder-shortcut-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-selected-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.folder-row-default {
+  margin-inline-start: auto;
+  padding-inline-start: 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: #f5a623;
+  flex-shrink: 0;
+}
+
+.folder-row-star {
+  margin-inline-start: auto;
+  padding-inline-start: 6px;
+  font-size: 12px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.5);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+
+  &.is-pinned {
+    color: #f5a623;
+  }
+
+  &:hover {
+    color: #f5a623;
+  }
+}
+
 </style>

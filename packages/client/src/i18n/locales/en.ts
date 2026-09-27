@@ -1183,6 +1183,14 @@ export default {
     resumeSpeech: 'Resume',
     stopSpeech: 'Stop',
     speechNotSupported: 'Voice playback not supported in this browser',
+    workspaceFavorites: 'Favourites',
+    workspaceFavorite: 'Add to favourites',
+    workspaceUnfavorite: 'Remove from favourites',
+    workspaceFavorited: 'Added to favourites',
+    workspaceUnfavorited: 'Removed from favourites',
+    workspaceDefaultSet: 'Set as this profile\'s default workspace',
+    workspaceDefaultCleared: 'Default workspace cleared',
+    workspaceShortcuts: 'Default & favourites',
   },
 
   workflow: {

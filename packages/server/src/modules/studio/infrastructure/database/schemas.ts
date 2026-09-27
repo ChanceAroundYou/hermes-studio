@@ -63,6 +63,26 @@ export const SESSION_CATEGORIES_INDEXES = {
   uniq_session_categories_name: 'CREATE UNIQUE INDEX IF NOT EXISTS uniq_session_categories_name ON session_categories(name COLLATE NOCASE)',
 }
 
+/**
+ * Workspace favourites are user-level and server-owned, so the same list shows
+ * up in every browser and on every device. This is deliberately a separate
+ * concept from the per-profile default workspace: you can favourite a dozen
+ * directories and still have exactly one default for a profile.
+ */
+export const WORKSPACE_FAVORITES_TABLE = 'workspace_favorites'
+
+export const WORKSPACE_FAVORITES_SCHEMA: Record<string, string> = {
+  id: 'INTEGER PRIMARY KEY AUTOINCREMENT',
+  user_id: 'INTEGER NOT NULL',
+  path: 'TEXT NOT NULL',
+  created_at: 'INTEGER NOT NULL',
+}
+
+export const WORKSPACE_FAVORITES_INDEXES = {
+  uniq_workspace_favorites_user_path: 'CREATE UNIQUE INDEX IF NOT EXISTS uniq_workspace_favorites_user_path ON workspace_favorites(user_id, path)',
+  idx_workspace_favorites_user: 'CREATE INDEX IF NOT EXISTS idx_workspace_favorites_user ON workspace_favorites(user_id, created_at)',
+}
+
 export const SESSIONS_SCHEMA: Record<string, string> = {
   id: 'TEXT PRIMARY KEY',
   profile: 'TEXT NOT NULL DEFAULT \'default\'',
@@ -456,6 +476,34 @@ export const USER_PROFILES_SCHEMA: Record<string, string> = {
   profile_name: "TEXT NOT NULL DEFAULT 'default'",
   is_default: 'INTEGER NOT NULL DEFAULT 0',
   created_at: 'INTEGER NOT NULL',
+  // Kept only so an existing install does not lose a value written before the
+  // per-profile default moved to its own table. The read/write path is
+  // USER_PROFILE_WORKSPACES_TABLE: an allowlist is access control and gets
+  // rewritten whenever an account is saved, which must not touch user data.
+  workspace: 'TEXT',
+}
+
+/**
+ * The one directory a profile works in by default.
+ *
+ * Deliberately a separate table from the profile allowlist:
+ *   - it is user data, not access control, so saving an account (which rewrites
+ *     the allowlist, and hard-codes an empty list for a super admin) must not
+ *     discard it;
+ *   - a super admin has no allowlist row at all, so the value needs a home that
+ *     does not depend on being listed.
+ */
+export const USER_PROFILE_WORKSPACES_TABLE = 'user_profile_workspaces'
+
+export const USER_PROFILE_WORKSPACES_SCHEMA: Record<string, string> = {
+  user_id: 'INTEGER NOT NULL',
+  profile_name: 'TEXT NOT NULL',
+  workspace: 'TEXT',
+  updated_at: 'INTEGER NOT NULL',
+}
+
+export const USER_PROFILE_WORKSPACES_INDEXES = {
+  idx_user_profile_workspaces_pk: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_workspaces_pk ON user_profile_workspaces(user_id, profile_name)',
 }
 
 export const USER_PROFILES_INDEXES = {
@@ -1519,6 +1567,10 @@ export function initAllHermesTables(): void {
     syncTable(SESSION_CATEGORIES_TABLE, SESSION_CATEGORIES_SCHEMA, {
       indexes: SESSION_CATEGORIES_INDEXES,
     })
+    syncTable(WORKSPACE_FAVORITES_TABLE, WORKSPACE_FAVORITES_SCHEMA, {
+      indexes: WORKSPACE_FAVORITES_INDEXES,
+    })
+    createIndexes(db, WORKSPACE_FAVORITES_INDEXES)
     syncTable(TASK_PLANS_TABLE, TASK_PLANS_SCHEMA, {
       indexes: {
         idx_task_plans_identity: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_task_plans_identity ON task_plans(session_id, plan_id)',
@@ -1583,6 +1635,10 @@ export function initAllHermesTables(): void {
     syncTable(USER_PROFILES_TABLE, USER_PROFILES_SCHEMA, {
       primaryKey: 'user_id, profile_name',
       indexes: USER_PROFILES_INDEXES,
+    })
+    syncTable(USER_PROFILE_WORKSPACES_TABLE, USER_PROFILE_WORKSPACES_SCHEMA, {
+      primaryKey: 'user_id, profile_name',
+      indexes: USER_PROFILE_WORKSPACES_INDEXES,
     })
     syncTable(USER_THEMES_TABLE, USER_THEMES_SCHEMA)
 

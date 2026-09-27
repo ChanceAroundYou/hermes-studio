@@ -862,6 +862,26 @@ export function getSessionDetail(id: string): HermesSessionDetailRow | null {
 
 // --- Message CRUD ---
 
+/**
+ * Advance a session's `last_active` to `timestamp`, never backwards.
+ *
+ * This is the single chokepoint every persisted message passes through, which
+ * is what makes it the right place. Previously `last_active` was only written
+ * when a run *started* and recomputed when it *ended*
+ * (`updateSessionStats` from the run handlers), so for the whole duration of a
+ * long run the column sat at the start time: a second browser or device, and
+ * the sidebar's own poll, showed a session as idle at the moment it was busiest.
+ *
+ * Monotonic on purpose — an out-of-order or back-dated message must not drag the
+ * activity time backwards.
+ */
+function advanceLastActive(db: any, sessionId: string, timestamp: number): void {
+  if (!sessionId || !Number.isFinite(timestamp)) return
+  db.prepare(
+    `UPDATE ${SESSIONS_TABLE} SET last_active = MAX(last_active, ?) WHERE id = ?`,
+  ).run(Math.floor(timestamp), sessionId)
+}
+
 export function addMessage(msg: {
   session_id: string
   role: string
@@ -896,6 +916,7 @@ export function addMessage(msg: {
     msg.reasoning_content ?? null,
   )
   const messageId = Number(result.lastInsertRowid)
+  advanceLastActive(db, msg.session_id, msg.timestamp ?? Math.floor(Date.now() / 1000))
   recordSkillUsageMessage(messageId, msg)
   return messageId
 }
@@ -924,23 +945,32 @@ export function addMessages(msgs: Array<{
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
   const ids: number[] = []
+  // Newest timestamp per session, so a batch costs one UPDATE per session
+  // rather than one per message.
+  const newestBySession = new Map<string, number>()
   db.exec('BEGIN')
   try {
     for (const msg of msgs) {
       const toolCallsJson = msg.tool_calls ? JSON.stringify(msg.tool_calls) : null
+      const timestamp = msg.timestamp ?? Math.floor(Date.now() / 1000)
       const result = insert.run(
         msg.session_id, msg.role, normalizeMessageContentForStorageRole(msg.role, msg.content),
         msg.display_role ?? null, msg.display_content ?? null,
         msg.tool_call_id ?? null, toolCallsJson, msg.tool_name ?? null,
         msg.run_marker ?? null,
-        msg.timestamp ?? Math.floor(Date.now() / 1000),
+        timestamp,
         msg.token_count ?? null, msg.finish_reason ?? null,
         msg.reasoning ?? null, msg.reasoning_details ?? null,
         msg.reasoning_content ?? null,
       )
       const messageId = Number(result.lastInsertRowid)
       ids.push(messageId)
+      const seen = newestBySession.get(msg.session_id)
+      if (seen === undefined || timestamp > seen) newestBySession.set(msg.session_id, timestamp)
       recordSkillUsageMessage(messageId, msg)
+    }
+    for (const [sessionId, timestamp] of newestBySession) {
+      advanceLastActive(db, sessionId, timestamp)
     }
     db.exec('COMMIT')
     return ids

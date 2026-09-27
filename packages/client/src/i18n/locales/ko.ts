@@ -1291,6 +1291,14 @@ export default {
     },
     forkedFrom: '포크 출처',
     previousLastMessage: '이전 마지막 메시지',
+    workspaceFavorites: '즐겨찾기',
+    workspaceFavorite: '즐겨찾기에 추가',
+    workspaceUnfavorite: '즐겨찾기에서 제거',
+    workspaceFavorited: '즐겨찾기에 추가했습니다',
+    workspaceUnfavorited: '즐겨찾기에서 제거했습니다',
+    workspaceDefaultSet: '이 프로필의 기본 작업 폴더로 설정했습니다',
+    workspaceDefaultCleared: '기본 작업 폴더를 해제했습니다',
+    workspaceShortcuts: '기본값 및 즐겨찾기',
   },
 
   // 예약 작업

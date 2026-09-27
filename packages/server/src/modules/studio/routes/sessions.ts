@@ -4,6 +4,11 @@ import * as ctrl from '../controllers/sessions'
 export const sessionRoutes = new Router()
 
 sessionRoutes.get('/api/studio/sessions/conversations', ctrl.listConversations)
+sessionRoutes.get('/api/studio/workspace/preferences', ctrl.listWorkspacePreferences)
+sessionRoutes.post('/api/studio/workspace/favorites', ctrl.addWorkspaceFavorite)
+sessionRoutes.delete('/api/studio/workspace/favorites', ctrl.removeWorkspaceFavorite)
+sessionRoutes.put('/api/studio/workspace/default', ctrl.setDefaultWorkspace)
+
 sessionRoutes.get('/api/studio/session-categories', ctrl.listCategories)
 sessionRoutes.post('/api/studio/session-categories', ctrl.createCategory)
 sessionRoutes.patch('/api/studio/session-categories/:id', ctrl.renameCategory)

@@ -57,8 +57,11 @@ import { buildVisibleSessionCategoryGroups, partitionRecentSessions } from "./se
 import { buildSessionCategoryMenuChildren, resolveRecentSessionCategoryLabel } from "./session-category-menu";
 import { buildActiveSessionMenuOptions, buildSessionContextMenuOptions } from "./session-menu-options";
 import PageSidebarNav from "@/components/layout/PageSidebarNav.vue";
-import { isStoredSuperAdmin } from "@/api/client";
-import { useDefaultWorkspace } from "@/composables/useDefaultWorkspace";
+import { getActiveProfileName, isStoredSuperAdmin } from "@/api/client";
+import { useRecentWorkspaces } from "@/composables/useRecentWorkspaces";
+import { useWorkspacePreferences } from "@/composables/useWorkspacePreferences";
+import { resolveProfileDisplayName } from "@/utils/hermes/profile-display-name";
+import { workspaceFolderName } from "@/utils/hermes/workspace-path";
 import { useCollapsedProviderGroups } from "@/composables/useCollapsedProviderGroups";
 import { canScopedCodingAgentUseProvider, usesServerManagedProviderAuth, isKeylessModelProvider, openCodeFreeApiMode } from "@/utils/codingAgentProviders";
 import { OPEN_SUBAGENT_STREAM_EVENT, type OpenSubagentStreamDetail } from "@/utils/hermes/subagent-stream";
@@ -664,8 +667,9 @@ function toggleCategoryGroup(key: string) {
 const profileFilterOptions = computed(() => [
   { label: t("chat.allProfiles"), value: "__all__" },
   ...profilesStore.profiles.map((profile) => ({
-    // Show the custom display name; the value stays the real profile name.
-    label: profile.displayName || profile.name,
+    // Same resolver as everywhere else, so `alias` and the custom name resolve
+    // identically here.
+    label: resolveProfileDisplayName(profilesStore.profiles, profile.name) || profile.name,
     value: profile.name,
   })),
 ]);
@@ -895,98 +899,40 @@ async function handleNewChatCategoryChange(value: string | number | null) {
   }
 }
 
-// Default workspace feature (multiple defaults supported)
-const defaultWorkspaces = ref<string[]>([]);
-const recentWorkspaces = ref<Array<{ path: string; lastUsed: number; useCount: number }>>([]);
-let workspaceComposable: ReturnType<typeof useDefaultWorkspace> | null = null;
+// Two independent, account-scoped features, both server-owned so they are the
+// same in every browser and on every device:
+//   - favourites: a shared list of directories, used by every profile;
+//   - default: the single directory one profile works in, auto-applied when a
+//     new session starts for that profile.
+// Only "recently used" is device-local, because it is genuine usage history.
+const recentState = useRecentWorkspaces();
+const recentWorkspaces = recentState.recentWorkspaces;
+const workspacePreferences = useWorkspacePreferences();
+
+const profileDefaultWorkspace = computed(() => workspacePreferences.defaultWorkspaceFor(newChatProfile.value));
 
 function initWorkspaceComposable(profile: string) {
-  workspaceComposable = useDefaultWorkspace(profile);
-  defaultWorkspaces.value = workspaceComposable.loadDefaultWorkspaces();
-  recentWorkspaces.value = workspaceComposable.loadRecentWorkspaces();
-}
-
-function handleToggleDefaultWorkspace() {
-  if (!workspaceComposable) return;
-  const currentPath = newChatWorkspace.value;
-  if (!currentPath) return;
-  
-  const isDefault = defaultWorkspaces.value.includes(currentPath);
-  if (isDefault) {
-    workspaceComposable.removeDefaultWorkspace(currentPath);
-    defaultWorkspaces.value = defaultWorkspaces.value.filter(p => p !== currentPath);
-  } else {
-    workspaceComposable.addDefaultWorkspace(currentPath);
-    defaultWorkspaces.value = [...defaultWorkspaces.value, currentPath];
-  }
+  void workspacePreferences.refresh(profile);
+  recentState.loadRecentWorkspaces();
 }
 
 function handleSelectRecentWorkspace(path: string) {
   newChatWorkspace.value = path;
 }
 
-function handleSelectDefaultWorkspace(path: string) {
-  newChatWorkspace.value = path;
-  showDefaultWorkspaceMenu.value = false;
+async function handleTogglePinRecent(path: string) {
+  await workspacePreferences.toggleFavorite(path);
 }
 
-function handleTogglePinRecent(path: string) {
-  if (!workspaceComposable) return;
-  const isDefault = defaultWorkspaces.value.includes(path);
-  if (isDefault) {
-    workspaceComposable.removeDefaultWorkspace(path);
-    defaultWorkspaces.value = defaultWorkspaces.value.filter(p => p !== path);
-  } else {
-    workspaceComposable.addDefaultWorkspace(path);
-    defaultWorkspaces.value = [...defaultWorkspaces.value, path];
-  }
-}
+// The header's workspace modal edits the live session, not the new-chat draft,
+// and it targets the profile that session belongs to.
+const liveSessionProfile = computed(() => chatStore.activeSession?.profile || getActiveProfileName() || "default");
 
-const isCurrentWorkspaceDefault = computed(() => {
-  return Boolean(newChatWorkspace.value && defaultWorkspaces.value.includes(newChatWorkspace.value));
-});
+const getFolderName = workspaceFolderName;
 
-const showDefaultWorkspaceMenu = ref(false);
-
-function getFolderName(path: string | null): string {
-  if (!path) return '';
-  const parts = path.split('/');
-  return parts[parts.length - 1] || path;
-}
-
-const mostRecentDefaultWorkspace = computed(() => {
-  if (defaultWorkspaces.value.length === 0) return null;
-  
-  // 从最近使用记录中找第一个默认工作区
-  const recent = [...recentWorkspaces.value].sort((a, b) => b.lastUsed - a.lastUsed);
-  for (const entry of recent) {
-    if (defaultWorkspaces.value.includes(entry.path)) {
-      return entry.path;
-    }
-  }
-  
-  // 如果没有使用记录，返回第一个默认工作区
-  return defaultWorkspaces.value[0];
-});
-
-// 动态计算可见的工作区数量（根据容器宽度）
-const visibleDefaultWorkspaces = computed(() => {
-  if (defaultWorkspaces.value.length === 0) return [];
-  
-  // 简单策略：前2个总是可见，其余通过"更多"菜单
-  // 未来可以根据实际容器宽度动态调整
-  const maxVisible = Math.min(2, defaultWorkspaces.value.length);
-  return defaultWorkspaces.value.slice(0, maxVisible);
-});
-
-const hasHiddenDefaults = computed(() => {
-  return defaultWorkspaces.value.length > visibleDefaultWorkspaces.value.length;
-});
-
-const hiddenDefaultWorkspaces = computed(() => {
-  const visible = new Set(visibleDefaultWorkspaces.value);
-  return defaultWorkspaces.value.filter(ws => !visible.has(ws));
-});
+// A profile has exactly one default workspace: it is either set or it is not,
+// so there is nothing to paginate and no "more" menu.
+const mostRecentDefaultWorkspace = computed(() => profileDefaultWorkspace.value || null);
 
 const newChatAgentOptions = computed(() => [
   { label: "Hermes", value: "hermes" },
@@ -1084,12 +1030,17 @@ function getDefaultModelForProfile(profile: string) {
   };
 }
 
-const newChatProfileOptions = computed(() =>
-  (profilesStore.profiles.length > 0 ? profilesStore.profiles : [{ name: "default" }]).map((profile) => ({
-    label: profile.name,
+// The label is what the user calls the profile (e.g. "小鸡毛"); the value stays
+// the real profile name because every API call uses it.
+const newChatProfileOptions = computed(() => {
+  const options = profilesStore.profiles.map(profile => ({
+    label: resolveProfileDisplayName(profilesStore.profiles, profile.name) || profile.name,
     value: profile.name,
-  })),
-);
+  }))
+  if (options.length > 0) return options
+  // Profiles not loaded yet: still prefer the custom name if it is already known.
+  return [{ label: resolveProfileDisplayName(profilesStore.profiles, "default") || "default", value: "default" }]
+})
 
 const newChatModelGroups = computed(() => {
   const groups = getSelectableModelGroupsForProfile(newChatProfile.value);
@@ -1385,9 +1336,8 @@ async function confirmNewChat() {
     apiMode: isNewChatCodingAgent.value && !isGlobalCodingAgent ? newChatApiMode.value : undefined,
   });
   // Record workspace to recent list
-  if (newChatWorkspace.value && workspaceComposable) {
-    workspaceComposable.recordWorkspaceUsage(newChatWorkspace.value);
-    recentWorkspaces.value = workspaceComposable.loadRecentWorkspaces();
+  if (newChatWorkspace.value) {
+    recentState.recordWorkspaceUsage(newChatWorkspace.value);
   }
   
   await router.push({
@@ -2798,7 +2748,8 @@ async function handleSessionModelCustomSubmit() {
       style="width: 520px"
       @positive-click="handleWorkspaceConfirm"
     >
-      <FolderPicker v-model="workspaceValue" />
+      <!-- Favourite and default are both set from the picker's context menu. -->
+      <FolderPicker v-model="workspaceValue" :profile="liveSessionProfile" />
     </NModal>
 
     <NModal
@@ -3098,54 +3049,14 @@ async function handleSessionModelCustomSubmit() {
           <div class="new-chat-field">
             <span class="new-chat-label">
               {{ t("chat.workspace") }}
-              <NTooltip v-if="isCurrentWorkspaceDefault">
+              <NTooltip v-if="newChatWorkspace === profileDefaultWorkspace">
                 <template #trigger>
                   <span class="workspace-default-badge">{{ t("chat.workspaceDefault") }}</span>
                 </template>
                 {{ t("chat.workspaceDefaultTooltip") }}
               </NTooltip>
             </span>
-            <!-- Default workspace chips -->
-            <div v-if="defaultWorkspaces.length > 0" class="default-workspace-chips">
-              <span class="default-workspace-label">{{ t("chat.defaultWorkspace") }}:</span>
-              <div class="workspace-chips-container">
-                <template v-for="(ws, index) in visibleDefaultWorkspaces" :key="ws">
-                  <div
-                    class="workspace-chip"
-                    :class="{ active: newChatWorkspace === ws }"
-                    @click="handleSelectDefaultWorkspace(ws)"
-                    :title="ws"
-                  >
-                    {{ getFolderName(ws) }}
-                  </div>
-                  <span v-if="index < visibleDefaultWorkspaces.length - 1 || hasHiddenDefaults" class="workspace-chip-separator">/</span>
-                </template>
-                <div v-if="hasHiddenDefaults" class="workspace-chip-dropdown">
-                  <button class="workspace-chip-more" @click="showDefaultWorkspaceMenu = !showDefaultWorkspaceMenu">
-                    {{ t("chat.more") }} ▼
-                  </button>
-                  <div v-if="showDefaultWorkspaceMenu" class="workspace-dropdown-menu">
-                    <div
-                      v-for="ws in hiddenDefaultWorkspaces"
-                      :key="ws"
-                      class="workspace-dropdown-item"
-                      @click="handleSelectDefaultWorkspace(ws)"
-                      :title="ws"
-                    >
-                      {{ getFolderName(ws) }}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <FolderPicker
-              v-model="newChatWorkspace"
-              show-favorite
-              :favorite="isCurrentWorkspaceDefault"
-              :favorite-disabled="!newChatWorkspace"
-              :favorite-title="isCurrentWorkspaceDefault ? t('chat.workspaceUnpin') : t('chat.workspacePin')"
-              @toggle-favorite="handleToggleDefaultWorkspace"
-            />
+            <FolderPicker v-model="newChatWorkspace" :profile="newChatProfile" />
             <div v-if="recentWorkspaces.length > 0" class="recent-workspaces">
               <span class="recent-workspaces-label">{{ t("chat.workspaceRecent") }}:</span>
               <div class="recent-workspaces-chips">
@@ -3158,10 +3069,10 @@ async function handleSessionModelCustomSubmit() {
                 >
                   <template #icon>
                     <span
-                      v-if="defaultWorkspaces.includes(ws.path)"
+                      v-if="workspacePreferences.isFavorite(ws.path)"
                       class="recent-pin-icon"
                       @click.stop="handleTogglePinRecent(ws.path)"
-                      :title="t('chat.workspaceUnpin')"
+                      :title="t('chat.workspaceUnfavorite')"
                     >★</span>
                     <span
                       v-else
@@ -3237,24 +3148,24 @@ async function handleSessionModelCustomSubmit() {
               </svg>
             </template>
           </NButton>
-          <span class="header-session-title" dir="auto">{{ headerTitle }}</span>
-          <button
-            v-if="chatStore.activeSession?.workspace"
-            class="workspace-badge"
-            type="button"
-            :title="chatStore.activeSession.workspace"
-            @click="openActiveSessionWorkspace"
+          <div
+            class="header-identity"
+            :class="{ 'header-identity--with-workspace': !!chatStore.activeSession?.workspace }"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-            </svg>
-            <span>
-              {{
-                chatStore.activeSession.workspace.split("/").pop() ||
-                chatStore.activeSession.workspace
-              }}
-            </span>
-          </button>
+            <span class="header-session-title" dir="auto">{{ headerTitle }}</span>
+            <button
+              v-if="chatStore.activeSession?.workspace"
+              class="workspace-badge"
+              type="button"
+              :title="chatStore.activeSession.workspace"
+              @click="openActiveSessionWorkspace"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              </svg>
+              <span>{{ workspaceFolderName(chatStore.activeSession.workspace) }}</span>
+            </button>
+          </div>
         </div>
         <div class="header-actions">
           <!-- chat/live mode toggle hidden -->
@@ -4275,19 +4186,53 @@ async function handleSessionModelCustomSubmit() {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   overflow: hidden;
   flex: 1;
   min-width: 0;
 }
 
+// Session title on top, workspace directory underneath.
+//
+// The block is deliberately sized to exactly --app-menu-btn-size (18px title
+// line + 2px gap + 16px badge) and keeps `min-height` at that size. Because the
+// column is `justify-content: center`, the block's centre therefore lands on
+// the centre line of whatever sits to its left -- the grid button on desktop,
+// the menu button on mobile -- instead of drifting down as the lines change.
+.header-identity {
+  // Metrics of the workspace badge below, declared once so the badge and the
+  // title's indent cannot drift apart.
+  --ws-badge-pad: 8px;
+  --ws-badge-icon: 12px;
+  --ws-badge-gap: 4px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: var(--app-menu-btn-size);
+  overflow: hidden;
+}
+
+// The title's left edge lines up with the folder ICON's left edge, i.e. it only
+// clears the badge's own inset. Adding the icon width and the gap as well would
+// line the title up with the "workspace" text instead, which reads as too much
+// indent. Only applied when a badge is actually rendered below.
+.header-identity--with-workspace .header-session-title {
+  padding-inline-start: var(--ws-badge-pad);
+}
+
 .header-session-title {
   font-size: 16px;
+  line-height: 18px;
   font-weight: 600;
   color: $text-primary;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .source-badge {
@@ -4322,36 +4267,36 @@ async function handleSessionModelCustomSubmit() {
 
 @media (max-width: $breakpoint-mobile) {
   .chat-header {
-    padding: calc(16px + env(safe-area-inset-top, 0px)) 12px 16px 52px;
+    // Same top offset and reserve as the menu button, plus 8px of clearance, so
+    // the identity block's centre line meets the button's centre line exactly.
+    padding: var(--app-menu-btn-top) 12px 16px
+      calc(var(--app-menu-btn-inset) + var(--app-menu-btn-size) + 8px);
   }
 
   .header-sidebar-toggle {
     display: none;
   }
-
-  .header-session-title {
-    display: none;
-  }
-
 }
 
 .workspace-badge {
   border: 0;
   font-size: 11px;
-  line-height: 16px;
+  line-height: 14px;
   color: $text-muted;
   background: rgba(255, 255, 255, 0.05);
-  padding: 2px 8px;
+  padding: 1px var(--ws-badge-pad);
   border-radius: 4px;
   max-width: 160px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--ws-badge-gap);
   overflow: hidden;
   cursor: pointer;
 
   svg {
     flex: 0 0 auto;
+    inline-size: var(--ws-badge-icon);
+    block-size: var(--ws-badge-icon);
   }
 
   span {

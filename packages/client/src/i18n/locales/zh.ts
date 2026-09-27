@@ -1183,6 +1183,14 @@ export default {
     resumeSpeech: '继续',
     stopSpeech: '停止',
     speechNotSupported: '此浏览器不支持语音播放',
+    workspaceFavorites: '收藏的工作区',
+    workspaceFavorite: '加入收藏',
+    workspaceUnfavorite: '取消收藏',
+    workspaceFavorited: '已加入收藏',
+    workspaceUnfavorited: '已取消收藏',
+    workspaceDefaultSet: '已设为该 profile 的默认工作区',
+    workspaceDefaultCleared: '已取消默认工作区',
+    workspaceShortcuts: '默认与收藏',
   },
 
   workflow: {

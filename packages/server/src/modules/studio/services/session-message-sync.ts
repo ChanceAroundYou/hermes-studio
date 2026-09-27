@@ -106,8 +106,13 @@ export class SessionMessageSync {
     let ids: string[] = []
     if (onlyRecent) {
       const cutoff = Math.floor(Date.now() / 1000) - SYNC_WINDOW_HOURS * 3600
+      // Unfinished sessions are always swept, however old their last_active is.
+      // Gating purely on that column was self-defeating: the rows this sweep
+      // exists to repair are exactly the ones whose last_active had drifted
+      // outside the window, so they could never be selected and the drift became
+      // permanent.
       const rows = db.prepare(
-        'SELECT id FROM sessions WHERE last_active >= ?',
+        'SELECT id FROM sessions WHERE last_active >= ? OR ended_at IS NULL',
       ).all(cutoff) as Array<{ id: string }>
       ids = rows.map((r) => r.id)
     } else {

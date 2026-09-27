@@ -16,8 +16,16 @@ const dialogMock = vi.hoisted(() => ({
 vi.mock('@/api/client', () => ({
   request: requestMock,
 
+  getActiveProfileName: vi.fn(() => 'default'),
   getBaseUrlValue: vi.fn(() => ''),
   wsOrigin: vi.fn(() => ({ host: '', prefix: '' })),
+}))
+
+vi.mock('@/api/studio/workspace-preferences', () => ({
+  fetchWorkspacePreferences: vi.fn(async () => ({ favorites: [], defaultWorkspace: '', profile: 'default' })),
+  addWorkspaceFavorite: vi.fn(async () => []),
+  removeWorkspaceFavorite: vi.fn(async () => []),
+  setProfileDefaultWorkspace: vi.fn(async () => ({ profile: 'default', defaultWorkspace: '' })),
 }))
 
 vi.mock('@/utils/clipboard', () => ({

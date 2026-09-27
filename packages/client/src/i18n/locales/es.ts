@@ -1291,6 +1291,14 @@ export default {
     },
     forkedFrom: 'Bifurcado de',
     previousLastMessage: 'Mensaje anterior',
+    workspaceFavorites: 'Favoritos',
+    workspaceFavorite: 'Añadir a favoritos',
+    workspaceUnfavorite: 'Quitar de favoritos',
+    workspaceFavorited: 'Añadido a favoritos',
+    workspaceUnfavorited: 'Quitado de favoritos',
+    workspaceDefaultSet: 'Definido como espacio de trabajo predeterminado de este perfil',
+    workspaceDefaultCleared: 'Espacio de trabajo predeterminado borrado',
+    workspaceShortcuts: 'Predeterminado y favoritos',
   },
 
   // Jobs

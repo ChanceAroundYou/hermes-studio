@@ -1174,6 +1174,14 @@ export default {
     openSessionInNewTab: 'Открыть в новой вкладке',
     previousLastMessage: 'Предыдущее последнее сообщение',
     sessionLinkCopied: 'Ссылка на сессию скопирована',
+    workspaceFavorites: 'Избранное',
+    workspaceFavorite: 'Добавить в избранное',
+    workspaceUnfavorite: 'Убрать из избранного',
+    workspaceFavorited: 'Добавлено в избранное',
+    workspaceUnfavorited: 'Убрано из избранного',
+    workspaceDefaultSet: 'Задано рабочей папкой по умолчанию для этого профиля',
+    workspaceDefaultCleared: 'Рабочая папка по умолчанию сброшена',
+    workspaceShortcuts: 'По умолчанию и избранное',
   },
 
 

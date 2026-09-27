@@ -21719,6 +21719,79 @@
         ]
       }
     },
+    "/api/studio/workspace/default": {
+      "put": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Update default",
+        "description": "PUT /api/studio/workspace/default",
+        "operationId": "setDefaultWorkspace",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/studio/workspace/favorites": {
+      "post": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Create favorites",
+        "description": "POST /api/studio/workspace/favorites",
+        "operationId": "addWorkspaceFavorite",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Delete favorites",
+        "description": "DELETE /api/studio/workspace/favorites",
+        "operationId": "removeWorkspaceFavorite",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
     "/api/studio/workspace/folders": {
       "get": {
         "tags": [
@@ -21861,6 +21934,32 @@
                 ]
               }
             }
+          }
+        }
+      }
+    },
+    "/api/studio/workspace/preferences": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Get preferences",
+        "description": "GET /api/studio/workspace/preferences",
+        "operationId": "listWorkspacePreferences",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
           }
         }
       }
