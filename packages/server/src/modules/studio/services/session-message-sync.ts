@@ -257,7 +257,7 @@ export class SessionMessageSync {
       // Update webui mirror metadata.
       db.prepare(`UPDATE sessions SET
           message_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?),
-          last_active = (SELECT MAX(timestamp) FROM messages WHERE session_id = ?)
+          last_active = MAX(last_active, (SELECT MAX(timestamp) FROM messages WHERE session_id = ?))
         WHERE id = ?`).run(sessionId, sessionId, sessionId)
       db.exec('COMMIT')
     } catch (err) {

@@ -145,6 +145,25 @@ export interface SessionState {
    * first render.
    */
   runStartedAt?: number
+  /**
+   * Monotonic counter, bumped on every run start and never reset.
+   *
+   * A run clears `runId` and `activeRunMarker` during finalization, and clears
+   * them again when it ends — so those fields cannot tell "still my run" from
+   * "a newer run already came and went". Anything that awaits across a run
+   * boundary (the goal-evaluation LLM call) has to detect that, and a value
+   * that only ever goes up is the only signal that survives both resets.
+   */
+  runEpoch?: number
+  /**
+   * Coarse activity state for UI purposes. Never persisted.
+   *
+   * `finishing` exists so the client can stop showing a session as busy while
+   * the finalization tail (settle delay, usage accounting, goal evaluation) is
+   * still running. Those steps emit no messages, so during them the session
+   * accepts new input instead of queueing it.
+   */
+  runState?: 'idle' | 'running' | 'finishing' | 'background'
   events: Array<{ event: string; data: any }>
   abortController?: AbortController
   runId?: string

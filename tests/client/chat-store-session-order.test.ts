@@ -81,22 +81,40 @@ describe('chat session ordering', () => {
     setActivePinia(createPinia())
   })
 
-  it('orders sessions by the newest known activity timestamp, including started_at', async () => {
+  it('orders sessions by last message time, never by when a run ended', async () => {
     vi.mocked(fetchSessions)
       .mockResolvedValueOnce([
-        makeSession('older-active-session', { started_at: 100, last_active: 900 }),
-        makeSession('new-session-with-stale-last-active', { started_at: 1000, last_active: 200 }),
+        makeSession('ended-late-but-stale', { started_at: 100, last_active: 900, ended_at: 5000 }),
+        makeSession('newer-last-message', { started_at: 1000, last_active: 2000, ended_at: 2000 }),
       ] as any)
       .mockResolvedValueOnce([])
 
     const store = useChatStore()
     await store.loadSessions()
 
+    // `ended_at` (5000) is far later than the other session's last message
+    // (2000). Sorting by it would put `ended-late-but-stale` first, which is
+    // exactly the bug this replaces: a session whose finalization ran long
+    // after its last message outranked a genuinely more recent transcript.
     expect(store.sessions.map(session => session.id)).toEqual([
-      'new-session-with-stale-last-active',
-      'older-active-session',
+      'newer-last-message',
+      'ended-late-but-stale',
     ])
-    expect(store.sessions[0].updatedAt).toBe(1000_000)
+    expect(store.sessions[0].updatedAt).toBe(2000_000)
+  })
+
+  it('falls back to started_at for a session that has no messages yet', async () => {
+    vi.mocked(fetchSessions)
+      .mockResolvedValueOnce([
+        makeSession('has-messages', { started_at: 100, last_active: 900 }),
+        makeSession('brand-new', { started_at: 5000, last_active: 0 }),
+      ] as any)
+      .mockResolvedValueOnce([])
+
+    const store = useChatStore()
+    await store.loadSessions()
+
+    expect(store.sessions.map(session => session.id)).toEqual(['brand-new', 'has-messages'])
   })
 
   it('removes an archived session from the runtime session list', async () => {

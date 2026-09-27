@@ -372,10 +372,15 @@ describe('handleCodingAgentRun', () => {
       coding_agent_id: 'codex',
     }, 'default', sessionMap as any)
 
+    // Reopening a run clears the terminal markers but must NOT touch activity
+    // time: `last_active` is derived solely from the newest persisted message,
+    // and `updateSession` refuses to write it. Starting a run is not activity.
     expect(updateSessionMock).toHaveBeenCalledWith('session-1', expect.objectContaining({
       ended_at: null,
       end_reason: null,
-      last_active: expect.any(Number),
+    }))
+    expect(updateSessionMock).not.toHaveBeenCalledWith('session-1', expect.objectContaining({
+      last_active: expect.anything(),
     }))
     expect(sendCodingAgentRunInputMock).toHaveBeenCalledWith('session-1', 'continue', 'system prompt')
   })
@@ -410,7 +415,6 @@ describe('handleCodingAgentRun', () => {
       expect.objectContaining({
         ended_at: null,
         end_reason: null,
-        last_active: expect.any(Number),
       }),
       expect.objectContaining({
         ended_at: expect.any(Number),

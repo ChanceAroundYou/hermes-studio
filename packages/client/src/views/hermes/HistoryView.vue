@@ -198,7 +198,10 @@ function mapHistoryMessages(messages: HermesMessage[]): Session['messages'] {
     const displayRole = isHistoryMoaToolDisplay(m) ? 'tool' : (m.display_role || m.role)
     const msg: Session['messages'][number] = {
       id: String(m.id),
-      role: displayRole === 'moa' ? 'system' : displayRole,
+      // `error` is a server-persisted outcome, not a conversation turn. This
+      // history view has no red-bubble rendering, so surface it as a system
+      // notice rather than widening the whole view's role union.
+      role: displayRole === 'moa' || displayRole === 'error' ? 'system' : displayRole,
       content: m.content || '',
       timestamp: m.timestamp * 1000,
       reasoning: m.reasoning || undefined,

@@ -444,6 +444,7 @@ export class ChatRunSocket {
     runStartedAt: number
     source?: string
     compression?: SessionState['compression']
+    runState: NonNullable<SessionState['runState']>
   }> {
     const now = Date.now()
     const list: Array<{
@@ -451,13 +452,25 @@ export class ChatRunSocket {
       runStartedAt: number
       source?: string
       compression?: SessionState['compression']
+      runState: NonNullable<SessionState['runState']>
     }> = []
     for (const [sid, state] of this.sessionMap) {
-      if (!state.isWorking) continue
+      // A finalizing run is no longer `isWorking` — it emits no messages and
+      // accepts new input — but the client still has to tell "idle" apart from
+      // "busy wrapping up", so it is reported with an explicit state instead of
+      // being dropped from the snapshot.
+      const runState = state.runState
+      if (!state.isWorking && runState !== 'finishing') continue
       const startedAt = Number(state.runStartedAt) || 0
       // The compression snapshot rides along so the periodic poll can heal a
       // client that missed `compression.completed`, not just the run flags.
-      list.push({ sessionId: sid, runStartedAt: startedAt || now, source: state.source, compression: state.compression ?? null })
+      list.push({
+        sessionId: sid,
+        runStartedAt: startedAt || now,
+        source: state.source,
+        compression: state.compression ?? null,
+        runState: runState ?? 'running',
+      })
     }
     return list
   }
@@ -490,8 +503,8 @@ export class ChatRunSocket {
     this.nsp = io.of('/chat-run')
   }
 
-  updateTaskPlan(contextId: string, profile: string, input: Record<string, unknown>) {
-    return this.taskPlanRuns.update(contextId, profile, input)
+  updateTaskPlan(contextId: string, profile: string, input: Record<string, unknown>, fallbackSessionId?: string) {
+    return this.taskPlanRuns.update(contextId, profile, input, fallbackSessionId)
   }
 
   requestClarification(contextId: string, profile: string, input: Record<string, unknown>, signal?: AbortSignal) {
@@ -1079,6 +1092,8 @@ export class ChatRunSocket {
         state.events = []
         state.isWorking = !isCodingAgentExecution(source, data)
         state.runStartedAt = Date.now()
+        state.runEpoch = (state.runEpoch ?? 0) + 1
+        state.runState = 'running'
         state.profile = runProfile
         state.source = source
       }
@@ -2242,6 +2257,7 @@ export class ChatRunSocket {
         // status response. Use one shared server-side fallback for every
         // client attaching after this Web UI process discovers the run.
         state.runStartedAt = Date.now()
+        state.runEpoch = (state.runEpoch ?? 0) + 1
       }
       state.isWorking = true
       state.isAborting = state.isAborting === true
@@ -2526,7 +2542,10 @@ export class ChatRunSocket {
 
   private runQueuedItem(socket: Socket, sessionId: string, next: QueuedRun, fallbackProfile = 'default') {
     const state = this.sessionMap.get(sessionId)
-    if (state) state.runStartedAt = Date.now()
+    if (state) {
+      state.runStartedAt = Date.now()
+      state.runEpoch = (state.runEpoch ?? 0) + 1
+    }
     const skipUserMessage = next.displayInput === null
     const backgroundContinuationContext = next.backgroundContinuationContext
       || (next.backgroundDelegationId
@@ -2640,6 +2659,8 @@ export class ChatRunSocket {
     state.events = []
     state.isWorking = !isCodingAgentExecution(source, data)
     state.runStartedAt = Date.now()
+    state.runEpoch = (state.runEpoch ?? 0) + 1
+    state.runState = 'running'
     state.profile = profile
     state.source = source
 

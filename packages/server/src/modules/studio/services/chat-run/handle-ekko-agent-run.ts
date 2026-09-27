@@ -560,7 +560,6 @@ export async function handleEkkoAgentRun(
     updateSession(sessionId, {
       ended_at: null,
       end_reason: null,
-      last_active: now,
       ...(data.category_id !== undefined ? { category_id: data.category_id } : {}),
     })
   } catch (err) {

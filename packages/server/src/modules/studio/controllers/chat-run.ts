@@ -77,6 +77,7 @@ export async function workingSessions(ctx: Context) {
         runStartedAt: number
         source?: string
         compression?: unknown
+        runState?: 'idle' | 'running' | 'finishing' | 'background'
       }>)
     : []
   ctx.body = { sessions: sessions.map(session => ({
@@ -84,6 +85,10 @@ export async function workingSessions(ctx: Context) {
     run_started_at: session.runStartedAt,
     source: session.source || null,
     compression: session.compression ?? null,
+    // `finishing` sessions appear here even though they are not `isWorking`,
+    // so the client can avoid showing them as busy while still knowing they
+    // are not simply idle.
+    run_state: session.runState || 'running',
   })) }
 }
 

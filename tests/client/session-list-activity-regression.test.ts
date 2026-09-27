@@ -74,44 +74,36 @@ beforeEach(() => {
   sessionsApi.fetchWorkingSessions.mockResolvedValue([])
 })
 
-describe('session activity time is monotonic across polls', () => {
-  it('does not roll a locally observed time back to the server older last_active', async () => {
-    // Server still thinks the session was last touched at 16:09.
+describe('the sidebar mirrors the server\'s activity time', () => {
+  it('takes the server value as-is, even when it is older than what we had', async () => {
     serverSees(1_789_995_333)
     const store = await settle()
-    const serverOnlyTime = store.sessions[0].updatedAt
+    expect(store.sessions[0].updatedAt).toBe(1_789_995_333 * 1000)
 
-    // The user opens it and activity is observed locally (socket deltas,
-    // generated title, ...), which bumps it to "now".
-    const localTime = Date.now()
-    store.sessions[0].updatedAt = localTime
+    // Anything the client had locally is not authoritative and must not survive.
+    store.sessions[0].updatedAt = Date.now()
 
-    // The next 12s poll still reports the stale 16:09.
+    serverSees(1_789_995_333)
     await settle()
-
-    expect(store.sessions[0].updatedAt).toBe(localTime)
-    expect(store.sessions[0].updatedAt).toBeGreaterThan(serverOnlyTime)
+    expect(store.sessions[0].updatedAt).toBe(1_789_995_333 * 1000)
   })
 
-  it('still adopts a newer server time, so another device re-orders the list', async () => {
+  it('follows the server forward when a run is in flight', async () => {
     serverSees(1_789_995_333)
     const store = await settle()
-    const before = store.sessions[0].updatedAt
 
-    // Another device used the session: the server is now ahead.
-    const newer = before + 5 * 60_000
-    serverSees(Math.floor(newer / 1000) + 1)
+    // The server advanced because messages were persisted.
+    const running = 1_789_999_999
+    serverSees(running)
     await settle()
-
-    expect(store.sessions[0].updatedAt).toBeGreaterThanOrEqual(newer)
+    expect(store.sessions[0].updatedAt).toBe(running * 1000)
   })
 
-  it('keeps the row stable across repeated polls carrying the same data', async () => {
+  it('never invents activity locally', async () => {
     serverSees(1_789_995_333)
     const store = await settle()
-    const first = store.sessions[0].updatedAt
-    await settle()
-    await settle()
-    expect(store.sessions[0].updatedAt).toBe(first)
+    // Polling repeatedly must not drift the timestamp at all.
+    for (let i = 0; i < 4; i += 1) await settle()
+    expect(store.sessions[0].updatedAt).toBe(1_789_995_333 * 1000)
   })
 })

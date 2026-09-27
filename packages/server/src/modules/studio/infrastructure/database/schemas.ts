@@ -1174,6 +1174,44 @@ function addMissingSafeColumns(
   }
 }
 
+/**
+ * Bring `sessions.last_active` back in line with the messages table, once.
+ *
+ * Activity time is now derived: only a persisted message may advance it. The
+ * writers that used to disagree with that — a run stamping `now` on startup,
+ * `updateSessionStats` recomputing the column — are gone, but the rows they
+ * touched kept their drifted values, and a drifted value is exactly what made a
+ * session read 00:28 while its newest message was 00:24.
+ *
+ * This is the one operation allowed to move activity time backwards, and it is
+ * guarded by the same migration ledger the group-chat repair uses so it runs
+ * once. Sessions with no messages fall back to `started_at`.
+ */
+function migrateSessionLastActiveToNewestMessage(db: any): void {
+  const migrationId = 'session-last-active-from-messages-v1'
+  const seen = db
+    .prepare(`SELECT 1 FROM ${quoteIdentifier(GC_ACTIVITY_MIGRATIONS_TABLE)} WHERE id = ?`)
+    .get(migrationId)
+  if (seen) return
+
+  db.prepare(
+    `UPDATE ${quoteIdentifier(SESSIONS_TABLE)}
+     SET last_active = COALESCE(
+       (SELECT MAX(timestamp) FROM ${quoteIdentifier(MESSAGES_TABLE)} WHERE session_id = ${quoteIdentifier(SESSIONS_TABLE)}.id),
+       started_at
+     )
+     WHERE EXISTS (SELECT 1 FROM ${quoteIdentifier(MESSAGES_TABLE)} WHERE session_id = ${quoteIdentifier(SESSIONS_TABLE)}.id)
+        AND last_active != COALESCE(
+              (SELECT MAX(timestamp) FROM ${quoteIdentifier(MESSAGES_TABLE)} WHERE session_id = ${quoteIdentifier(SESSIONS_TABLE)}.id),
+              started_at
+            )`,
+  ).run()
+
+  db.prepare(
+    `INSERT INTO ${quoteIdentifier(GC_ACTIVITY_MIGRATIONS_TABLE)} (id, migrationCutoff) VALUES (?, ?)`,
+  ).run(migrationId, Date.now())
+}
+
 function migrateGroupChatActivityTimes(
   db: NonNullable<ReturnType<typeof getDb>>,
   migrationCutoff: number,
@@ -1746,6 +1784,7 @@ export function initAllHermesTables(): void {
     })
     syncTable(GC_ACTIVITY_MIGRATIONS_TABLE, GC_ACTIVITY_MIGRATIONS_SCHEMA)
     migrateGroupChatActivityTimes(db, Date.now())
+    migrateSessionLastActiveToNewestMessage(db)
     syncTable(GC_CONTEXT_SNAPSHOTS_TABLE, GC_CONTEXT_SNAPSHOTS_SCHEMA)
     syncTable(GC_ROOM_SUMMARIES_TABLE, GC_ROOM_SUMMARIES_SCHEMA)
     syncTable(GC_PENDING_SESSION_DELETES_TABLE, GC_PENDING_SESSION_DELETES_SCHEMA)

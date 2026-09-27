@@ -111,7 +111,7 @@ export interface HermesSessionPage {
 export interface HermesMessage {
   id: number
   session_id: string
-  role: 'user' | 'assistant' | 'system' | 'tool' | 'command' | 'moa'
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'command' | 'moa' | 'error'
   content: string
   display_role?: 'user' | 'assistant' | 'system' | 'tool' | 'command' | null
   display_content?: string | null
@@ -300,10 +300,20 @@ export async function downloadSessionWorkspaceFile(
   saveBlob(blob, fileName)
 }
 
+export type RunState = 'idle' | 'running' | 'finishing' | 'background'
+
 export interface WorkingSessionSnapshot {
   session_id: string
   run_started_at: number
   source?: string | null
+  /**
+   * Coarse activity state from the server.
+   *
+   * `finishing` sessions are reported even though they are not `isWorking`: the
+   * run has already delivered its answer and the remaining work emits no
+   * messages, so the session must read as available to send to, not as busy.
+   */
+  run_state?: RunState
   /**
    * Authoritative compression snapshot for the live run. Riding on the periodic
    * poll is what lets a client that missed `compression.completed` heal itself.

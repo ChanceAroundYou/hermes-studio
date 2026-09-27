@@ -340,11 +340,13 @@ describe('bridge run final context usage', () => {
       vi.fn(),
     )
 
+    // Reopening a run must not carry `last_active`: activity time is derived
+    // from the newest persisted message, and starting a run produces no message.
     const reopenCallIndex = updateSessionMock.mock.calls.findIndex(([sessionId, data]) => (
       sessionId === 'session-1' &&
       data.ended_at === null &&
       data.end_reason === null &&
-      typeof data.last_active === 'number'
+      !('last_active' in (data as Record<string, unknown>))
     ))
     const endedCallIndex = updateSessionMock.mock.calls.findIndex(([sessionId, data]) => (
       sessionId === 'session-1' &&

@@ -1,6 +1,6 @@
 import { mergeTaskPlanMessages, type TaskPlanSnapshot } from '@/utils/task-plan'
 import { connectChatRun, startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, onSessionSettingsUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport } from '@/api/studio/chat'
-import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchWorkingSessions, fetchSessions, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/studio/sessions'
+import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchWorkingSessions, fetchSessions, type RunState, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/studio/sessions'
 import { getActiveProfileName, getBaseUrlValue } from '@/api/client'
 import { onAuthInvalidated } from '@/api/auth-invalidation'
 import { inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId } from '@/api/coding-agents'
@@ -943,6 +943,22 @@ function mapHermesMessages(msgs: HermesMessage[], taskPlans: unknown[] = [], pre
 
   const result: Message[] = []
   for (const msg of dedupedMsgs) {
+    // A failed run is persisted by the server as `role: 'error'`. It renders
+    // through the same red bubble the client used to inject locally, but it now
+    // arrives with the transcript, so it survives a re-fetch, a session switch
+    // and another device. The server filters this role out of model context.
+    if (msg.role === 'error') {
+      result.push({
+        id: String(msg.id),
+        role: 'assistant',
+        content: String(msg.content || ''),
+        timestamp: Math.round(msg.timestamp * 1000),
+        isStreaming: false,
+        systemType: 'error',
+        runMarker: readRunMarker(msg),
+      })
+      continue
+    }
     // Skip assistant messages that only contain tool_calls (no meaningful content)
     if (msg.role === 'assistant' && msg.tool_calls?.length && !runtimePayloadText((msg as any).content).trim()) {
       // Emit a tool.started message for each tool call
@@ -1202,33 +1218,22 @@ function isDuplicateAssistantContent(
   return false
 }
 
-function sessionActivitySeconds(s: SessionSummary): number {
-  return Math.max(
-    s.started_at || 0,
-    s.ended_at || 0,
-    s.last_active || 0,
-  )
-}
-
 /**
- * Activity time is monotonic: it only ever moves forward.
+ * The one number a session is ordered by: when its newest message landed.
  *
- * A background poll is a *possibly stale* observation. This client legitimately
- * knows about activity the server has not persisted yet — a resumed run, socket
- * deltas, a locally generated title — so the server's `last_active` can be
- * OLDER than what we already have. Overwriting unconditionally made a session
- * snap back to its old time (and down the list) one poll after it was promoted,
- * which read as "two mechanisms fighting over the timestamp".
+ * `ended_at` is deliberately NOT part of it. `ended_at` is when the *run* closed,
+ * which is strictly later than its last message whenever the finalization does
+ * work that emits no message — a deliberate settle delay, usage accounting, and
+ * a goal-evaluation LLM call that may run for up to two minutes. Sorting by it
+ * made a session that finished at 23:00 outrank one whose last message arrived at
+ * 20:30, even though the transcript plainly shows which was more recent.
  *
- * Taking the max makes the local bump and the poll compose instead of clobber:
- * whichever observation is newer wins, and a genuinely newer server value still
- * takes over. Same rule the group-chat room list already uses.
+ * Activity time has exactly one meaning on the server: `last_active` is derived
+ * from the newest persisted message. `started_at` is only a fallback for a
+ * session that has no messages at all.
  */
-export function newerActivityTime(current: number | undefined, incoming: number | undefined): number | undefined {
-  const a = Number(current) || 0
-  const b = Number(incoming) || 0
-  if (!a && !b) return undefined
-  return Math.max(a, b)
+function sessionActivitySeconds(s: SessionSummary): number {
+  return s.last_active || s.started_at || 0
 }
 
 function lastVisibleMessage(messages?: Message[] | null): Message | null {
@@ -1887,8 +1892,28 @@ export const useChatStore = defineStore('chat', () => {
   const messages = computed<Message[]>(() => activeSession.value?.messages || [])
   const workspaceRunChangesBySession = ref<Map<string, Map<string, WorkspaceRunChangeSummary>>>(new Map())
 
+  /**
+   * Authoritative activity state, last seen from the server's periodic snapshot.
+   *
+   * `finishing` is deliberately NOT busy: by then `run.completed` has been
+   * delivered, the remaining work (settle delay, usage accounting, goal
+   * evaluation) emits no messages, and the server accepts new input rather than
+   * queueing it. Showing a spinner there would contradict what the server is
+   * actually willing to do.
+   */
+  const runStates = ref<Map<string, RunState>>(new Map())
+
   function isSessionLive(sessionId: string): boolean {
-    return streamStates.value.has(sessionId) || serverWorking.value.has(sessionId)
+    // `serverWorking` stays in the OR: the snapshot is a plain HTTP read that can
+    // be taken before the run it would report, and clearing on absence makes the
+    // sidebar blink out for a whole poll interval. It is the client's own record
+    // that the server said "busy", so it must not be dropped in favour of the
+    // newer state map.
+    if (streamStates.value.has(sessionId)) return true
+    if (runStates.value.get(sessionId) === 'running') return true
+    // Last resort for the raced snapshot: the server told us it was working and
+    // the local run has not aged out yet.
+    return serverWorking.value.has(sessionId)
   }
 
   // Display activity is broader than foreground execution (send/queue/voice).
@@ -2202,9 +2227,11 @@ export const useChatStore = defineStore('chat', () => {
           // (messages, loadedMessageCount, hasMoreBefore, contextTokens).
           existing.title = fresh.title
           existing.source = fresh.source
-          existing.updatedAt = newerActivityTime(existing.updatedAt, fresh.updatedAt) ?? 0
-          const lastActive = newerActivityTime(existing.lastActiveAt, fresh.lastActiveAt)
-          if (lastActive != null) existing.lastActiveAt = lastActive
+          // The server owns activity time. It now advances last_active on every
+          // persisted message, so this is live; mirroring it unconditionally is
+          // what keeps the sidebar from disagreeing with any other client.
+          existing.updatedAt = fresh.updatedAt
+          existing.lastActiveAt = fresh.lastActiveAt
           existing.endedAt = fresh.endedAt
           existing.model = fresh.model
           existing.provider = fresh.provider
@@ -2298,8 +2325,25 @@ export const useChatStore = defineStore('chat', () => {
       // starts, and it knows nothing about the subagent streams this client is
       // following. It may only relax a flag when the client has no local
       // evidence of a live run to contradict it.
+      // The server now states the phase outright, so the snapshot can be taken
+      // at face value instead of being inferred from membership. A session the
+      // server still reports as `finishing` must keep that state rather than
+      // being cleared as unknown.
+      const nextRunStates = new Map<string, RunState>()
+      for (const entry of snapshot) {
+        const state = entry.run_state ?? 'running'
+        if (state === 'idle') continue
+        nextRunStates.set(String(entry.session_id), state)
+      }
+      runStates.value = nextRunStates
+
+      // `finishing` is reported by the server but is deliberately not treated as
+      // busy, so it must not be cleared as "unknown" either — it is a known
+      // state that simply does not light the indicator.
       const authoritativeRemove = [...serverWorking.value]
-        .filter(id => !live.has(id) && !hasLocalRunEvidence(id, now))
+        .filter(id => !live.has(id)
+          && !hasLocalRunEvidence(id, now)
+          && runStates.value.get(id) !== 'finishing')
       // Only relax flags for sessions this client has not observed a terminal
       // event for since the snapshot may lag behind a just-finished run.
       for (const id of authoritativeRemove) serverWorking.value.delete(id)
@@ -3058,8 +3102,6 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleToolCompletedEvent(sessionId: string, evt: RunEvent) {
-    // One bump per finished tool — structural enough for the sidebar order.
-    bumpSessionUpdatedAt(sessionId)
     const toolCallId = typeof (evt as any).tool_call_id === 'string'
       ? String((evt as any).tool_call_id)
       : undefined
@@ -3502,7 +3544,6 @@ export const useChatStore = defineStore('chat', () => {
 
     if (action === 'title' && target && typeof (evt as any).title === 'string') {
       target.title = (evt as any).title
-      target.updatedAt = Date.now()
     }
 
     if (action === 'usage' && target) {
@@ -4009,7 +4050,6 @@ export const useChatStore = defineStore('chat', () => {
         target.title = title.slice(0, 40) + (title.length > 40 ? '...' : '')
       }
     }
-    target.updatedAt = Date.now()
   }
 
   function applyGeneratedSessionTitle(evt: RunEvent) {
@@ -4019,7 +4059,6 @@ export const useChatStore = defineStore('chat', () => {
     const target = sessions.value.find(s => s.id === sid)
     if (target) {
       target.title = title
-      target.updatedAt = Date.now()
     }
     if (activeSession.value?.id === sid) {
       activeSession.value.title = title
@@ -4145,11 +4184,6 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
-  function bumpSessionUpdatedAt(sid: string) {
-    const s = sessions.value.find(s => s.id === sid)
-    if (s) s.updatedAt = Date.now()
-  }
-
   // Shared run-event helpers — single source for the two big switch blocks
   // (startRunViaSocket + resumeServerWorkingRun). Mutates ctx in place.
   type RunEventCtx = {
@@ -4198,9 +4232,6 @@ export const useChatStore = defineStore('chat', () => {
       noteThinkingDelta(last.id, prev, next)
       if (last.reasoning) noteReasoningEnd(last.id)
       last.content = next
-      // Only promote the sidebar order once a full sentence has settled, so
-      // concurrent streaming sessions do not rapidly trade places per token.
-      if (/[.。!！?？;；\n]\s*$/.test(next)) bumpSessionUpdatedAt(ctx.sid)
     } else {
       const nextContent = (evt as any).delta || ''
       if (isDuplicateAssistantContent(msgs, 'assistant', nextContent, Date.now())) return
@@ -4226,8 +4257,6 @@ export const useChatStore = defineStore('chat', () => {
       if (isDuplicateAssistantContent(msgs, 'assistant', text, Date.now())) return
       addMessage(ctx.sid, { id: uid(), role: 'assistant', content: text, timestamp: Date.now(), isStreaming: false } as Message)
     }
-    // A fully-settled sentence (interim payload) is a reorder-worthy event.
-    bumpSessionUpdatedAt(ctx.sid)
     ctx.activeAssistantMessageId = null
     ctx.reasoningAssistantMessageId = null
   }

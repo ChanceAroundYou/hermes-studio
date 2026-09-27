@@ -454,11 +454,22 @@ export function updateSession(id: string, data: Partial<Omit<HermesSessionRow, '
     values.push(data.ended_at)
   }
 
-  // Handle last_active - use provided value or current time
-  if (data.last_active !== undefined) {
-    fields.push(`"last_active" = ?`)
-    values.push(data.last_active)
-  }
+  // `last_active` is deliberately NOT writable through this function.
+  //
+  // Activity time has exactly one meaning: the timestamp of the newest persisted
+  // message (`last_active === MAX(messages.timestamp)`). Writing it anywhere
+  // else is what produced a session showing 00:28 while its newest message was
+  // still 00:24 -- a run had stamped `last_active = now` on startup, before
+  // producing anything, and `updateSessionStats` had recomputed it from the
+  // message table, so the two writers fought over the same column.
+  //
+  // Enforcing the invariant here rather than at each call site means a future
+  // caller cannot reintroduce the bug by accident: passing `last_active` is
+  // simply ignored. Messages advance it through `advanceLastActive`, which is
+  // the chokepoint every insert passes through.
+  //
+  // The only deliberate exception is `clearSessionMessages`, which resets a
+  // session to empty state and sets `last_active = started_at` in raw SQL.
 
   if (fields.length === 0) return
   db.prepare(`UPDATE ${SESSIONS_TABLE} SET ${fields.join(', ')} WHERE id = ?`).run(...values, id)
@@ -882,6 +893,19 @@ function advanceLastActive(db: any, sessionId: string, timestamp: number): void 
   ).run(Math.floor(timestamp), sessionId)
 }
 
+/**
+ * Advance a session's activity time through the single permitted channel.
+ *
+ * `updateSession` refuses to write `last_active`; this is the alternative for
+ * callers outside the message-insert path that still need to record real
+ * activity — currently the Hermes session import, whose activity is the import
+ * moment rather than any message it brings in.
+ */
+export function advanceLastActiveForSession(sessionId: string, timestamp: number): void {
+  if (!isSqliteAvailable() || !sessionId) return
+  advanceLastActive(getDb()!, sessionId, timestamp)
+}
+
 export function addMessage(msg: {
   session_id: string
   role: string
@@ -1079,10 +1103,9 @@ export function updateSessionStats(id: string): void {
   const db = getDb()!
   db.prepare(
     `UPDATE ${SESSIONS_TABLE}
-     SET message_count = (SELECT COUNT(*) FROM ${MESSAGES_TABLE} WHERE session_id = ?),
-         last_active = COALESCE((SELECT MAX(timestamp) FROM ${MESSAGES_TABLE} WHERE session_id = ?), started_at)
+     SET message_count = (SELECT COUNT(*) FROM ${MESSAGES_TABLE} WHERE session_id = ?)
      WHERE id = ?`,
-  ).run(id, id, id)
+  ).run(id, id)
   console.log(`Updated session ${id} stats`)
 }
 

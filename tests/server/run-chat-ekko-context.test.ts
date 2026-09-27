@@ -877,10 +877,10 @@ describe('ekko-agent context usage events', () => {
       provider: 'test-provider',
       isEstimated: false,
     })
+    // See handle-coding-agent-run: reopening clears terminal markers only.
     expect(updateSessionMock).toHaveBeenCalledWith('session-1', expect.objectContaining({
       ended_at: null,
       end_reason: null,
-      last_active: expect.any(Number),
     }))
     expect(updateSessionMock).toHaveBeenCalledWith('session-1', expect.objectContaining({
       ended_at: expect.any(Number),

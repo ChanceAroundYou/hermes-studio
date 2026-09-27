@@ -28,6 +28,7 @@ const localCreateSessionMock = vi.fn()
 const localUpdateSessionMock = vi.fn()
 const localAddMessagesMock = vi.fn()
 const localUpdateSessionStatsMock = vi.fn()
+const localAdvanceLastActiveMock = vi.fn()
 const listSessionCategoriesMock = vi.fn()
 const createSessionCategoryMock = vi.fn()
 const deleteSessionCategoryMock = vi.fn()
@@ -111,6 +112,7 @@ vi.mock('../../packages/server/src/modules/studio/repositories/session-store', (
   getSession: getSessionMock,
   updateSession: localUpdateSessionMock,
   updateSessionStats: localUpdateSessionStatsMock,
+  advanceLastActiveForSession: localAdvanceLastActiveMock,
 }))
 
 vi.mock('../../packages/server/src/modules/studio/repositories/session-category-store', () => ({
@@ -2366,10 +2368,13 @@ describe('session conversations controller', () => {
       expect.objectContaining({ session_id: 'cli-1', role: 'tool', content: '{"ok":true}', tool_call_id: 'call-1', tool_name: 'read_file' }),
     ])
     expect(localUpdateSessionStatsMock).toHaveBeenCalledWith('cli-1')
-    expect(localUpdateSessionMock.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
-      last_active: expect.any(Number),
-    }))
-    expect(localUpdateSessionMock.mock.calls.at(-1)?.[1].last_active).toBeGreaterThan(200)
+    // Import records its own moment as activity, but through the single channel
+    // that may write it. `updateSession` is no longer that channel — it ignores
+    // `last_active` outright so no other code path can reintroduce the drift
+    // that made a session look more recent than its last message.
+    expect(localUpdateSessionMock.mock.calls.at(-1)?.[1]).not.toHaveProperty('last_active')
+    expect(localAdvanceLastActiveMock).toHaveBeenCalledWith('cli-1', expect.any(Number))
+    expect(localAdvanceLastActiveMock.mock.calls.at(-1)?.[1]).toBeGreaterThan(200)
     expect(ctx.body).toMatchObject({ ok: true, imported: true })
   })
 

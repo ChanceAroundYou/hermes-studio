@@ -30,6 +30,7 @@ import {
   addMessages as localAddMessages,
   updateSession as localUpdateSession,
   updateSessionStats as localUpdateSessionStats,
+  advanceLastActiveForSession,
 } from '../public/sessions'
 import { buildDbExportHistory, ExportCompressor } from '../services/context-compressor/export-compressor'
 import { getLocalUsageStats, getRecordedUsageSessionIds, getUsage, getUsageBatch } from '../public/sessions'
@@ -1344,7 +1345,6 @@ export async function importHermesSession(ctx: any) {
     actual_cost_usd: detail.actual_cost_usd,
     cost_status: detail.cost_status,
     preview: detail.preview,
-    last_active: importTimestamp,
   })
 
   const importMessages = buildImportMessages(detail.id, Array.isArray(detail.messages) ? detail.messages : [])
@@ -1361,9 +1361,13 @@ export async function importHermesSession(ctx: any) {
     estimated_cost_usd: detail.estimated_cost_usd,
     actual_cost_usd: detail.actual_cost_usd,
     cost_status: detail.cost_status,
-    last_active: importTimestamp,
     ended_at: detail.ended_at,
   })
+  // `updateSession` deliberately ignores `last_active`, so an imported session
+  // would keep the placeholder timestamp it was created with. The import moment
+  // is the activity that matters here, and it is still expressible through the
+  // one channel that may write activity time.
+  advanceLastActiveForSession(detail.id, importTimestamp)
 
   ctx.body = { ok: true, imported: true, session: localGetSessionDetail(detail.id) }
 }

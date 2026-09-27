@@ -152,7 +152,6 @@ export async function handleCodingAgentRun(
     updateSession(sessionId, {
       ended_at: null,
       end_reason: null,
-      last_active: Math.floor(Date.now() / 1000),
     })
   } catch (err) {
     logger.warn(err, '[chat-run-socket] failed to reopen coding-agent session %s', sessionId)

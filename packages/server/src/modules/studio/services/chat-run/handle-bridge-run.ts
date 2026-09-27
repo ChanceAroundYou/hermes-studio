@@ -157,10 +157,9 @@ function syncBridgeGeneratedTitle(sessionId: string, title: unknown, emit: (even
     return false
   }
   if (normalizeTitleText(session.title) === nextTitle) return false
-  updateSession(sessionId, {
-    title: nextTitle,
-    last_active: Math.floor(Date.now() / 1000),
-  } as any)
+  // No `last_active` here: renaming a session is not activity. It would also
+  // reintroduce a non-message writer, which `updateSession` now ignores anyway.
+  updateSession(sessionId, { title: nextTitle })
   emit('session.title.updated', {
     event: 'session.title.updated',
     session_id: sessionId,
@@ -531,7 +530,7 @@ export async function handleBridgeRun(
   }
   if (sessionRow) {
     try {
-      updateSession(session_id, { ended_at: null, end_reason: null, last_active: now })
+      updateSession(session_id, { ended_at: null, end_reason: null })
     } catch (err) {
       bridgeLogger.warn(err, '[chat-run-socket] failed to reopen session %s for bridge run', session_id)
     }
@@ -933,6 +932,20 @@ export async function handleBridgeRun(
     flushBridgePendingToDb(state, session_id, runMarker)
     updateSessionStats(session_id)
     const message = err instanceof Error ? err.message : String(err)
+    // A failure is a real turn outcome, so it belongs in the transcript like any
+    // other message. It used to be client-side only (a `localOnly` bubble kept in
+    // localStorage), which meant it vanished on another device and left the
+    // session's activity time frozen at the message before the failure.
+    //
+    // `role: 'error'` is filtered out of model context by buildCompressedHistory
+    // — the user sees it, the model does not.
+    addMessage({
+      session_id: session_id,
+      role: 'error',
+      content: message,
+      run_marker: runMarker,
+      timestamp: Math.floor(Date.now() / 1000),
+    })
     const errUsage = await calcAndUpdateUsage(session_id, state, emit)
     const errContextTokens = await refreshFinalContextUsage({
       sessionId: session_id,
@@ -1868,7 +1881,11 @@ async function applyBridgeChunkAsync(
     emit,
     bridge,
   })
-  const hadQueuedRunBeforeGoalEvaluation = state.queue.length > 0
+  // A goal-continuation entry is this machinery's own bookkeeping, not something
+  // the user asked for, so it must not be mistaken for a queued run here — that
+  // is exactly what `hasRealQueuedRun` encodes, and using the raw length made
+  // the two disagree.
+  const hadQueuedRunBeforeGoalEvaluation = hasRealQueuedRun(state)
   const eventName = terminalError ? 'run.failed' : 'run.completed'
   if (runMetadata?.delegationId && state.backgroundDelegations?.[runMetadata.delegationId]) {
     state.backgroundDelegations[runMetadata.delegationId] = {
@@ -1929,7 +1946,29 @@ async function applyBridgeChunkAsync(
   // source of the run being finalized: state.source may already describe the
   // next queued run by this point. The standing-goal judge uses the same profile
   // worker as chat runs and can otherwise delay the scheduler's next node.
+  // From here on the run is over as far as the user is concerned: the transcript
+  // is complete and `run.completed` has been emitted. The remaining work — a
+  // settle delay, usage accounting, and a goal-evaluation LLM call that may run
+  // for up to two minutes — produces no messages, so during it the session shows
+  // as idle and accepts new input instead of queueing it.
+  //
+  // `run.completed` is emitted just above, and `isWorking` was already cleared,
+  // so this records the end of the run rather than extending it.
+  state.runState = 'finishing'
+  try {
+    updateSession(sessionId, {
+      ended_at: Math.floor(Date.now() / 1000),
+      end_reason: terminalError ? 'error' : 'complete',
+    })
+  } catch (endErr) {
+    bridgeLogger.warn(endErr, '[chat-run-socket] failed to write ended_at before goal evaluation for session %s', sessionId)
+  }
+
   if (!terminalError && runSource !== 'workflow') {
+    // Snapshot the run identity *before* awaiting. If a new run starts while the
+    // evaluation is in flight, its verdict describes the conversation as it was
+    // before that run and must not be applied to the conversation after it.
+    const goalEpoch = state.runEpoch ?? 0
     await maybeEnqueueGoalContinuation({
       nsp,
       socket,
@@ -1942,8 +1981,10 @@ async function applyBridgeChunkAsync(
       instructions,
       finalResponse,
       runSource,
+      goalEpoch,
     })
   }
+  state.runState = 'idle'
 
   if (state.queue.length > 0 && !state.activeRunMarker) {
     const nextQueuedRun = state.queue[0]
@@ -2017,6 +2058,8 @@ async function maybeEnqueueGoalContinuation(args: {
   instructions: string
   finalResponse: string
   runSource: BridgeRunSource
+  /** `state.runEpoch` sampled before the evaluation call; see the call site. */
+  goalEpoch: number
 }) {
   const finalResponse = args.finalResponse || ''
   if (!finalResponse.trim()) return
@@ -2033,6 +2076,12 @@ async function maybeEnqueueGoalContinuation(args: {
     logger.warn(err, '[chat-run-socket] /goal evaluation failed for session %s', args.sessionId)
     return
   }
+
+  // A newer run started while this evaluation was in flight. Its verdict
+  // describes the transcript as it stood before that run, so acting on it now
+  // would apply a stale judgement to a conversation that has moved on. Drop it
+  // silently: the user has already superseded it by sending the next message.
+  if ((args.state.runEpoch ?? 0) !== args.goalEpoch) return
 
   if (isGoalJudgeUnavailable(decision.reason)) {
     emitGoalStatus(
