@@ -631,7 +631,7 @@ onMounted(() => {
               <div v-if="toolStatus(agent.id)?.installed && updatePolicies[agent.id]" class="agent-update-policy">
                 <div class="agent-update-policy-row"><span>{{ t('agentAutoUpdate.label') }}</span><NSwitch class="agent-update-switch" size="small" :theme-overrides="{ railHeightSmall: '16px', railWidthSmall: '28px', buttonHeightSmall: '12px', buttonWidthSmall: '12px' }" :disabled="!updatePolicies[agent.id]?.autoUpdateSupported" :value="updatePolicies[agent.id]?.autoUpdate" @update:value="toggleAutoUpdate(agent.id, $event)" /></div>
 
-                <small v-if="updatePolicies[agent.id]?.error" class="agent-update-error">{{ t('codingAgents.checkUpdateFailed') }}</small>
+                <small v-if="updatePolicies[agent.id]?.autoUpdateSupported && updatePolicies[agent.id]?.error" class="agent-update-error">{{ t('codingAgents.checkUpdateFailed') }}</small>
               </div>
             </section>
           </div>
@@ -805,7 +805,7 @@ onMounted(() => {
 }
 
 .agent-manager-content {
-  max-width: 1240px;
+  container: agent-manager / inline-size;
   min-height: 100%;
   display: flex;
   flex-direction: column;
@@ -877,9 +877,22 @@ onMounted(() => {
 
 .coding-agent-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   align-items: stretch;
   gap: 16px;
+}
+
+// Keep cards at least 340px wide when showing multiple columns, including 16px gaps.
+@container agent-manager (min-width: 696px) {
+  .coding-agent-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container agent-manager (min-width: 1052px) {
+  .coding-agent-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .coding-agent-card {
