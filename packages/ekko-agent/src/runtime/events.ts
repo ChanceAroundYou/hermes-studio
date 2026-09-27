@@ -14,6 +14,7 @@ export type AgentRuntimeEvent =
   | { type: 'model.started'; runId: string; step: number }
   | { type: 'context.estimated'; runId: string; step: number; estimate: AgentRuntimeContextEstimate }
   | { type: 'model.retry'; runId: string; step: number; retry: number; maxRetries: number; error: string }
+  | { type: 'model.truncated'; runId: string; step: number; continuations: number; maxContinuations: number }
   | { type: 'model.message'; runId: string; step: number; message: AgentOutputMessage }
   | { type: 'model.delta'; runId: string; step: number; text: string }
   | { type: 'model.reasoning'; runId: string; step: number; text: string }

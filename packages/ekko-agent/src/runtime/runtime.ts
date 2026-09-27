@@ -66,6 +66,10 @@ const MAX_CONCURRENT_TOOL_CALLS = 8
 const SUBTASK_OUTPUT_TAIL_CHARS = 4_000
 const SUBTASK_SUMMARY_CHARS = 500
 const TOOL_FAILURE_RECOVERY_DETAIL_CHARS = 2_000
+const TRUNCATED_RESPONSE_CONTINUATION_LIMIT = 3
+const TRUNCATED_RESPONSE_CONTINUATION_PROMPT =
+  'Your previous response was cut off by the output limit before it was finished, so it is not a complete answer. Continue from exactly where it stopped, without repeating what you already wrote and without starting over.'
+
 interface ModelResponseResult {
   response: ModelResponse
   emittedReasoning: boolean
@@ -447,6 +451,7 @@ export class AgentRuntime {
     const contextKey = this.contextKeyFor(input)
     let contextEstimate: AgentRuntimeContextEstimate | undefined
     let toolFailureStreak: ToolFailureStreak | undefined
+    let truncationContinuations = 0
     const completeBoundaryInterrupt = (completedSteps: number): AgentRuntimeRunResult => {
       if (activeBoundaryRun) activeBoundaryRun.terminal = true
       output = {
@@ -554,6 +559,7 @@ export class AgentRuntime {
         const assistantMessage = normalizeToolCallPreamble(modelResponseToAgentMessage(response))
         const toolCalls = assistantMessage.toolCalls ?? []
         const blockedByRecovery = toolCalls.length === 0 && this.currentRecoveryDirective()?.active === true
+        if (assistantMessage.finishReason !== 'length' || toolCalls.length > 0) truncationContinuations = 0
         if (activeBoundaryRun && toolCalls.length > 0) {
           activeBoundaryRun.phase = 'tool_batch'
         }
@@ -582,6 +588,24 @@ export class AgentRuntime {
           continue
         }
         if (toolCalls.length === 0) {
+          // A response cut off at the output limit arrives without tool calls and
+          // used to look like a finished answer, which ended the turn on a
+          // truncated message. Ask the model to continue instead.
+          if (
+            assistantMessage.finishReason === 'length' &&
+            truncationContinuations < TRUNCATED_RESPONSE_CONTINUATION_LIMIT
+          ) {
+            truncationContinuations += 1
+            emit({
+              type: 'model.truncated',
+              runId,
+              step,
+              continuations: truncationContinuations,
+              maxContinuations: TRUNCATED_RESPONSE_CONTINUATION_LIMIT,
+            })
+            messages.push(createSystemMessage(TRUNCATED_RESPONSE_CONTINUATION_PROMPT))
+            continue
+          }
           const context = contextKey ? this.modelContexts.get(contextKey) : assistantMessage.context
           if (activeBoundaryRun) activeBoundaryRun.terminal = true
           emit({ type: 'run.completed', runId, output, steps: step, context, contextEstimate })
