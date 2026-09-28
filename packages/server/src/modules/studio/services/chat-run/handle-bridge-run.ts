@@ -1424,6 +1424,9 @@ async function applyBridgeChunkAsync(
         arguments: tool.arguments,
         preview: ev.preview || summarizeToolArguments(tool.arguments),
       }
+      // Set here, not derived from `state.events` at finalization: the buffer is
+      // emptied during teardown, long before the empty-output check reads it.
+      state.hadToolActivity = true
       pushState(sessionMap, sessionId, 'tool.started', payload)
       emit('tool.started', payload)
     } else if (evType === 'tool.completed') {
@@ -1977,10 +1980,9 @@ async function applyBridgeChunkAsync(
   // lives here now so the transcript, the client and every other device agree,
   // and the message also advances activity time like any other outcome.
   if (!terminalError && !finalResponse?.trim()) {
-    const bufferedToolActivity = (state.events || []).some(
-      event => typeof event?.event === 'string' && event.event.startsWith('tool.'),
-    )
-    if (!bufferedToolActivity && state.queue.length === 0) {
+    // `state.events` is already cleared by this point, so the run's own record
+    // of having used a tool is the only honest signal.
+    if (!state.hadToolActivity && state.queue.length === 0) {
       try {
         addMessage({
           session_id: sessionId,

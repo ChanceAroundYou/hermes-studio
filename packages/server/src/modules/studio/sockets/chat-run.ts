@@ -1090,6 +1090,7 @@ export class ChatRunSocket {
           return
         }
         state.events = []
+          state.hadToolActivity = false
         state.isWorking = !isCodingAgentExecution(source, data)
         state.runStartedAt = Date.now()
         state.runEpoch = (state.runEpoch ?? 0) + 1
@@ -2272,6 +2273,7 @@ export class ChatRunSocket {
           ? 'workflow'
           : 'cli'
       state.events = []
+        state.hadToolActivity = false
       const instructions = this.resumeInstructionsForSession(sid)
       void resumeBridgeRun(
         this.nsp,
@@ -2657,6 +2659,7 @@ export class ChatRunSocket {
     const pushTargetId = options.pushRoot ? getRunPushTarget(options.pushRoot)?.id : undefined
     const state = getOrCreateSession(this.sessionMap, sessionId)
     state.events = []
+      state.hadToolActivity = false
     state.isWorking = !isCodingAgentExecution(source, data)
     state.runStartedAt = Date.now()
     state.runEpoch = (state.runEpoch ?? 0) + 1

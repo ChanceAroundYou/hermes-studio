@@ -168,6 +168,17 @@ export interface SessionState {
   abortController?: AbortController
   runId?: string
   activeRunMarker?: string
+
+  /**
+   * Whether this run called at least one tool. Set on `tool.started` and read
+   * once during finalization to decide whether a run that produced no final
+   * text really failed.
+   *
+   * `state.events` cannot answer this: it is cleared as the run is torn down,
+   * several hundred lines before the check, so reading it there always yields
+   * an empty array and would report every tool-only run as a failure.
+   */
+  hadToolActivity?: boolean
   profile?: string
   inputTokens?: number
   outputTokens?: number
