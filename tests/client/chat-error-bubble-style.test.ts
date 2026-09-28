@@ -14,10 +14,42 @@ describe('error bubble styling is unified', () => {
   it('maps every system-level error to the one agent-error bubble', () => {
     const item = readClientFile('components/hermes/chat/MessageItem.vue')
 
-    expect(item).toContain('if (message.systemType === "error") return true;')
-    expect(item).toContain('return /^\\s*(error\\b|run failed)/i.test(String(message.content || ""))')
+    // Classification is structural: the role plus the `systemType: 'error'` tag
+    // the store assigns. It must never inspect the message body, because a
+    // text-based classifier repainted ordinary replies red.
+    expect(item).toContain('return message.systemType === "error";')
+    const start = item.indexOf('const isAgentError = computed')
+    const body = item.slice(start, item.indexOf('});', start))
+    expect(body).not.toContain('.content')
+    // Command failures are errors too, so they share the one red treatment.
+    expect(item).toContain('if (message.role === "command") return isCommandError.value;')
     // The neutral warning-striped system bubble must not also render an error.
     expect(item).toContain('system: isSystem && !isAgentError,')
+  })
+
+  it('routes a bridge failure carried as status text to the one error bubble', () => {
+    const store = readClientFile('stores/hermes/chat.ts')
+    const start = store.indexOf('function handleAgentEvent')
+    expect(start).toBeGreaterThan(-1)
+    const body = store.slice(start, store.indexOf('\n  }\n', start))
+
+    // A payload arriving on `error` is a failure by construction, and some
+    // bridge failures arrive as status *text* ("Non-retryable error (HTTP
+    // 502): ..."). Both must reach `addAgentErrorMessage` instead of falling
+    // through to the neutral amber system bubble, which is what made a single
+    // failure render amber and then again red once it was persisted.
+    expect(body).toContain('const isErrorEvent =')
+    expect(body).toContain('isBridgeFailureText(text)')
+    expect(body).toContain('addAgentErrorMessage(sid, text)')
+  })
+
+  it('keeps exactly one error colour in the stylesheet', () => {
+    const item = readClientFile('components/hermes/chat/MessageItem.vue')
+
+    // A failed command must not reintroduce a second amber error style.
+    const commandError = item.slice(item.indexOf('&.command-error'))
+    expect(commandError.slice(0, 220)).toContain('color: $error;')
+    expect(commandError.slice(0, 220)).not.toContain('warning-rgb')
   })
 
   it('routes every store error producer through the unified error row', () => {

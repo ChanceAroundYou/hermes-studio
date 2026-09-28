@@ -67,23 +67,26 @@ const toast = useMessage();
 
 const isSystem = computed(() => props.message.role === "system");
 const isCommandMessage = computed(() => props.message.role === "command" || props.message.systemType === "command");
+const isCommandError = computed(() => props.message.role === "command" && props.message.systemType === "error");
+
 // One canonical error bubble. A run failure used to render twice in two
-// different styles: a red rounded bubble for `run.failed` and a yellow
-// left-striped notice for everything routed through a system message (bridge
-// resume failures, swallowed model errors, failed sends). Every error now maps
-// to the same `.agent-error` treatment.
+// different styles: a red rounded bubble for the persisted `role: 'error'` row
+// and a yellow left-striped notice for the live system message the agent streams
+// while the run is still failing, so the same failure visibly jumped from amber
+// to red as it was persisted.
+//
+// Classification is structural, never textual. An earlier version guessed from
+// the message text and misfired badly: "Error handling in the parser looks
+// correct" and "The failed test was flaky" were painted red. The store already
+// tags every failure it creates with `systemType: 'error'`, including the agent
+// event path, so the role plus that tag is the only authority.
 const isAgentError = computed(() => {
   const message = props.message;
-  if (message.role === "command") return false;
-  if (message.systemType === "error") return true;
-  if (message.role === "system" && !message.commandAction && !isCommandMessage.value) {
-    return /^\s*(error\b|run failed)/i.test(String(message.content || ""));
-  }
-  return false;
+  if (message.role === "command") return isCommandError.value;
+  return message.systemType === "error";
 });
 
 const effectiveHeadingIdPrefix = computed(() => props.headingIdPrefix || `msg-${props.message.id}`);
-const isCommandError = computed(() => props.message.role === "command" && props.message.systemType === "error");
 const isStatusCommand = computed(() =>
   isCommandMessage.value
   && props.message.commandAction === "status"
@@ -1506,9 +1509,13 @@ onBeforeUnmount(() => {
     padding: 8px 10px;
   }
 
+  // A failed command is a failure, so it wears the one red error treatment
+  // instead of a second amber one. Keeping the class in the template preserves
+  // the hook the tests assert on while the colour is now unified.
   &.command-error {
-    border-color: rgba(var(--warning-rgb), 0.28);
-    background-color: rgba(var(--warning-rgb), 0.06);
+    color: $error;
+    border-color: rgba(var(--error-rgb), 0.2);
+    background-color: rgba(var(--error-rgb), 0.06);
   }
 
   &.agent-error {

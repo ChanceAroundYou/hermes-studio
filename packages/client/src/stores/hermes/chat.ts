@@ -831,6 +831,36 @@ function isQueueInsertionInterruption(value: unknown): boolean {
   return event.interrupted === true && event.stop_reason === 'queue_insertion'
 }
 
+// A few bridge failures reach the client as status *text* instead of an `error`
+// field, e.g. "Non-retryable error (HTTP 502): HTTP 502: Provider returned 400".
+// Rendering those as a neutral system notice meant one failure appeared twice:
+// once amber while the run was still failing, then again red once the server
+// persisted the same failure as a `role: 'error'` row.
+//
+// The patterns are deliberately high precision. An earlier, broader version also
+// matched any sentence containing "error" or "failed" and repainted ordinary
+// replies ("Error handling in the parser looks correct", "The failed test was
+// flaky") red. Every pattern below is a machine-generated signature that cannot
+// occur in a normal assistant answer.
+const BRIDGE_FAILURE_PATTERNS: RegExp[] = [
+  /^\s*Error\s*:/,
+  /^\s*Non[- ]?retryable\b/i,
+  /^\s*HTTP\s+[45]\d\d\b/i,
+  /\bHTTP\s+[45]\d\d\s*:/i,
+  /^\s*(fatal|critical)\b/i,
+  /^\s*Traceback \(most recent call last\)/,
+  /\bProvider returned\s+[45]\d\d\b/i,
+  /\b(run failed|Run failed|Agent run failed)\b/,
+  /^\s*Agent reported failure\b/i,
+  /^\s*Failed to start\b/i,
+]
+
+export function isBridgeFailureText(raw: unknown): boolean {
+  const text = String(raw || '').trim()
+  if (!text) return false
+  return BRIDGE_FAILURE_PATTERNS.some(pattern => pattern.test(text))
+}
+
 function hasAssistantVisibleText(message: Message | null | undefined): boolean {
   if (!message) return false
   return message.content.trim() !== '' || (message.reasoning?.trim() ?? '') !== ''
@@ -3518,11 +3548,21 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
     if ((evt as any).source === 'coding_agent' && (evt as any).kind === 'status') return
-    const text = String((evt as any).text || (evt as any).message || (evt as any).error || '').trim()
+    // A payload that arrives on `error` is a failure by construction, so it is
+    // tagged structurally. Guessing from ordinary message text misfired badly
+    // ("Error handling in the parser looks correct", "The failed test was
+    // flaky") and painted real replies red.
+    const rawError = (evt as any).error
+    const isErrorEvent = typeof rawError === 'string' && rawError.trim() !== ''
+    const text = String((evt as any).text || (evt as any).message || rawError || '').trim()
     if (!text) return
-    // Bridge resume failures are errors, not status chatter: render them with
-    // the one error bubble instead of the neutral system notice.
-    if ((evt as any).event === 'run.reattach_failed') {
+    // Some bridge failures arrive as status *text* rather than an `error` field,
+    // e.g. "Non-retryable error (HTTP 502): ...". Those must not fall through
+    // to the neutral amber system bubble and then be re-rendered red once the
+    // server persists the same failure, which made one run look like two
+    // differently-styled errors. Only unambiguous machine-generated signatures
+    // count; none of them can occur in a normal reply.
+    if ((evt as any).event === 'run.reattach_failed' || isErrorEvent || isBridgeFailureText(text)) {
       addAgentErrorMessage(sid, text)
       return
     }
