@@ -4,7 +4,7 @@ import type { TaskPlanSnapshot } from '../contracts/task-plan'
 type PlanUpdate = Pick<TaskPlanSnapshot, 'explanation' | 'plan'>
 type TerminalState = Exclude<TaskPlanSnapshot['execution_state'], 'running'>
 type RunState = { isWorking: boolean; isAborting?: boolean; activeRunMarker?: string; responseRun?: { runMarker?: string } }
-type Binding = { sessionId: string; profile: string; resolve: () => RunState | undefined; snapshot?: TaskPlanSnapshot; publish?: (snapshot: TaskPlanSnapshot) => void }
+type Binding = { contextId: string; sessionId: string; profile: string; sequence: number; resolve: () => RunState | undefined; snapshot?: TaskPlanSnapshot; publish?: (snapshot: TaskPlanSnapshot) => void }
 
 export class TaskPlanError extends Error {
   constructor(message: string, public readonly status = 400) { super(message) }
@@ -39,7 +39,12 @@ export function parseTaskPlanUpdate(input: Record<string, unknown>): PlanUpdate 
 /** Per-turn capabilities: an old MCP call cannot write into a later turn or another profile. */
 export class TaskPlanRuns {
   private readonly bindings = new Map<string, Binding>()
-  private readonly sessions = new Map<string, string>()
+  // A session may hold several live contexts concurrently (begin() seeds one
+  // per turn; a new turn does NOT settle an earlier one that is still active,
+  // because a browser turn can legitimately overlap its successor and both may
+  // still receive plan writes).
+  private readonly sessions = new Map<string, Set<string>>()
+  private sequence = 0
 
   constructor(
     private readonly commit: (snapshot: TaskPlanSnapshot) => void,
@@ -47,16 +52,97 @@ export class TaskPlanRuns {
   ) {}
 
   begin(sessionId: string, profile: string, resolve: Binding['resolve'], publish?: Binding['publish']): string {
-    this.finishSession(sessionId, 'interrupted')
     const contextId = randomUUID()
-    this.bindings.set(contextId, { sessionId, profile, resolve, publish })
-    this.sessions.set(sessionId, contextId)
+    const binding: Binding = { contextId, sessionId, profile, resolve, publish, sequence: ++this.sequence }
+    this.bindings.set(contextId, binding)
+    if (!this.sessions.has(sessionId)) this.sessions.set(sessionId, new Set())
+    this.sessions.get(sessionId)!.add(contextId)
     return contextId
   }
 
-  update(contextId: string, profile: string, input: Record<string, unknown>): TaskPlanSnapshot {
-    const binding = this.bindings.get(contextId)
-    if (!binding || binding.profile !== profile) throw new TaskPlanError('Task plan context is unavailable or has expired', 409)
+  /** True when `binding` still accepts plan writes: a live, in-flight turn. */
+  private writable(binding: Binding): boolean {
+    const state = binding.resolve()
+    const runId = state?.activeRunMarker || state?.responseRun?.runMarker
+    return !!state?.isWorking && !state.isAborting && !!runId
+  }
+
+  /**
+   * True when a newer turn of the same session has taken over. Such a binding
+   * is superseded, not finished: it may still be readable, but a write aimed at
+   * it must be redirected to the newer turn rather than accepted as its own.
+   */
+  private superseded(binding: Binding): boolean {
+    for (const candidate of this.sessions.get(binding.sessionId) || []) {
+      const other = this.bindings.get(candidate)
+      if (other && other.sequence > binding.sequence) return true
+    }
+    return false
+  }
+
+  /**
+   * Resolve the binding that may accept this write, in priority order. The
+   * profile — derived server-side from the JWT, never from the request body —
+   * is the security boundary: no layer can reach a different profile.
+   *
+   *   1. the exact `contextId`, if it is this profile's and not superseded by a
+   *      newer turn of its own session;
+   *   2. the claimed SESSION's own current binding — this is how an id from an
+   *      earlier turn of that session self-heals onto the turn that now owns
+   *      the card. A foreign or unknown session is still rejected;
+   *   3. the profile's active context, ONLY when the caller claimed neither a
+   *      context nor a session, and that profile has exactly one writable turn.
+   *
+   * Level 3 is the escape hatch for a CLI / gateway MCP server, which is
+   * spawned once per profile and never receives a Studio context or session
+   * id — for it an omitted id is the normal case, not a spoof. It is
+   * deliberately narrow: with several turns in flight (two open sessions, or a
+   * turn overlapping its successor) it refuses rather than guessing which card
+   * the caller means. A caller that named a specific id is judged by layers 1
+   * and 2 only: they can never route by profile alone.
+   */
+  private resolveBinding(contextId: string, profile: string, sessionId?: string): Binding | undefined {
+    if (contextId) {
+      const binding = this.bindings.get(contextId)
+      if (binding && binding.profile === profile && !this.superseded(binding)) return binding
+    }
+
+    if (sessionId) {
+      const candidates = [...(this.sessions.get(sessionId) || [])]
+        .map(id => this.bindings.get(id))
+        .filter((b): b is Binding => !!b && b.profile === profile && !this.superseded(b))
+      if (candidates.length) return candidates[candidates.length - 1]
+    }
+
+    // Only a caller with nothing to claim may be routed by the profile alone.
+    return contextId || sessionId ? undefined : this.unambiguousActive(profile)
+  }
+
+  /** The profile's writable context, or undefined when ambiguous or none. */
+  private unambiguousActive(profile: string): Binding | undefined {
+    let only: Binding | undefined
+    for (const candidate of this.bindings.values()) {
+      if (candidate.profile !== profile || !this.writable(candidate)) continue
+      if (only) return undefined
+      only = candidate
+    }
+    return only
+  }
+
+  /**
+   * Update a turn's plan. A missing, stale, or reused `contextId` self-heals
+   * through `resolveBinding` instead of failing the write.
+   */
+  update(contextId: string, profile: string, input: Record<string, unknown>, sessionId?: string): TaskPlanSnapshot {
+    // A context id issued by a DIFFERENT profile is always a hard failure — the
+    // profile comes from the authenticated JWT, never from the request body.
+    // An id from this profile that is stale or never used may self-heal.
+    const named = contextId ? this.bindings.get(contextId) : undefined
+    if (named && named.profile !== profile) {
+      throw new TaskPlanError('Task plan context is unavailable or has expired', 409)
+    }
+    const binding = this.resolveBinding(contextId, profile, sessionId)
+    if (!binding) throw new TaskPlanError('Task plan context is unavailable or has expired', 409)
     const state = binding.resolve()
     const runId = state?.activeRunMarker || state?.responseRun?.runMarker
     if (!state?.isWorking || state.isAborting || !runId || (binding.snapshot && binding.snapshot.run_id !== runId)) {
@@ -65,7 +151,7 @@ export class TaskPlanRuns {
     const update = parseTaskPlanUpdate(input)
     const now = Date.now()
     const snapshot: TaskPlanSnapshot = {
-      ...update, session_id: binding.sessionId, run_id: runId, plan_id: `mcp:${contextId}`,
+      ...update, session_id: binding.sessionId, run_id: runId, plan_id: `mcp:${binding.contextId}`,
       revision: (binding.snapshot?.revision || 0) + 1, execution_state: 'running',
       created_at: binding.snapshot?.created_at ?? now, updated_at: now,
     }
@@ -79,7 +165,7 @@ export class TaskPlanRuns {
     const binding = this.bindings.get(contextId)
     if (!binding) return
     this.bindings.delete(contextId)
-    if (this.sessions.get(binding.sessionId) === contextId) this.sessions.delete(binding.sessionId)
+    this.sessions.get(binding.sessionId)?.delete(contextId)
     if (!binding.snapshot) return
     const snapshot: TaskPlanSnapshot = {
       ...binding.snapshot, revision: binding.snapshot.revision + 1, execution_state: executionState,
@@ -91,8 +177,10 @@ export class TaskPlanRuns {
   }
 
   finishSession(sessionId: string, state: TerminalState): void {
-    const contextId = this.sessions.get(sessionId)
-    if (contextId) this.finish(contextId, state)
+    for (const contextId of [...(this.sessions.get(sessionId) || new Set<string>())]) {
+      this.finish(contextId, state)
+    }
+    this.sessions.delete(sessionId)
   }
 
 }

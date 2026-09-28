@@ -1022,9 +1022,9 @@ const tools = [
   {
     name: 'ekko_studio_update_plan',
     toolset: 'plan',
-    description: 'Create or update the current turn task plan shown in Studio and App. For multi-step work, send the full ordered plan before starting and whenever progress changes. Keep step ids stable, use at most one in_progress step, and mark completion only after verification. Requires the context_id supplied in the current run instructions; cannot start a run or modify another turn.',
+    description: 'Create or update the current turn task plan shown in Studio and App. For multi-step work, send the full ordered plan before starting and whenever progress changes. Keep step ids stable, use at most one in_progress step, and mark completion only after verification. context_id may be omitted or stale — the server resolves this session\'s current live turn context; it still cannot modify another turn or profile. Prefer passing the context_id supplied with the latest input when you have it.',
     inputSchema: inputSchema({
-      context_id: { type: 'string', description: 'Current turn context supplied by Studio. Never reuse a previous turn context.' },
+      context_id: { type: 'string', description: 'Current turn context supplied by Studio. Optional: when omitted or stale, the server falls back to this session\'s current live context. Never copy an id from an older turn when a newer one was supplied.' },
       explanation: { type: 'string', maxLength: 1000 },
       plan: {
         type: 'array', minItems: 1, maxItems: 30,
@@ -1037,7 +1037,7 @@ const tools = [
           },
         },
       },
-    }, ['context_id', 'plan']),
+    }, ['plan']),
   },
   {
     name: 'ekko_studio_use_chat_run',
@@ -1960,10 +1960,16 @@ async function callTool(name, args = {}, signal) {
       return jsonText(await request('/api/studio/clarifications/request', withAuthArgs(args, {
         method: 'POST', body: pickDefined(args, ['context_id', 'question', 'choices']), signal,
       })))
-    case 'ekko_studio_update_plan':
+    case 'ekko_studio_update_plan': {
+      // `session_id` lets the server self-heal an omitted or stale context_id:
+      // it falls back to THIS session's current live turn context.
+      const body = pickDefined(args, ['context_id', 'explanation', 'plan'])
+      const studioSession = process.env.HERMES_STUDIO_SESSION_ID
+      if (studioSession) body.session_id = studioSession
       return jsonText(await request('/api/studio/task-plans/update', withAuthArgs(args, {
-        method: 'POST', body: pickDefined(args, ['context_id', 'explanation', 'plan']),
+        method: 'POST', body,
       })))
+    }
     case 'ekko_studio_use_chat_run':
       return jsonText(await request('/api/studio/chat-run/runs', withAuthArgs(args, {
         method: 'POST',

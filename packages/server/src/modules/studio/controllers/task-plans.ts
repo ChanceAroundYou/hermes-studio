@@ -11,9 +11,14 @@ export function updateTaskPlan(ctx: Context) {
     return
   }
   try {
-    if (typeof body.context_id !== 'string' || !body.context_id.trim()) throw new TaskPlanError('context_id is required')
     const profile = String(ctx.state.profile?.name || 'default').trim() || 'default'
-    const plan = server.updateTaskPlan(body.context_id, profile, body)
+    // context_id may be omitted or stale: fall back to this session's CURRENT
+    // live context (seeded by begin() at turn start) so the write self-heals.
+    const contextId = typeof body.context_id === 'string' && body.context_id.trim()
+      ? body.context_id : ''
+    const sessionId = typeof body.session_id === 'string' && body.session_id.trim()
+      ? body.session_id : undefined
+    const plan = server.updateTaskPlan(contextId, profile, body, sessionId)
     ctx.body = { ok: true, ...plan }
   } catch (err) {
     if (!(err instanceof TaskPlanError)) throw err

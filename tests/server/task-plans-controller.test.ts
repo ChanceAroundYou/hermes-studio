@@ -20,9 +20,18 @@ describe('task plan HTTP controller', () => {
     updateTaskPlan(ctx as any)
     expect(ctx.status).toBe(409)
     ctx.state.profile.name = 'research'
+    // An empty context_id no longer 400s: it falls back to the session's LIVE
+    // context — but only a session that actually has one. 'other-session'
+    // (the spoofed caller-supplied id) has no live binding, so the write still
+    // 409s; the owner's session id self-heals.
     ctx.request.body.context_id = ''
+    ctx.request.body.session_id = 'other-session'
     updateTaskPlan(ctx as any)
-    expect(ctx.status).toBe(400)
+    expect(ctx.status).toBe(409)
+    ctx.request.body.context_id = ''
+    ctx.request.body.session_id = 'owned-session'
+    updateTaskPlan(ctx as any)
+    expect(ctx.body).toMatchObject({ ok: true, session_id: 'owned-session', run_id: 'owned-turn', revision: 2 })
   })
 
   it('reports unavailable runtime without accepting a plan', () => {

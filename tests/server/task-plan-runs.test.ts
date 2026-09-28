@@ -83,6 +83,45 @@ describe('shared MCP task plans', () => {
     expect(runs.update(other, 'research', steps()).revision).toBe(2)
   })
 
+  it('self-heals an omitted or stale context_id to the session\'s live context, same profile only', () => {
+    const { runs, contextId, state } = harness()
+    // Omitted context: falls back to the session's live binding.
+    expect(runs.update('', 'research', steps(), 'session-1').plan_id).toBe(`mcp:${contextId}`)
+    // Stale context from a previous turn: falls back to the NEW live binding.
+    const stale = runs.begin('session-1', 'research', () => state)
+    expect(runs.update(contextId, 'research', steps(), 'session-1').plan_id).toBe(`mcp:${stale}`)
+    // Wrong profile never falls back.
+    expect(() => runs.update('', 'other', steps(), 'session-1')).toThrow('unavailable')
+    // Unknown session has no live context: no fallback, still 409.
+    expect(() => runs.update('', 'research', steps(), 'ghost-session')).toThrow('unavailable')
+  })
+
+  it('routes an unclaimed write to the profile\'s single active turn, and refuses to guess among several', () => {
+    // The CLI / gateway MCP server is spawned per profile and never receives a
+    // Studio context or session id, so it calls with neither. With exactly one
+    // active turn of the profile, that turn is the only possible target.
+    const { runs } = harness()
+    expect(runs.update('', 'research', steps()).session_id).toBe('session-1')
+    // A second session of the same profile makes the target ambiguous.
+    runs.begin('second-session', 'research', () => ({ isWorking: true, activeRunMarker: 'turn-b' }))
+    expect(() => runs.update('', 'research', steps())).toThrow('unavailable')
+    // Naming a session is still precise even when the profile is ambiguous.
+    expect(runs.update('', 'research', steps(), 'second-session').run_id).toBe('turn-b')
+  })
+
+  it('lets a superseded id through a session claim, but not without one', () => {
+    // A write aimed at a turn an earlier one has superseded is only recoverable
+    // if the caller also names the session: that is how an older turn's stale id
+    // self-heals. With no session claim there is nothing to resolve it against,
+    // and the profile fallback stays off for a caller that named an id.
+    const { runs, contextId, state } = harness()
+    runs.begin('session-1', 'research', () => state)
+    expect(() => runs.update(contextId, 'research', steps())).toThrow('unavailable')
+    runs.finishSession('session-1', 'ended')
+    expect(runs.begin('session-1', 'research', () => state))
+    expect(runs.update(contextId, 'research', steps(), 'session-1').session_id).toBe('session-1')
+  })
+
   it.each([
     { plan: [] }, { plan: Array.from({ length: 31 }, (_, i) => ({ id: `${i}`, step: 'Step', status: 'pending' })) },
     { plan: [{ id: 'x', step: 'Step', status: 'pending' }, { id: ' x ', step: 'Other', status: 'pending' }] },
