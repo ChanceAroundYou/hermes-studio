@@ -306,7 +306,7 @@ describe('chat store error handling - #1644', () => {
     expect(errorMessage?.content).toBe('Error: Socket disconnected')
   })
 
-  it('overwrites empty streaming message when run.failed fires (no substantial content)', async () => {
+  it('keeps a short streamed reply and appends the failure beside it', async () => {
     const store = useChatStore()
     const session = makeSession('session-1')
     store.sessions = [session]
@@ -338,11 +338,21 @@ describe('chat store error handling - #1644', () => {
     })
 
     const msgs = store.activeSession?.messages || []
-    const assistantMsg = msgs.find((m: Message) => m.role === 'assistant')
-    expect(assistantMsg).toBeDefined()
-    expect(assistantMsg?.content).toBe('Error: Something went wrong')
-    expect(assistantMsg?.systemType).toBe('error')
-    expect(assistantMsg?.isStreaming).toBe(false)
+
+    // "Hi" is real output the run produced. It used to be overwritten in place
+    // whenever it was under 100 characters, so the transcript silently lost it
+    // and the failure took over its row. The reply must survive, stopped but
+    // intact, with the failure recorded as its own entry after it.
+    const reply = msgs.find((m: Message) => m.role === 'assistant' && m.systemType !== 'error')
+    expect(reply).toBeDefined()
+    expect(reply?.content).toBe('Hi')
+    expect(reply?.isStreaming).toBe(false)
+
+    const errorMsg = msgs.find((m: Message) => m.systemType === 'error')
+    expect(errorMsg).toBeDefined()
+    expect(errorMsg?.content).toBe('Error: Something went wrong')
+    // The appended row was never streaming in the first place.
+    expect(errorMsg?.isStreaming ?? false).toBe(false)
   })
 
   it('appends error as separate message when streaming has finished (isStreaming false)', async () => {

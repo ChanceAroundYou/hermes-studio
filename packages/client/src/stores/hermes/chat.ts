@@ -939,7 +939,11 @@ function mapHermesMessages(msgs: HermesMessage[], taskPlans: unknown[] = [], pre
     const content = runtimePayloadText((m as any).content) ?? ''
     const norm = content.replace(/\s+/g, ' ').trim()
     const ts = m.timestamp ?? 0
-    if (norm) {
+    // A persisted failure is never a duplicate to be collapsed. Each failed run
+    // records its own `role: 'error'` row, and the user is meant to see every
+    // one of them where it happened. Deduplicating them made a retried failure
+    // erase the earlier record and surface only the newest.
+    if (norm && role !== 'error') {
       const prev = lastByRole.get(role)
       const isDup = !!prev
         && ts >= prev.ts
@@ -3346,13 +3350,23 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
-  // A single failure used to surface as two stacked bubbles (a warning-coloured
-  // system notice plus this error bubble), and both vanished on the next
-  // transcript re-fetch. Errors are now one shape (`role: 'assistant'` +
-  // `systemType: 'error'`), and
-  // repeats at the tail collapse into the existing bubble.
-  const LOCAL_ERROR_COALESCE_WINDOW_MS = 30_000
-
+  // A failure is a real turn outcome, so it belongs in the transcript at the
+  // position where it happened and it stays there. The server persists it as a
+  // `role: 'error'` row that is excluded from model context, which is why the
+  // user can see it forever while the agent never receives it.
+  //
+  // This used to try to be clever and it broke that guarantee three ways:
+  //
+  //  - it overwrote a short streaming message in place, erasing the reply that
+  //    the run had already produced;
+  //  - it rewrote the previous error bubble when the same failure was reported
+  //    twice, moving the error to the end of the transcript;
+  //  - it scanned the whole history and silently dropped a new error whenever an
+  //    identical one existed within the window, so retrying made the recorded
+  //    failure disappear and reappear somewhere else.
+  //
+  // All three are gone. A failure is always appended as its own row and never
+  // merged into, or suppressed by, an earlier one.
   function addAgentErrorMessage(sessionId: string, error?: unknown) {
     const message = errorMessage(error)
     const content = message ? `Error: ${message}` : 'Run failed'
@@ -3360,36 +3374,11 @@ export const useChatStore = defineStore('chat', () => {
     const msgs = getSessionMsgs(sessionId)
     const last = msgs[msgs.length - 1]
     if (last?.isStreaming) {
-      // If the streaming message already has substantial content (the assistant
-      // produced a meaningful reply before the error), don't overwrite it —
-      // just close the stream and append a separate error message. Only
-      // overwrite when the message is still empty or trivially short, meaning
-      // the run failed before producing useful output.
-      const hasSubstantialContent = (last.content || '').trim().length > 100
-      if (hasSubstantialContent) {
-        updateMessage(sessionId, last.id, { isStreaming: false })
-        // fall through to append a separate error message
-      } else {
-        updateMessage(sessionId, last.id, {
-          role: 'assistant',
-          content,
-          isStreaming: false,
-          systemType: 'error',
-        })
-        return
-      }
+      // Close the stream so the partial reply stops rendering as in-flight, but
+      // never reuse the row: whatever the run managed to say is real output and
+      // the failure is a separate event.
+      updateMessage(sessionId, last.id, { isStreaming: false })
     }
-    if (last?.role === 'assistant' && last.systemType === 'error') {
-      if (last.content === content) return
-      // Same failure reported twice in a row (e.g. run.failed plus a transport
-      // level error): keep one bubble and let the newest wording win.
-      if (now - (last.timestamp || 0) <= LOCAL_ERROR_COALESCE_WINDOW_MS) {
-        updateMessage(sessionId, last.id, { content, timestamp: now })
-        return
-      }
-    }
-    if (msgs.some(m => m.role === 'assistant' && m.systemType === 'error' && m.content === content
-      && now - (m.timestamp || 0) <= LOCAL_ERROR_COALESCE_WINDOW_MS)) return
     addMessage(sessionId, {
       id: uid(),
       role: 'assistant',

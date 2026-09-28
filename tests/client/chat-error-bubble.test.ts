@@ -154,7 +154,7 @@ describe('chat run errors render as one persistent bubble', () => {
     expect(after?.content).toBe('Error: Provider returned 429 Too Many Requests')
   })
 
-  it('collapses two failures reported back to back into a single bubble', async () => {
+  it('keeps each reported failure as its own row instead of merging them', async () => {
     const store = useChatStore()
     const session = makeSession('err-collapse')
     const onEvent = await startRun(store, session)
@@ -172,12 +172,16 @@ describe('chat run errors render as one persistent bubble', () => {
       error: 'Provider returned 429 Too Many Requests',
     })
 
+    // Both failures are real turn outcomes. Rewriting the earlier bubble so the
+    // newest wording wins moved the error to the end of the transcript and lost
+    // the first one, which is not what a persistent record is for.
     const errors = session.messages.filter((m: Message) => m.role === 'assistant' && m.systemType === 'error')
-    expect(errors).toHaveLength(1)
-    expect(errors[0].content).toBe('Error: Provider returned 429 Too Many Requests')
+    expect(errors).toHaveLength(2)
+    expect(errors[0].content).toBe('Error: Unable to confirm Agent Bridge status while resuming: timeout')
+    expect(errors[1].content).toBe('Error: Provider returned 429 Too Many Requests')
   })
 
-  it('does not duplicate an identical repeated failure', async () => {
+  it('records a repeated identical failure rather than suppressing it', async () => {
     const store = useChatStore()
     const session = makeSession('err-dedupe')
     const onEvent = await startRun(store, session)
@@ -186,9 +190,30 @@ describe('chat run errors render as one persistent bubble', () => {
     onEvent(failure)
     onEvent(failure)
 
+    // A retry that fails the same way is a second recorded failure. The old code
+    // scanned the whole transcript and silently dropped the new row, so the
+    // visible error vanished and reappeared somewhere else in the flow.
     const errors = session.messages.filter((m: Message) => m.role === 'assistant' && m.systemType === 'error')
+    expect(errors).toHaveLength(2)
+    expect(errors.every((m: Message) => m.content === 'Error: Boom')).toBe(true)
+  })
+
+  it('never overwrites a streamed reply with the failure', async () => {
+    const store = useChatStore()
+    const session = makeSession('err-no-overwrite')
+    const onEvent = await startRun(store, session)
+
+    onEvent({ event: 'message.delta', session_id: session.id, run_id: 'run-1', delta: 'Short partial answer' })
+    onEvent({ event: 'run.failed', session_id: session.id, run_id: 'run-1', error: 'Boom' })
+
+    // The reply the run did produce is real output. It used to be overwritten in
+    // place whenever it was under 100 characters, so the transcript silently
+    // lost it and the failure took its row.
+    const replies = session.messages.filter((m: Message) =>
+      m.role === 'assistant' && m.systemType !== 'error' && String(m.content || '').includes('Short partial answer'))
+    expect(replies).toHaveLength(1)
+    const errors = session.messages.filter((m: Message) => m.systemType === 'error')
     expect(errors).toHaveLength(1)
-    expect(errors[0].content).toBe('Error: Boom')
   })
 
   it('renders a bridge resume failure with the error bubble, not a system notice', async () => {
