@@ -937,12 +937,20 @@ export async function handleBridgeRun(
     // localStorage), which meant it vanished on another device and left the
     // session's activity time frozen at the message before the failure.
     //
-    // `role: 'error'` is filtered out of model context by buildCompressedHistory
+    // `role: 'error'` is kept out of model context by the `role IN ('user',
+    // 'assistant', 'tool')` allowlist in getSessionContextMessages — same as the
+    // `command` rows a compression leaves behind. It is persisted so the error
+    // survives a reload and advances activity time, and nothing else.
     // — the user sees it, the model does not.
+    // The `Error: ` prefix is the wording the transcript uses everywhere else for
+    // a failed run (see addSystemErrorMessage on the client), so persist that
+    // exact string. The client's in-memory bubble and this row are de-duplicated
+    // by role + content; storing the bare message here would make the two look
+    // like different failures and show the same error twice.
     addMessage({
       session_id: session_id,
       role: 'error',
-      content: message,
+      content: `Error: ${message}`,
       run_marker: runMarker,
       timestamp: Math.floor(Date.now() / 1000),
     })
