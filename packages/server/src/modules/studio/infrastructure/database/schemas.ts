@@ -1187,24 +1187,28 @@ function addMissingSafeColumns(
  * guarded by the same migration ledger the group-chat repair uses so it runs
  * once. Sessions with no messages fall back to `started_at`.
  */
-function migrateSessionLastActiveToNewestMessage(db: any): void {
+// Exported for tests: the migration is guarded by a ledger row, so verifying it
+// needs a direct call rather than a second bootstrap.
+export function migrateSessionLastActiveToNewestMessage(db: any): void {
   const migrationId = 'session-last-active-from-messages-v1'
   const seen = db
     .prepare(`SELECT 1 FROM ${quoteIdentifier(GC_ACTIVITY_MIGRATIONS_TABLE)} WHERE id = ?`)
     .get(migrationId)
   if (seen) return
 
+  // The COALESCE branch is what makes a message-less session fall back to
+  // `started_at`; restricting the update to sessions that HAVE messages would
+  // skip exactly that case, so the drift test has to cover every row.
   db.prepare(
     `UPDATE ${quoteIdentifier(SESSIONS_TABLE)}
      SET last_active = COALESCE(
        (SELECT MAX(timestamp) FROM ${quoteIdentifier(MESSAGES_TABLE)} WHERE session_id = ${quoteIdentifier(SESSIONS_TABLE)}.id),
        started_at
      )
-     WHERE EXISTS (SELECT 1 FROM ${quoteIdentifier(MESSAGES_TABLE)} WHERE session_id = ${quoteIdentifier(SESSIONS_TABLE)}.id)
-        AND last_active != COALESCE(
-              (SELECT MAX(timestamp) FROM ${quoteIdentifier(MESSAGES_TABLE)} WHERE session_id = ${quoteIdentifier(SESSIONS_TABLE)}.id),
-              started_at
-            )`,
+     WHERE last_active != COALESCE(
+       (SELECT MAX(timestamp) FROM ${quoteIdentifier(MESSAGES_TABLE)} WHERE session_id = ${quoteIdentifier(SESSIONS_TABLE)}.id),
+       started_at
+     )`,
   ).run()
 
   db.prepare(
