@@ -55,3 +55,6 @@ packages/client/src/**/*.js
 .claude/
 # Local npm release tarballs
 /release/npm/
+
+# Agent scratch space
+.ekko-tmp/
