@@ -40,20 +40,30 @@ describe('error bubble styling is unified', () => {
     expect(helperStart).toBeGreaterThan(-1)
     const helper = store.slice(helperStart, store.indexOf('function handleSessionCommandEvent', helperStart))
 
+    // The shape that drives the styling: a system row tagged as an error, so
+    // one rule covers every failure no matter which path produced it. The
+    // local-only marker that used to sit alongside is gone — the row is now
+    // server-persisted like any other message.
     expect(helper).toContain("role: 'system'")
     expect(helper).toContain("systemType: 'error'")
-    expect(helper).toContain('localOnly: true')
+    expect(helper).not.toContain('localOnly')
   })
 
-  it('marks injected errors local-only and preserves them across a re-map', () => {
+  it('keeps nothing about errors in localStorage', () => {
     const store = readClientFile('stores/hermes/chat.ts')
 
-    expect(store).toContain('localOnly?: boolean')
-    expect(store).toContain('function mergeLocalOnlyMessages(')
-    expect(store).toContain('options.preserveLocalOnly ? mergeLocalOnlyMessages(merged, previous) : merged')
-    // Every full-transcript refresh opts in.
-    const optIns = store.match(/preserveLocalOnly: true/g) || []
-    expect(optIns.length).toBeGreaterThanOrEqual(5)
+    // Failures are persisted by the server as `role: 'error'`, so the client
+    // keeps no parallel copy: no marker to preserve, no merge to re-apply them
+    // on every transcript refresh, and nothing written to disk. These are
+    // negative assertions on purpose — a full-transcript refresh that still had
+    // to opt into restoring local rows would mean the duplication came back.
+    expect(store).not.toContain('localOnly?: boolean')
+    expect(store).not.toContain('mergeLocalOnlyMessages')
+    expect(store).not.toContain('preserveLocalOnly')
+    expect(store).not.toContain('rememberLocalError')
+    expect(store).not.toContain('readStoredLocalErrors')
+    expect(store).not.toContain('StoredLocalError')
+    expect(store).not.toContain('carryOverLocalErrors')
   })
 
   it('never clears error rows together with transient agent-event notices', () => {

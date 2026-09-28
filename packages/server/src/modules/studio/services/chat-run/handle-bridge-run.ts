@@ -59,6 +59,15 @@ const BRIDGE_TITLE_EVENT_POLL_INTERVAL_MS = 500
 const BRIDGE_TITLE_EVENT_POLL_TIMEOUT_MS = 45_000
 const BRIDGE_GOAL_EVALUATE_TIMEOUT_MS = 120_000
 
+/**
+ * Shown when a run finishes having produced no assistant text, no tool call and
+ * nothing queued — almost always an invalid key, an unsupported model, or a
+ * provider that returned an error body. The client renders this as a failed
+ * turn; it must be identical on both sides so de-duplication by role + content
+ * collapses the two copies into one bubble.
+ */
+const EMPTY_OUTPUT_MESSAGE = 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.'
+
 type BridgeRunSource = Extract<ChatRunSource, 'cli' | 'global_agent' | 'workflow' | 'group_chat'>
 
 function normalizeBridgeRunSource(source?: string | null, sessionSource?: string | null): BridgeRunSource {
@@ -1962,6 +1971,30 @@ async function applyBridgeChunkAsync(
   //
   // `run.completed` is emitted just above, and `isWorking` was already cleared,
   // so this records the end of the run rather than extending it.
+  // A run that ends without any assistant text, tool activity or queued turn is
+  // a failure the user must see, and the client used to invent that bubble
+  // locally because the server said nothing. Persist it instead: the wording
+  // lives here now so the transcript, the client and every other device agree,
+  // and the message also advances activity time like any other outcome.
+  if (!terminalError && !finalResponse?.trim()) {
+    const bufferedToolActivity = (state.events || []).some(
+      event => typeof event?.event === 'string' && event.event.startsWith('tool.'),
+    )
+    if (!bufferedToolActivity && state.queue.length === 0) {
+      try {
+        addMessage({
+          session_id: sessionId,
+          role: 'error',
+          content: EMPTY_OUTPUT_MESSAGE,
+          run_marker: runMarker,
+          timestamp: Math.floor(Date.now() / 1000),
+        })
+      } catch (err) {
+        bridgeLogger.warn(err, '[chat-run-socket] failed to persist empty-output failure for session %s', sessionId)
+      }
+    }
+  }
+
   state.runState = 'finishing'
   try {
     updateSession(sessionId, {
@@ -2054,7 +2087,10 @@ function hasRealQueuedRun(state: SessionState): boolean {
   return state.queue.some(item => !item.goalContinuation)
 }
 
-async function maybeEnqueueGoalContinuation(args: {
+// Exported for tests: the stale-verdict guard is invisible from the outside
+// (it returns nothing and logs nothing on purpose), so pinning it requires
+// calling the decision path directly.
+export async function maybeEnqueueGoalContinuation(args: {
   nsp: ReturnType<Server['of']>
   socket: Socket
   sessionId: string

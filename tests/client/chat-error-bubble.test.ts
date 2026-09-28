@@ -133,11 +133,15 @@ describe('chat run errors render as one persistent bubble', () => {
     const before = session.messages.find((m: Message) => m.systemType === 'error')
     expect(before?.content).toBe('Error: Provider returned 429 Too Many Requests')
 
-    // Tab focus / session switch re-pulls the server transcript, which can
-    // never contain a client-only row. The error must survive it.
+    // Tab focus / session switch re-pulls the server transcript. The error
+    // survives because the server wrote it down as `role: 'error'`, so the row
+    // comes back from the same source rather than from a local copy.
     sessionsApi.fetchSessionMessagesPage.mockResolvedValue({
-      messages: [{ id: 'u1', role: 'user', content: 'hello', timestamp: 1 }],
-      total: 1,
+      messages: [
+        { id: 'u1', role: 'user', content: 'hello', timestamp: 1 },
+        { id: 'e1', role: 'error', content: 'Error: Provider returned 429 Too Many Requests', timestamp: 2 },
+      ],
+      total: 2,
       hasMore: false,
       taskPlans: [],
       workspaceRunChanges: [],
@@ -200,7 +204,6 @@ describe('chat run errors render as one persistent bubble', () => {
 
     const errors = session.messages.filter((m: Message) => m.role === 'assistant' && m.systemType === 'error')
     expect(errors).toHaveLength(1)
-    expect(errors[0].localOnly).toBe(true)
     expect(String(errors[0].content)).toContain('Unable to confirm Agent Bridge status while resuming')
     expect(
       session.messages.some((m: Message) =>
@@ -217,8 +220,10 @@ describe('chat run errors render as one persistent bubble', () => {
     onEvent({ event: 'run.failed', session_id: session.id, run_id: 'run-1', error: 'Provider returned 502' })
     expect(session.messages.some((m: Message) => m.systemType === 'error')).toBe(true)
 
-    // Simulate a page reload: a brand new store whose transcript comes only
-    // from the server, which never stored the client-side error row.
+    // Simulate a page reload on a *different device*: a brand new store whose
+    // transcript comes only from the server. The failure survives because the
+    // server persisted it as `role: 'error'`, not because this browser kept a
+    // copy — nothing is written to localStorage any more.
     setActivePinia(createPinia())
     const second = useChatStore()
     const reloaded = makeSession('err-reload')
@@ -226,8 +231,11 @@ describe('chat run errors render as one persistent bubble', () => {
     second.activeSessionId = reloaded.id
     second.activeSession = reloaded
     sessionsApi.fetchSessionMessagesPage.mockResolvedValue({
-      messages: [{ id: 'u1', role: 'user', content: 'hello', timestamp: 1 }],
-      total: 1,
+      messages: [
+        { id: 'u1', role: 'user', content: 'hello', timestamp: 1 },
+        { id: 'e1', role: 'error', content: 'Error: Provider returned 502', timestamp: 2 },
+      ],
+      total: 2,
       hasMore: false,
       taskPlans: [],
       workspaceRunChanges: [],
@@ -240,14 +248,19 @@ describe('chat run errors render as one persistent bubble', () => {
     expect(restored?.content).toBe('Error: Provider returned 502')
   })
 
-  it('tags every injected error as local-only so re-mapping can preserve it', async () => {
+  it('renders a run failure the same way whether it came from the socket or the server', async () => {
     const store = useChatStore()
-    const session = makeSession('err-local-only')
+    const session = makeSession('err-shape')
     const onEvent = await startRun(store, session)
 
     onEvent({ event: 'run.failed', session_id: session.id, run_id: 'run-1', error: 'Oops' })
 
+    // Failures are now persisted by the server as `role: 'error'`, so the live
+    // bubble and the row that comes back on reload are the same object. There is
+    // no `localOnly` marker any more — the client keeps nothing to disk, and the
+    // two copies collapse because both carry the same role and content.
     const error = session.messages.find((m: Message) => m.systemType === 'error')
-    expect(error).toMatchObject({ role: 'assistant', systemType: 'error', localOnly: true })
+    expect(error).toMatchObject({ role: 'assistant', systemType: 'error', content: 'Error: Oops' })
+    expect(error).not.toHaveProperty('localOnly')
   })
 })

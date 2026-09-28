@@ -757,14 +757,13 @@ describe('chat store compression state', () => {
     await store.switchSession('session-reattach')
     await nextTick()
 
-    // Bridge resume failures are errors: they now render through the single
-    // error bubble instead of the neutral agent-event notice, so one failure
-    // can no longer show up twice in two different styles.
+    // Bridge resume failures are errors: they render through the single error
+    // bubble instead of the neutral agent-event notice, so one failure can no
+    // longer show up twice in two different styles.
     expect(store.activeSession?.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
         role: 'assistant',
         systemType: 'error',
-        localOnly: true,
         content: 'Error: Unable to confirm Agent Bridge status while resuming: connect ECONNREFUSED configured endpoint',
       }),
     ]))
