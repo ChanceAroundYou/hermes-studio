@@ -1343,6 +1343,10 @@ function recoverStorageQuota() {
       'hermes_session_msgs_v1_',
       'hermes_session_pins_v1_',
       'hermes_human_only_v1_',
+      // Failures are persisted by the server as `role: 'error'` now, so the
+      // per-browser mirror of them has no reader left. Drop it rather than
+      // leaving a stale copy of a failure in every open browser forever.
+      'hermes_local_errors_v1_',
     ]
     const keysToRemove: string[] = []
     for (let i = 0; i < localStorage.length; i++) {
