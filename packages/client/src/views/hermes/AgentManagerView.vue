@@ -94,7 +94,7 @@ const codingAgents: CodingAgentCard[] = [
     id: 'cursor',
     name: 'Cursor',
     provider: 'Cursor',
-    logo: '/coding-agents/cursor.svg',
+    logo: '/coding-agents/cursor-logo.png',
     command: 'agent',
     packageName: 'cursor-agent',
   },

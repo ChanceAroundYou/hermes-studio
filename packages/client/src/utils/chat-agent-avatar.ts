@@ -20,7 +20,7 @@ const AGENT_AVATARS = {
   grok: { label: 'Grok', src: `${BASE}/coding-agents/grok.svg` },
   opencode: { label: 'OpenCode', src: `${BASE}/coding-agents/opencode.png` },
   dsh: { label: 'DeepSeek Harness', src: `${BASE}/coding-agents/deepseek.svg` },
-  cursor: { label: 'Cursor', src: `${BASE}/coding-agents/cursor.svg` },
+  cursor: { label: 'Cursor', src: `${BASE}/coding-agents/cursor-logo.png` },
 } as const satisfies Record<string, ChatAgentAvatar>
 
 export function chatSessionAgentAvatar(session?: ChatAgentSessionIdentity | null): ChatAgentAvatar {
