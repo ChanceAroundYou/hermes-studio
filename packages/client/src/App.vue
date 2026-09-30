@@ -516,6 +516,8 @@ useKeyboard();
 .app-shell--navigation-rail {
   --studio-header-height: 40px;
   --studio-header-inset: #{$navigation-rail-width};
+  --studio-content-gutter: 5px;
+  --studio-content-radius: #{$radius-lg};
   --desktop-window-controls-width: 138px;
   flex-direction: row;
   background-color: $bg-sidebar;
@@ -643,8 +645,8 @@ useKeyboard();
   }
   .app-layout {
     width: auto;
-    margin: 0 5px 5px 0;
-    border-radius: $radius-lg;
+    margin: 0 var(--studio-content-gutter) var(--studio-content-gutter) 0;
+    border-radius: var(--studio-content-radius);
   }
   .app-layout.no-sidebar { display: flex; }
 
@@ -661,6 +663,27 @@ useKeyboard();
 }
 
 .app-shell--custom-background {
+  .studio-page-header {
+    box-shadow: inset 0 -1px 0 var(--glass-divider-color);
+  }
+
+  &.app-shell--navigation-rail {
+    .app-box::before {
+      inset: 0;
+      height: auto;
+    }
+
+    .app-layout {
+      // Align this image with the shell's full-window background. Its opaque base
+      // keeps the continuous frame glass from tinting the content a second time.
+      background: $bg-sidebar var(--app-background-image, none) center / cover no-repeat fixed;
+      // Composite the image and surfaces before rounding them together. Separate
+      // rounded clips leave antialiased pixels that expose the unfiltered image.
+      border-radius: 0;
+      clip-path: inset(0 round var(--studio-content-radius));
+    }
+  }
+
   .app-layout {
     background-color: transparent;
   }
@@ -669,7 +692,7 @@ useKeyboard();
     background-color: transparent;
 
     &--card {
-      background-color: rgba(var(--bg-main-surface-rgb), 0.72);
+      background-color: var(--glass-content-bg);
       -webkit-backdrop-filter: blur(8px) saturate(110%);
       backdrop-filter: blur(8px) saturate(110%);
     }
@@ -684,8 +707,16 @@ useKeyboard();
   }
 
   &.app-shell--navigation-rail .app-box::before,
-  :deep(.sidebar),
   :deep(.studio-navigation-rail),
+  :deep(.desktop-titlebar:not(.desktop-titlebar--flush)),
+  :deep(.chat-panel > .chat-main > .chat-header),
+  :deep(.group-chat-panel > .chat-main > .chat-header) {
+    background-color: var(--glass-chrome-bg);
+    -webkit-backdrop-filter: blur(16px) saturate(110%);
+    backdrop-filter: blur(16px) saturate(110%);
+  }
+
+  :deep(.sidebar),
   :deep(.hermes-config-sidebar),
   :deep(.ekko-config-sidebar),
   :deep(.coding-agent-config-sidebar),
@@ -693,14 +724,17 @@ useKeyboard();
   :deep(.history-panel > .page-loading-content > .session-list),
   :deep(.group-chat-panel > .room-sidebar),
   :deep(.workflow-view > .page-loading-content > .workflow-sidebar) {
-    background-color: rgba(var(--bg-sidebar-surface-rgb), 0.72);
-    -webkit-backdrop-filter: blur(8px) saturate(110%);
-    backdrop-filter: blur(8px) saturate(110%);
+    background-color: var(--glass-sidebar-bg);
+    -webkit-backdrop-filter: blur(12px) saturate(110%);
+    backdrop-filter: blur(12px) saturate(110%);
   }
 
   :deep(.history-panel > .page-loading-content > .chat-main),
-  :deep(.workflow-view > .page-loading-content > .workflow-main) {
-    background-color: rgba(var(--bg-main-surface-rgb), 0.72);
+  :deep(.workflow-view > .page-loading-content > .workflow-main),
+  :deep(.connections-panel),
+  :deep(.agent-manager-panel),
+  :deep(.models-view) {
+    background-color: var(--glass-content-bg);
     -webkit-backdrop-filter: blur(8px) saturate(110%);
     backdrop-filter: blur(8px) saturate(110%);
   }
@@ -712,16 +746,8 @@ useKeyboard();
     backdrop-filter: none;
   }
 
-  :deep(.desktop-titlebar:not(.desktop-titlebar--flush)),
-  :deep(.chat-panel > .chat-main > .chat-header),
-  :deep(.group-chat-panel > .chat-main > .chat-header) {
-    background-color: rgba(var(--bg-main-surface-rgb), 0.72);
-    -webkit-backdrop-filter: blur(8px) saturate(110%);
-    backdrop-filter: blur(8px) saturate(110%);
-  }
-
   :deep(.chat-input-area),
-  :deep(.agent-manager-panel) {
+  :deep(.connections-tabs > .n-tabs-nav) {
     background-color: transparent;
   }
 

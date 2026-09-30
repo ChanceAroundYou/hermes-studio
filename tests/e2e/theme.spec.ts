@@ -108,11 +108,11 @@ test('tints transparent app surfaces with the active theme background color', as
   await expect(page.locator('html')).toHaveClass(/theme-has-custom-background/)
   await expect(page.locator('.app-main--card')).toHaveCSS(
     'background-color',
-    'rgba(26, 26, 26, 0.72)',
+    'rgba(42, 42, 42, 0.82)',
   )
   await expect(page.locator('aside.sidebar')).toHaveCSS(
     'background-color',
-    'rgba(26, 26, 26, 0.72)',
+    'rgba(26, 26, 26, 0.78)',
   )
   await expect(page.locator('.app-main--card')).toHaveCSS(
     'backdrop-filter',
@@ -134,7 +134,7 @@ test('tints transparent app surfaces with the active theme background color', as
   await expect(page.locator('.chat-panel')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
   await expect(page.locator('.chat-panel > .session-list')).toHaveCSS(
     'background-color',
-    'rgba(26, 26, 26, 0.72)',
+    'rgba(26, 26, 26, 0.78)',
   )
   await expect(page.locator('.chat-panel > .chat-main')).toHaveCSS(
     'background-color',
@@ -177,7 +177,7 @@ test('tints transparent app surfaces with the active theme background color', as
   )
   await expect(page.locator('.group-chat-panel > .room-sidebar')).toHaveCSS(
     'background-color',
-    'rgba(26, 26, 26, 0.72)',
+    'rgba(26, 26, 26, 0.78)',
   )
   await expect(page.locator('.group-chat-panel > .chat-main')).toHaveCSS(
     'background-color',
@@ -195,7 +195,7 @@ test('tints transparent app surfaces with the active theme background color', as
   )
   await expect(page.locator('.app-main--card')).toHaveCSS(
     'background-color',
-    'rgba(26, 26, 26, 0.72)',
+    'rgba(42, 42, 42, 0.82)',
   )
 
   await page.goto('/#/hermes/coding-agents')
@@ -207,5 +207,20 @@ test('tints transparent app surfaces with the active theme background color', as
     'background-color',
     'rgba(26, 26, 26, 0.72)',
   )
+
+  for (const [route, surface] of [
+    ['/hermes/connections', '.connections-panel'],
+    ['/studio/agents', '.agent-manager-panel'],
+    ['/hermes/models', '.models-view'],
+  ]) {
+    await page.goto(`/#${route}`)
+    await expect(page.locator(surface)).toHaveCSS('background-color', 'rgba(42, 42, 42, 0.82)')
+    await expect(page.locator(surface)).toHaveCSS('backdrop-filter', 'blur(8px) saturate(1.1)')
+    await expect(page.locator('.app-main--card')).toHaveCount(0)
+    if (route === '/hermes/connections') {
+      await expect(page.locator('.connections-tabs > .n-tabs-nav')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+    }
+  }
+>>>>>>> a1304fa1d ([codex] fix desktop theme surfaces, controls, and loading feedback (#3236))
   expect(api.unexpectedRequests).toEqual([])
 })
