@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import PageLoading from '@/components/common/PageLoading.vue'
+import PageHeader from '@/components/layout/PageHeader.vue'
 import { computed, onMounted, ref } from 'vue'
-import { NButton, NDrawer, NDrawerContent, NInput, NModal, NPopconfirm, NSpin, NTag, useMessage } from 'naive-ui'
+import { NButton, NDrawer, NDrawerContent, NInput, NModal, NPopconfirm, NTag, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { copyToClipboard } from '@/utils/clipboard'
 import { formatDateTime } from '@/utils/format'
@@ -31,7 +33,7 @@ withDefaults(defineProps<{
   embedded: false,
 })
 
-const loading = ref(false)
+const loading = ref(true)
 const scanning = ref(false)
 const manualPairing = ref(false)
 const manualPairingUrl = ref('')
@@ -281,7 +283,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="devices-view" :class="{ 'devices-view--embedded': embedded }">
+  <PageLoading :show="loading" class="devices-view" :class="{ 'devices-view--embedded': embedded }">
+    <PageHeader :disabled="embedded">
     <header class="page-header">
       <div class="header-heading">
         <h2 class="header-title">{{ t('devices.title') }}</h2>
@@ -315,8 +318,9 @@ onMounted(() => {
         </NButton>
       </div>
     </header>
+    </PageHeader>
 
-    <NSpin :show="loading" class="devices-spin">
+    <div class="devices-spin">
       <div class="devices-content">
         <div v-if="devices.length === 0 && !loading" class="empty-state">
           <div class="empty-title">{{ t('devices.empty') }}</div>
@@ -398,7 +402,7 @@ onMounted(() => {
           </article>
         </div>
       </div>
-    </NSpin>
+    </div>
 
     <NDrawer v-model:show="showRequests" width="min(420px, 100vw)" placement="right">
       <NDrawerContent :title="t('devices.requests')" closable>
@@ -468,7 +472,7 @@ onMounted(() => {
         </div>
       </div>
     </NModal>
-  </div>
+  </PageLoading>
 </template>
 
 <style scoped lang="scss">
@@ -524,11 +528,6 @@ onMounted(() => {
 .devices-spin {
   flex: 1;
   min-height: 0;
-
-  :deep(.n-spin-container),
-  :deep(.n-spin-content) {
-    height: 100%;
-  }
 }
 
 .devices-content {

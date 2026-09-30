@@ -243,7 +243,6 @@ describe('Agent Manager page', () => {
 
   function mountPage() {
     return mount(AgentManagerView, {
-      props: { sidebarCollapsed: false },
       global: {
         stubs: {
           VersionManagementModal: true,
@@ -263,7 +262,6 @@ describe('Agent Manager page', () => {
 
   it('shows Hermes with the same compact card structure as other Agents', async () => {
     const wrapper = mount(AgentManagerView, {
-      props: { sidebarCollapsed: false },
       global: {
         stubs: {
           VersionManagementModal: true,
@@ -321,7 +319,6 @@ describe('Agent Manager page', () => {
     cliStatus.hermes.cliInstallations[0].selected = true
     api.fetchRuntimeVersionStatus.mockResolvedValue(cliStatus)
     const wrapper = mount(AgentManagerView, {
-      props: { sidebarCollapsed: false },
       global: {
         stubs: {
           VersionManagementModal: true,
@@ -364,7 +361,6 @@ describe('Agent Manager page', () => {
     api.fetchAgentStatusSnapshot.mockResolvedValue(status)
 
     const wrapper = mount(AgentManagerView, {
-      props: { sidebarCollapsed: false },
       global: {
         stubs: {
           VersionManagementModal: true,
@@ -387,7 +383,6 @@ describe('Agent Manager page', () => {
   it('opens Runtime management only when chat creation requests installation', async () => {
     route.query = { runtime: 'install' }
     const wrapper = mount(AgentManagerView, {
-      props: { sidebarCollapsed: false },
       global: { stubs: { VersionManagementModal: true } },
     })
     await flushPromises()
@@ -444,7 +439,6 @@ describe('Agent Manager page', () => {
       updateAvailable: true,
     })
     const wrapper = mount(AgentManagerView, {
-      props: { sidebarCollapsed: false },
       global: { stubs: { VersionManagementModal: true } },
     })
     await flushPromises()
@@ -463,7 +457,6 @@ describe('Agent Manager page', () => {
 
   it('rechecks a missing Cursor on entry and still supports an explicit full refresh', async () => {
     const wrapper = mount(AgentManagerView, {
-      props: { sidebarCollapsed: false },
       global: { stubs: { VersionManagementModal: true } },
     })
     await flushPromises()

@@ -10,27 +10,26 @@ const sessionScrollPositions = new Map<string, MessageViewportScrollSnapshot>();
 </script>
 
 <script setup lang="ts">
+import { NSpin, NButton, NInput } from 'naive-ui'
+import { usePageLoadingTask } from '@/composables/usePageLoading'
 import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { NSpin } from "naive-ui";
+
 import VirtualMessageList from "./VirtualMessageList.vue";
 import MessageItem from "./MessageItem.vue";
 import { positionTaskPlansAtTurnEnd } from "@/utils/task-plan";
 import LiveReasoningStatus from "./LiveReasoningStatus.vue";
 import ToolRunCard from "./ToolRunCard.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
-import PendingInteractionCard from "./PendingInteractionCard.vue";
+import PendingInteractionCountdown from "./PendingInteractionCountdown.vue";
 import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message } from "@/stores/hermes/chat";
-import { useProfilesStore } from '@/stores/hermes/profiles'
-import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
+import { useProfilesStore } from "@/stores/hermes/profiles";
 import { useToolTraceVisibility } from "@/composables/useToolTraceVisibility";
 import { openSubagentStream, subagentIdFromToolCall } from "@/utils/hermes/subagent-stream";
 import { messageScrollPositionKey, rememberMessageScrollPosition } from "./message-scroll-position";
 import { chatSessionAgentAvatar } from "@/utils/chat-agent-avatar";
 import { parseThinking } from "@/utils/thinking-parser";
 import { groupCompletedToolsByRun } from "./tool-run-grouping";
-import { insertByTimestamp } from "@/utils/hermes/transcript-order";
-import { formatCompactCount } from '@/utils/format'
 
 const props = withDefaults(defineProps<{
   approvalPortalToBody?: boolean
@@ -52,10 +51,17 @@ const isSearchFetching = computed(() => !!chatStore.focusMessageId && chatStore.
 const isSearchLoading = computed(() => !!chatStore.focusMessageId && (
   chatStore.isLoadingMessages || isPositioningSearch.value
 ));
+usePageLoadingTask(() => isSearchLoading.value);
 const thinkingElapsedMs = ref(0);
 const initialBottomScrollOptions = { frames: 8, keepAliveMs: 1200 };
 let thinkingStartedAt = 0;
 let thinkingTimer: ReturnType<typeof setInterval> | null = null;
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  return String(n)
+}
 
 function formatToolDuration(seconds: number): string {
   if (seconds < 1) return `${Math.round(seconds * 1000)}ms`
@@ -63,14 +69,6 @@ function formatToolDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60)
   const secs = Math.round(seconds % 60)
   return `${mins}m ${secs}s`
-}
-
-function formatToolTime(ts: number): string {
-  if (!ts) return ''
-  const d = new Date(ts)
-  const h = d.getHours().toString().padStart(2, '0')
-  const m = d.getMinutes().toString().padStart(2, '0')
-  return `${h}:${m}`
 }
 
 function toolPreviewText(preview?: string): string {
@@ -86,7 +84,6 @@ function handleToolCallClick(message: Message) {
   if (!isSubagentToolCall(message)) return
   openSubagentStream(chatStore.activeSessionId, message.toolCallId)
 }
-void formatToolDuration; void formatToolTime; void toolPreviewText; void handleToolCallClick; void isSubagentToolCall;
 
 function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -127,6 +124,10 @@ const currentToolCalls = computed(() => {
   ));
   return [...tools].reverse();
 });
+
+const visibleToolCalls = computed(() =>
+  currentToolCalls.value.filter((tool) => !!tool.toolName),
+);
 
 const liveReasoningDetail = computed<{
   messageId: Message["id"]
@@ -190,8 +191,7 @@ const activeSessionProfile = computed(() => (
   profilesStore.profiles.find(profile => profile.name === activeSessionProfileName.value) || null
 ));
 const userProfileName = computed(() => (
-  // Custom display name when configured; falls back to the profile name.
-  resolveProfileDisplayName(profilesStore.profiles, activeSessionProfileName.value)
+  activeSessionProfile.value?.alias?.trim() || activeSessionProfileName.value
 ));
 const userProfileAvatar = computed(() => activeSessionProfile.value?.avatar || null);
 
@@ -218,47 +218,17 @@ function hasRenderableAssistantContent(message: Message): boolean {
   );
 }
 
-const compressionMessage = computed<Message | null>(() => {
-  const s = chatStore.compressionState
-  if (!s) return null
-  const sid = chatStore.activeSessionId || 'unknown'
-  const text = s.compressing
-    ? `Compressing... (${s.messageCount} msgs, ~${formatCompactCount(s.beforeTokens)} tokens)`
-    : s.error
-      ? `Compression failed: ${s.error}`
-      : s.compressed === false
-        ? `Compression skipped`
-        : s.compressed === null
-          // Terminal but unreported: the completion event was lost (the client
-          // switched away mid-compression or reconnected). Never claim it is
-          // still running, and never invent token numbers.
-          ? `Compression finished`
-          : `Compression completed: ${s.messageCount} msgs, ${formatCompactCount(s.beforeTokens)} → ${formatCompactCount(s.afterTokens)} tokens.`
-  return {
-    id: `compression:${sid}`,
-    role: 'command',
-    content: text,
-    // The compression's own start time, not "now": the entry has to sort and
-    // read as the event it represents.
-    timestamp: s.startedAt || Date.now(),
-    systemType: 'command',
-  } as Message
-})
-
 const displayMessages = computed(() => {
   // Pagination can add thousands of rows. Don't repeatedly parse and group
   // partial pages while the transcript is covered by the search loader.
   if (isSearchFetching.value) return [];
   const messages = chatStore.messages;
-  const hasCompression = !!compressionMessage.value
+  const currentToolIds = new Set(currentToolCalls.value.map((tool) => tool.id));
   const renderedMessages = messages
     .filter((m) => {
-      // A search hit must survive the filters below, otherwise navigating to a
-      // result inside a collapsed tool run or a filtered row shows nothing.
       if (m.id === chatStore.focusMessageId) return true;
-      if (hasCompression && m.role === 'command' && /Compression (completed|failed)|Compressing\.\.\.|Compression skipped/.test(m.content || '')) return false
       if (m.role === "tool") {
-        return toolTraceVisible.value && !!m.toolName;
+        return toolTraceVisible.value && !!m.toolName && !(isRunIndicatorActive.value && currentToolIds.has(m.id));
       }
       if (m.role === "assistant" && !hasRenderableAssistantContent(m)) return false;
       return true;
@@ -274,38 +244,7 @@ const displayMessages = computed(() => {
       }
       return message;
     });
-  // Pass the search hit through so it is not folded into a collapsed tool card.
-  let out = groupCompletedToolsByRun(positionTaskPlansAtTurnEnd(renderedMessages), chatStore.focusMessageId);
-  if (compressionMessage.value) {
-    // Place the card by time, where the compression actually happened. The card
-    // carries the compression's own start time, so auto-compression (which
-    // leaves no `/compress` command row behind) lands inline instead of drifting
-    // below messages that came later.
-    out = insertByTimestamp(out, compressionMessage.value)
-  }
-  // Embed consecutive tool cards into the preceding assistant's bubble,
-  // so the tool sits directly under the bubble and above message-meta
-  // (tight visual attachment, not separated by the button row gap).
-  const embedded: Message[] = [];
-  for (const m of out) {
-    if (m.systemType === 'tool-run' && m.toolMessages?.length) {
-      let attachIdx = -1;
-      for (let i = embedded.length - 1; i >= 0; i--) {
-        const cand = embedded[i];
-        if (cand.role === 'user' || cand.role === 'command' || cand.systemType === 'command' || cand.systemType === 'fork-divider') break;
-        if (cand.role === 'assistant') { attachIdx = i; break }
-      }
-      if (attachIdx >= 0) {
-        const prev = embedded[attachIdx];
-        embedded[attachIdx] = { ...prev, attachedToolMessages: [...(prev.attachedToolMessages || []), ...m.toolMessages!] } as Message;
-        continue;
-      }
-      embedded.push(m);
-      continue;
-    }
-    embedded.push(m);
-  }
-  return embedded;
+  return groupCompletedToolsByRun(positionTaskPlansAtTurnEnd(renderedMessages), chatStore.focusMessageId);
 });
 
 function forkDividerId(sessionId: string): string {
@@ -382,7 +321,12 @@ watch(
   () => visibleClarify.value?.clarifyId,
   () => { clarifyResponse.value = visibleClarify.value?.initialResponse || ""; },
 );
-const virtualListPadding = "20px";
+const hasFloatingPrompt = computed(() => !!visibleApproval.value || !!visibleClarify.value);
+const virtualListPadding = computed(() => {
+  if (queuedMessages.value.length > 0 && hasFloatingPrompt.value) return "20px 20px 380px";
+  if (queuedMessages.value.length > 0 || hasFloatingPrompt.value) return "20px 20px 260px";
+  return "20px";
+});
 
 const activeSessionScrollKey = computed(() => {
   const sessionId = chatStore.activeSessionId;
@@ -432,9 +376,8 @@ async function openForkParent(event?: MouseEvent) {
   window.location.hash = lineage.parentHref.replace(/^#/, "");
 }
 
-function handleApproval(choice: string) {
-  // The card only ever emits the grant codes the server offered.
-  chatStore.respondApproval(choice as "once" | "session" | "always" | "deny");
+function handleApproval(choice: "once" | "session" | "always" | "deny") {
+  chatStore.respondApproval(choice);
 }
 
 function handleClarify(response?: string) {
@@ -683,17 +626,16 @@ watch(currentToolCalls, () => {
   scrollToBottom({ frames: 1, keepAliveMs: 0 });
 });
 
-// The queue card is fixed-position; enqueuing messages must not scroll the
-// transcript. When the card first appears, make sure it is not hidden behind
-// the last message: scroll to bottom only if the tail is not already visible.
 watch(
   () => queuedMessages.value.length,
   async (length, previousLength) => {
+    if (pendingInitialScrollKey.value === activeSessionScrollKey.value) return;
+    if (chatStore.focusMessageId) return;
     if (length <= previousLength) return;
-    if (previousLength === 0) {
-      await nextTick();
-      if (!listRef.value?.isNearBottom(400)) scrollToBottom({ frames: 2, keepAliveMs: 0 });
-    }
+    const wasNearBottom = shouldAutoFollowBottom(320);
+    await nextTick();
+    if (!wasNearBottom && !chatStore.isRunActive) return;
+    scrollToBottom({ frames: 4, keepAliveMs: 600 });
   },
 );
 
@@ -724,7 +666,6 @@ defineExpose({
       :aria-hidden="isSearchLoading || undefined"
       :messages="displayMessagesWithForkDivider"
       :virtualized="(chatStore.activeSession?.loadedMessageCount || 0) > LIVE_CHAT_MAX_LOADED_MESSAGES"
-      :row-gap="8"
       :padding="virtualListPadding"
       @scroll="handleListScroll"
       @top-reach="handleTopReach"
@@ -745,7 +686,7 @@ defineExpose({
           v-else-if="chatStore.activeSession?.hasMoreBefore || chatStore.activeSession?.isLoadingOlderMessages"
           class="history-loader"
         >
-          <span v-if="chatStore.activeSession?.isLoadingOlderMessages" class="history-loader-spinner"></span>
+          <span v-if="chatStore.activeSession?.isLoadingOlderMessages" class="history-loader-spinner" role="status" :aria-label="t('common.loading')"></span>
         </div>
       </template>
       <template #item="{ message: msg }">
@@ -785,67 +726,182 @@ defineExpose({
       </template>
       <template #after>
         <Transition name="fade">
-          <div v-if="isRunIndicatorActive" class="streaming-indicator">
-            <LiveReasoningStatus
-              :agent="assistantAgent"
-              :reasoning="liveReasoningDetail?.reasoning"
-              :reasoning-id="liveReasoningDetail?.messageId"
-              :elapsed="formattedThinkingElapsed"
-            />
+        <div v-if="isRunIndicatorActive" class="streaming-indicator">
+          <LiveReasoningStatus
+            :agent="assistantAgent"
+            :reasoning="liveReasoningDetail?.reasoning"
+            :reasoning-id="liveReasoningDetail?.messageId"
+            :elapsed="formattedThinkingElapsed"
+          />
+          <div v-if="visibleToolCalls.length > 0 || chatStore.compressionState || chatStore.abortState" class="tool-calls-panel">
+            <!-- Abort indicator -->
+            <div v-if="chatStore.abortState" class="tool-call-item compression-item">
+              <svg
+                v-if="chatStore.abortState.aborting"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                class="tool-call-icon"
+              >
+                <path d="M10 9v6m4-6v6M5 5h14v14H5z" />
+              </svg>
+              <svg
+                v-else
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                class="tool-call-icon"
+              >
+                <path d="M5 13l4 4L19 7" />
+              </svg>
+              <span class="tool-call-name">
+                {{
+                  chatStore.abortState.aborting
+                    ? chatStore.abortState.timedOut
+                      ? (chatStore.abortState.message || 'Still stopping... new messages will be queued')
+                      : 'Pausing... waiting for the run to stop and sync'
+                    : chatStore.abortState.synced
+                      ? 'Paused and synced'
+                      : 'Paused'
+                }}
+              </span>
+              <span
+                v-if="chatStore.abortState.aborting"
+                class="tool-call-spinner"
+              ></span>
+            </div>
+            <!-- Compression indicator -->
+            <div v-if="chatStore.compressionState" class="tool-call-item compression-item">
+              <svg
+                v-if="chatStore.compressionState.compressing"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                class="tool-call-icon"
+              >
+                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <svg
+                v-else-if="chatStore.compressionState.compressed"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                class="tool-call-icon"
+              >
+                <path d="M5 13l4 4L19 7" />
+              </svg>
+              <span class="tool-call-name">
+                {{
+                  chatStore.compressionState.compressing
+                    ? `Compressing... (${chatStore.compressionState.messageCount} msgs, ~${formatTokens(chatStore.compressionState.beforeTokens)} tokens)`
+                    : chatStore.compressionState.compressed
+                      ? `Compressed ${chatStore.compressionState.messageCount} msgs: ~${formatTokens(chatStore.compressionState.beforeTokens)} → ~${formatTokens(chatStore.compressionState.afterTokens)} tokens`
+                      : `Compression skipped`
+                }}
+              </span>
+              <span
+                v-if="chatStore.compressionState.compressing"
+                class="tool-call-spinner"
+              ></span>
+            </div>
+            <!-- Tool calls -->
+            <div
+              v-for="tc in visibleToolCalls"
+              :key="tc.id"
+              class="tool-call-item"
+              :class="{ 'subagent-entry': isSubagentToolCall(tc) }"
+              :role="isSubagentToolCall(tc) ? 'button' : undefined"
+              :tabindex="isSubagentToolCall(tc) ? 0 : undefined"
+              :title="isSubagentToolCall(tc) ? t('subagent.open') : undefined"
+              @click="handleToolCallClick(tc)"
+              @keydown.enter.prevent="handleToolCallClick(tc)"
+              @keydown.space.prevent="handleToolCallClick(tc)"
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                class="tool-call-icon"
+              >
+                <path
+                  d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
+                />
+              </svg>
+              <span class="tool-call-name">{{ tc.toolName }}</span>
+              <span
+                v-if="tc.toolPreview"
+                class="tool-call-preview"
+                :title="tc.toolPreview"
+              >{{ toolPreviewText(tc.toolPreview) }}</span>
+              <span
+                v-if="tc.toolDuration !== undefined && tc.toolStatus !== 'running'"
+                class="tool-call-duration"
+                :title="$t('chat.executionDuration')"
+              >{{ formatToolDuration(tc.toolDuration) }}</span
+              >
+              <svg
+                v-if="tc.toolStatus === 'done'"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                class="tool-call-success-icon"
+              >
+                <circle cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.15"/>
+                <path
+                  d="M8 12L11 15L16 9"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  fill="none"
+                />
+              </svg>
+              <span
+                v-if="tc.toolStatus === 'running'"
+                class="tool-call-spinner"
+              ></span>
+              <svg
+                v-if="tc.toolStatus === 'error'"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                class="tool-call-error-icon"
+              >
+                <circle cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.15"/>
+                <path
+                  d="M15 9L9 15M9 9L15 15"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  fill="none"
+                />
+              </svg>
+            </div>
           </div>
-        </Transition>
-        <div v-if="chatStore.abortState" class="compression-inline-card abort-inline-card" role="status">
-          <svg
-            v-if="chatStore.abortState.aborting"
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            class="compression-inline-icon"
-            aria-hidden="true"
-          >
-            <path d="M10 9v6m4-6v6M5 5h14v14H5z" />
-          </svg>
-          <svg
-            v-else
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            class="compression-inline-icon"
-            aria-hidden="true"
-          >
-            <path d="M5 13l4 4L19 7" />
-          </svg>
-          <span class="compression-inline-text">
-            {{
-              chatStore.abortState.aborting
-                ? chatStore.abortState.timedOut
-                  ? (chatStore.abortState.message || 'Still stopping... new messages will be queued')
-                  : 'Pausing... waiting for the run to stop and sync'
-                : chatStore.abortState.synced
-                  ? 'Paused and synced'
-                  : 'Paused'
-            }}
-          </span>
-          <span
-            v-if="chatStore.abortState.aborting"
-            class="tool-call-spinner"
-            aria-hidden="true"
-          ></span>
         </div>
+        </Transition>
       </template>
     </VirtualMessageList>
     <div v-if="isSearchLoading" class="message-search-loading" role="status" :aria-label="t('common.loading')">
-      <NSpin size="medium" :rotate="false" :description="t('common.loading')">
-        <template #icon>
-          <span class="message-search-spinner" aria-hidden="true" />
-        </template>
-      </NSpin>
+      <NSpin :description="t('common.loading')" />
     </div>
     <button
       v-if="showScrollBottomButton && !isSearchLoading"
@@ -875,35 +931,130 @@ defineExpose({
     >
     <Teleport to="body" :disabled="!props.approvalPortalToBody">
       <Transition name="queue-float">
-        <PendingInteractionCard
+        <div
           v-if="visibleApproval"
-          kind="approval"
-          :variant="props.approvalPortalToBody ? 'portal' : 'inline'"
-          :approval-choices="visibleApproval.choices"
-          :is-memory-write="visibleApproval.isMemoryWrite"
-          :description="visibleApproval.description"
-          :command="visibleApproval.command"
-          :countdown-deadline="visibleApproval.countdownDeadline"
-          @select="handleApproval"
-        />
+          class="approval-float-panel"
+          :class="{ 'approval-float-panel--global': props.approvalPortalToBody }"
+        >
+          <div class="float-panel-header">
+            <span class="approval-float-icon" aria-hidden="true">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+                <path d="m9 12 2 2 4-4" />
+              </svg>
+            </span>
+            <span>{{ t("chat.approvalKicker") }}</span>
+            <PendingInteractionCountdown :deadline="visibleApproval.countdownDeadline" />
+          </div>
+          <div class="approval-float-title">{{ t("chat.approvalTitle") }}</div>
+          <div class="approval-float-desc">{{ visibleApproval.description }}</div>
+          <code class="approval-float-command">{{ visibleApproval.command }}</code>
+          <div class="approval-float-actions">
+            <NButton
+              v-if="visibleApproval.isMemoryWrite"
+              size="small"
+              type="primary"
+              @click="handleApproval('once')"
+            >
+              {{ t("chat.approvalAgree") }}
+            </NButton>
+            <NButton
+              v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('once')"
+              size="small"
+              type="primary"
+              @click="handleApproval('once')"
+            >
+              {{ t("chat.approvalAllowOnce") }}
+            </NButton>
+            <NButton
+              v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('session')"
+              size="small"
+              secondary
+              @click="handleApproval('session')"
+            >
+              {{ t("chat.approvalAllowSession") }}
+            </NButton>
+            <NButton
+              v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('always')"
+              size="small"
+              secondary
+              @click="handleApproval('always')"
+            >
+              {{ t("chat.approvalAlways") }}
+            </NButton>
+            <NButton
+              v-if="visibleApproval.isMemoryWrite || visibleApproval.choices.includes('deny')"
+              size="small"
+              type="error"
+              secondary
+              @click="handleApproval('deny')"
+            >
+              {{ t("chat.approvalDeny") }}
+            </NButton>
+          </div>
+        </div>
       </Transition>
     </Teleport>
-    <Teleport to="body" :disabled="!props.approvalPortalToBody">
       <Transition name="queue-float">
-        <PendingInteractionCard
-          v-if="!visibleApproval && visibleClarify"
-          v-model="clarifyResponse"
-          :variant="props.approvalPortalToBody ? 'portal' : 'inline'"
-          :question="visibleClarify.question"
-          :choices="visibleClarify.choices"
-          :response-mode="visibleClarify.responseMode"
-          :countdown-deadline="visibleClarify.countdownDeadline"
-          @select="handleClarify"
-          @submit="handleClarify"
-          @dismiss="handleClarify('')"
-        />
+        <div v-if="!visibleApproval && visibleClarify" class="approval-float-panel">
+          <div class="float-panel-header">
+            <span class="approval-float-icon" aria-hidden="true">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            </span>
+            <span>{{ t("chat.clarifyKicker") }}</span>
+            <PendingInteractionCountdown :deadline="visibleClarify.countdownDeadline" />
+          </div>
+          <div class="approval-float-title">{{ t("chat.clarifyTitle") }}</div>
+          <div class="approval-float-desc">{{ visibleClarify.question }}</div>
+          <div v-if="visibleClarify.choices && visibleClarify.choices.length" class="approval-float-actions">
+            <NButton
+              v-for="choice in visibleClarify.choices"
+              :key="choice"
+              size="small"
+              type="primary"
+              @click="handleClarify(choice)"
+            >
+              {{ choice }}
+            </NButton>
+            <NButton size="small" type="error" secondary @click="handleClarify('')">
+              {{ t("chat.clarifyDismiss") }}
+            </NButton>
+          </div>
+          <div class="clarify-float-input-row">
+            <NInput
+              v-model:value="clarifyResponse"
+              size="small"
+              :type="visibleClarify.responseMode === 'editor' ? 'textarea' : 'text'"
+              :placeholder="t('chat.clarifyPlaceholder')"
+            />
+            <NButton size="small" type="primary" @click="handleClarify()">
+              {{ t("chat.clarifySubmit") }}
+            </NButton>
+          </div>
+        </div>
       </Transition>
-    </Teleport>
       <Transition name="queue-float">
         <MessageQueueFloatPanel
           :items="queuedFloatItems"
@@ -940,25 +1091,6 @@ defineExpose({
   display: grid;
   place-items: center;
   background: $bg-main-surface;
-}
-
-// Animate only the composited transform. SVG stroke animations need repainting
-// on the same main thread that is mounting and measuring the message list.
-.message-search-spinner {
-  display: block;
-  width: 100%;
-  height: 100%;
-  box-sizing: border-box;
-  border: 3px solid transparent;
-  border-top-color: currentColor;
-  border-inline-end-color: currentColor;
-  border-radius: 50%;
-  will-change: transform;
-  animation: message-search-spin 0.8s linear infinite;
-}
-
-@keyframes message-search-spin {
-  to { transform: rotate(360deg); }
 }
 
 .message-float-stack {
@@ -1036,6 +1168,95 @@ defineExpose({
 .queue-float-panel {
   align-self: flex-end;
   width: min(380px, 100%);
+}
+
+.float-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 8px;
+  color: var(--accent-primary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.approval-float-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.24);
+}
+
+.approval-float-title {
+  padding: 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: $text-primary;
+}
+
+.approval-float-desc {
+  padding: 0 4px;
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: $text-secondary;
+}
+
+.approval-float-command {
+  display: block;
+  margin: 8px 4px 0;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: $text-primary;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid $border-color;
+  border-radius: 11px;
+  padding: 8px 10px;
+
+  .dark & {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.approval-float-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 4px 0;
+  border-top: 1px solid $border-color;
+}
+
+.clarify-float-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 4px 0;
+  border-top: 1px solid $border-color;
+
+  :deep(.n-input) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  :deep(.n-button) {
+    flex: 0 0 auto;
+  }
 }
 
 .queue-float-header {
@@ -1244,6 +1465,23 @@ defineExpose({
     height: 22px;
   }
 
+  .approval-float-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+
+    :deep(.n-button) {
+      width: 100%;
+    }
+  }
+
+  .clarify-float-input-row {
+    flex-direction: column;
+
+    :deep(.n-button) {
+      width: 100%;
+    }
+  }
+
   .tool-calls-panel .tool-call-item {
     width: 100%;
   }
@@ -1295,14 +1533,6 @@ defineExpose({
   }
 }
 
-.history-loader {
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
 .history-loader-spinner {
   width: 14px;
   height: 14px;
@@ -1316,6 +1546,15 @@ defineExpose({
     border-top-color: $accent-primary;
   }
 }
+
+.history-loader {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
 
 .history-archive-link-wrap {
   display: flex;
@@ -1418,6 +1657,7 @@ defineExpose({
   text-decoration: underline;
 }
 
+
 @media (max-width: 640px) {
   .fork-divider {
     grid-template-columns: 1fr;
@@ -1442,15 +1682,15 @@ defineExpose({
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  flex: 0 0 auto;
-  gap: 0;
+  flex: 0 0 120px;
+  gap: 8px;
   width: 100%;
   max-width: 100%;
-  height: auto;
-  min-height: 0;
-  max-height: none;
+  height: 120px;
+  min-height: 120px;
+  max-height: 120px;
   min-width: 0;
-  padding: 4px 4px 0 4px;
+  padding: 4px;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -1494,8 +1734,6 @@ defineExpose({
   padding: 3px 8px;
   background: rgba(0, 0, 0, 0.03);
   border-radius: $radius-sm;
-  min-height: 28px;
-  flex-shrink: 0;
 
   &.subagent-entry {
     cursor: pointer;
@@ -1559,45 +1797,6 @@ defineExpose({
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
   flex-shrink: 0;
-}
-
-.compression-inline-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 520px;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  padding: 6px 10px;
-  margin: 8px 4px 0;
-  border-radius: $radius-sm;
-  background: rgba(0, 0, 0, 0.03);
-  font-size: 10px;
-  color: $text-muted;
-  overflow: hidden;
-
-  .dark & {
-    background: rgba(255, 255, 255, 0.06);
-  }
-}
-
-.compression-inline-icon {
-  flex-shrink: 0;
-  color: $text-muted;
-}
-
-.compression-inline-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: $font-code;
-}
-
-.abort-inline-card {
-  // same layout, visual distinction left to status text
 }
 
 .tool-call-error-icon {

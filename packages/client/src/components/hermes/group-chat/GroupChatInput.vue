@@ -881,7 +881,7 @@ function openAttachmentPreview(attachment: Attachment) {
 @use "@/styles/variables" as *;
 
 .chat-input-area {
-    padding: 8px 20px 14px;
+    padding: 6px 12px 10px;
     border-top: 0;
     background-color: $bg-main-surface;
     flex-shrink: 0;
@@ -1129,8 +1129,8 @@ function openAttachmentPreview(attachment: Attachment) {
     min-height: 150px;
     background-color: $bg-card;
     border: 1px solid var(--input-border-color);
-    border-radius: 18px;
-    padding: 14px 12px 9px;
+    border-radius: $radius-md;
+    padding: 12px 10px 8px;
     position: relative;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
     transition: border-color $transition-fast, box-shadow $transition-fast;
@@ -1150,7 +1150,7 @@ function openAttachmentPreview(attachment: Attachment) {
     }
 
     .dark & {
-        background-color: #333333;
+        background-color: $bg-main-surface;
         box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
     }
 }
@@ -1263,7 +1263,7 @@ function openAttachmentPreview(attachment: Attachment) {
 
 @media (max-width: $breakpoint-mobile) {
     .chat-input-area {
-        padding: 8px 12px 12px;
+        padding: 6px 8px calc(12px + env(safe-area-inset-bottom, 0px));
     }
 
     .input-top-bar {
@@ -1344,7 +1344,13 @@ function openAttachmentPreview(attachment: Attachment) {
 
 @media (max-width: $breakpoint-mobile) {
     .input-wrapper {
-        min-height: 118px;
+        min-height: 96px;
+        gap: 6px;
+        padding: 8px 10px;
+    }
+
+    .input-textarea {
+        flex: 1 1 auto;
     }
 
     .input-settings-button {

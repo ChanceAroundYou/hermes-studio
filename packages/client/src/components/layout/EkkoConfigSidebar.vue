@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import PageSidebar from "./PageSidebar.vue"
+import { usePageSidebarState } from "@/composables/usePageSidebar"
+import { computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import RouteLinkItem from '@/components/common/RouteLinkItem.vue'
 import { useAppStore } from '@/stores/hermes/app'
-import { useMobileLayout } from '@/composables/useMediaQuery'
 
 const { t } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
-const isMobile = useMobileLayout()
-const expanded = ref(!isMobile.value)
+const { expanded, isMobile } = usePageSidebarState()
+watch(expanded, value => appStore.setPageSidebarExpanded(value), { immediate: true })
 
 const activeRoute = computed(() => route.name as string)
 
@@ -19,32 +20,17 @@ function setExpanded(value: boolean) {
   appStore.setPageSidebarExpanded(value)
 }
 
-watch(isMobile, (mobile) => {
-  setExpanded(!mobile)
-}, { immediate: true })
-
 function handleNavClick(event: MouseEvent) {
   if (!isMobile.value) return
   const target = event.target instanceof Element ? event.target : null
   if (target?.closest('.route-link-item')) setExpanded(false)
 }
 
-function openSidebar() {
-  setExpanded(true)
-}
-
-onMounted(() => {
-  window.addEventListener('hermes:open-page-sidebar', openSidebar)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('hermes:open-page-sidebar', openSidebar)
-})
 </script>
 
 <template>
-  <div class="ekko-config-backdrop" :class="{ active: isMobile && expanded }" @click="setExpanded(false)" />
-  <aside class="ekko-config-sidebar" :class="{ open: expanded, collapsed: appStore.sidebarCollapsed }">
+  <PageSidebar>
+  <aside class="ekko-config-sidebar" :class="{ open: expanded, collapsed: !isMobile && appStore.sidebarCollapsed }">
     <nav class="ekko-config-nav" @click="handleNavClick">
       <RouteLinkItem class="ekko-config-nav-item" :to="{ name: 'ekko.memory' }" :active="activeRoute === 'ekko.memory'">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -74,7 +60,7 @@ onUnmounted(() => {
         <span>{{ t('sidebar.settings') }}</span>
       </RouteLinkItem>
     </nav>
-    <footer class="ekko-config-footer">
+    <footer class="ekko-config-footer" @click="handleNavClick">
       <RouteLinkItem class="ekko-config-nav-item ekko-config-return" :to="{ name: 'hermes.agentManager' }">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="m15 18-6-6 6-6" />
@@ -90,6 +76,7 @@ onUnmounted(() => {
       </button>
     </footer>
   </aside>
+  </PageSidebar>
 </template>
 
 <style scoped lang="scss">

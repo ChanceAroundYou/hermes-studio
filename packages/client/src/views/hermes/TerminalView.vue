@@ -1,15 +1,14 @@
 <script setup lang="ts">
+import PageHeader from '@/components/layout/PageHeader.vue'
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { getApiKey, getBaseUrlValue, wsOrigin } from "@/api/client";
-import { NButton, NPopconfirm, NTooltip, NSelect, useMessage } from "naive-ui";
+import { getApiKey, getBaseUrlValue } from "@/api/client";
+import { NSpin, NButton, NPopconfirm, NTooltip, NSelect, useMessage } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import type { ITheme } from "@xterm/xterm";
-import { watch } from 'vue'
-import { useMobileLayout } from '@/composables/useMediaQuery'
 
 const { t } = useI18n();
 const message = useMessage();
@@ -246,6 +245,7 @@ const termMap = new Map<
 let activeTerm: Terminal | null = null;
 let activeFitAddon: FitAddon | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let mobileQuery: MediaQueryList | null = null;
 let touchScrollLastY: number | null = null;
 let touchScrollRemainder = 0;
 const TOUCH_SCROLL_LINE_PX = 18;
@@ -288,8 +288,7 @@ function buildWsUrl(): string {
       : "ws:";
 
   if (base) {
-    const { host, prefix } = wsOrigin();
-    return `${wsProtocol}//${host}${prefix}/api/hermes/terminal${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    return `${wsProtocol}//${new URL(base).host}/api/hermes/terminal${token ? `?token=${encodeURIComponent(token)}` : ""}`;
   }
 
   const directDevPort = import.meta.env.VITE_HERMES_DIRECT_WS_PORT;
@@ -414,7 +413,7 @@ function switchSession(id: string) {
   activeFitAddon = entry.fitAddon;
   mountActiveTerminal();
   send({ type: "switch", sessionId: id });
-  if (isMobile.value) showSessions.value = false;
+  if (mobileQuery?.matches) showSessions.value = false;
 }
 
 function closeSession(id: string) {
@@ -543,24 +542,26 @@ function applyTheme(themeName: string) {
 
 // ─── Helpers ────────────────────────────────────────────────────
 
-function formatClockTime(ts: number) {
+function formatTime(ts: number) {
   const d = new Date(ts);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-const isMobile = useMobileLayout();
-
-watch(isMobile, (mobile) => {
-  if (mobile && showSessions.value) showSessions.value = false;
-}, { immediate: true });
+function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
+  if (e.matches && showSessions.value) showSessions.value = false;
+}
 
 // ─── Lifecycle ──────────────────────────────────────────────────
 
 onMounted(() => {
+  mobileQuery = window.matchMedia("(max-width: 768px)");
+  handleMobileChange(mobileQuery);
+  mobileQuery.addEventListener("change", handleMobileChange);
   connect();
 });
 
 onUnmounted(() => {
+  mobileQuery?.removeEventListener("change", handleMobileChange);
   unmountActiveTerminal();
   // Dispose all terminal instances
   for (const entry of termMap.values()) {
@@ -617,7 +618,7 @@ onUnmounted(() => {
       </div>
       <div v-if="showSessions" class="session-items">
         <div v-if="sessions.length === 0" class="session-empty">
-          {{ t("common.loading") }}
+          <NSpin size="small" :description="t('common.loading')" />
         </div>
         <button
           v-for="s in sessions"
@@ -634,7 +635,7 @@ onUnmounted(() => {
                 t("terminal.sessionExited")
               }}</span>
               <span v-else class="session-item-time">{{
-                formatClockTime(s.createdAt)
+                formatTime(s.createdAt)
               }}</span>
             </span>
           </div>
@@ -665,6 +666,7 @@ onUnmounted(() => {
 
     <!-- Main terminal area -->
     <div class="terminal-main">
+      <PageHeader>
       <header class="terminal-header">
         <div class="header-left">
           <NButton
@@ -720,6 +722,7 @@ onUnmounted(() => {
           </NButton>
         </div>
       </header>
+      </PageHeader>
       <div class="terminal-container">
         <div
           ref="terminalRef"
@@ -968,6 +971,10 @@ onUnmounted(() => {
 
 .theme-select {
   width: 130px;
+}
+
+@container studio-page-header (max-width: 400px) {
+  .theme-select { width: 100px; }
 }
 
 // ─── Terminal container ─────────────────────────────────────────

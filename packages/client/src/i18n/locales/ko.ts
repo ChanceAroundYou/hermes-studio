@@ -499,6 +499,7 @@ export default {
 
   // 공통
   common: {
+    close: '닫기',
     loading: '로딩 중...',
     cancel: '취소',
     retry: '재시도',
@@ -1279,6 +1280,9 @@ export default {
     interactionCountdown: '{time} 남음',
     interactionCountdownElapsed: '00:00 · 서버 확인 대기 중',
     deleteSession: '이 세션을 삭제하시겠습니까?',
+    sessionListActions: '세션 목록 작업',
+    filterByProfile: '프로필로 필터링',
+    selectedSessions: '{count}개 선택됨',
     toggleBatchMode: '일괄 선택',
     selectAll: '모두 선택',
     confirmBatchDelete: '선택한 {count}개의 세션을 삭제하시겠습니까?',
@@ -1520,6 +1524,7 @@ export default {
 
   // 스킬
   skills: {
+    filterBySource: "출처별 필터",
     title: '스킬',
     targetFilter: '런타임',
     targets: {
@@ -2119,6 +2124,10 @@ export default {
 
   // 로그
   logs: {
+    file: "로그 파일",
+    level: "로그 수준",
+    lines: "줄 수",
+    filters: "로그 필터",
     title: '로그',
     all: '전체',
     searchPlaceholder: '검색...',
@@ -3073,6 +3082,7 @@ export default {
   },
 
   workflow: {
+    listActions: '워크플로 목록 작업',
     quality: { results: "JEV quality observations", rerun: "Edit and rerun from this node", decision: { pass: "Passed", needs_improvement: "Needs improvement", unknown: "Unknown" } },
     title: '워크플로',
     profile: '프로필',

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { NButton, NModal, NSpin, useMessage } from 'naive-ui'
+import { NSpin, NButton, NModal, useMessage } from 'naive-ui'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import {
   fetchProfileRuntimeStatusesWithMeta,
@@ -12,8 +11,6 @@ import {
   type ProfileRuntimeStatus,
 } from '@/api/hermes/profiles'
 import ProfileAvatarView from '@/components/hermes/profiles/ProfileAvatar.vue'
-import ProfileDisplayNameModal from '@/components/hermes/profiles/ProfileDisplayNameModal.vue'
-import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { useI18n } from 'vue-i18n'
 
 const emit = defineEmits<{
@@ -22,22 +19,11 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const message = useMessage()
-const router = useRouter()
 const profilesStore = useProfilesStore()
 
 const activeName = computed(() => profilesStore.activeProfileName ?? '')
-/** Real profile name — the identifier used for every API call. */
-const activeProfileKey = computed(() => activeName.value || 'default')
-/** What the UI shows: custom display name when set, else the profile name. */
-const displayName = computed(() => resolveProfileDisplayName(profilesStore.profiles, activeProfileKey.value))
-const activeProfile = computed(() => profilesStore.profiles.find(profile => profile.name === activeProfileKey.value))
-const showDisplayNameModal = ref(false)
-const displayNameTarget = ref<HermesProfile | null>(null)
-
-function openDisplayNameModal(profile: HermesProfile) {
-  displayNameTarget.value = profile
-  showDisplayNameModal.value = true
-}
+const displayName = computed(() => activeName.value || 'default')
+const activeProfile = computed(() => profilesStore.profiles.find(profile => profile.name === displayName.value))
 const runtimeStatuses = ref<ProfileRuntimeStatus[]>([])
 const runtimeLoading = ref(false)
 const showProfileModal = ref(false)
@@ -214,21 +200,7 @@ async function handleSwitchProfile(name: string) {
     const ok = await profilesStore.switchProfile(name)
     if (!ok) throw new Error(t('profiles.switchFailed'))
     message.success(t('profiles.switchSuccess', { name }))
-    // Parallel-profile: no window.location.reload() needed (and harmful —
-    // it tears down sockets mid-run). The switchProfile API is now just an
-    // active_profile marker write; UI focus moves via SPA routing so the
-    // chat-run socket keeps streaming and reroutes to the new profile with
-    // the next connectChatRun() call.
-    const current = router.currentRoute.value
-    if (current.name === 'hermes.chat' || current.name === 'hermes.session') {
-      void router.push({
-        name: 'hermes.chat',
-        query: { ...current.query, profile: name },
-      })
-    } else {
-      // Other views: keep current route, just refresh profile-scoped data
-      await profilesStore.fetchProfiles()
-    }
+    window.location.reload()
   } catch (err: any) {
     message.error(err?.message || t('profiles.switchFailed'))
   } finally {
@@ -274,16 +246,14 @@ onMounted(() => {
             v-for="profile in profilesStore.profiles"
             :key="profile.name"
             class="profile-runtime-item"
-            :class="{ active: profile.name === activeProfileKey }"
+            :class="{ active: profile.name === displayName }"
           >
             <div class="profile-runtime-main">
               <ProfileAvatarView class="profile-runtime-avatar" :name="profile.name" :avatar="profile.avatar" :size="34" />
               <div class="profile-runtime-info">
                 <div class="profile-runtime-name-row">
-                  <span class="profile-runtime-name" :title="profile.name">
-                    {{ resolveProfileDisplayName(profilesStore.profiles, profile.name) || profile.name }}
-                  </span>
-                  <span v-if="profile.name === activeProfileKey" class="active-badge">{{ t('profiles.runtime.activeTag') }}</span>
+                  <span class="profile-runtime-name">{{ profile.name }}</span>
+                  <span v-if="profile.name === displayName" class="active-badge">{{ t('profiles.runtime.activeTag') }}</span>
                 </div>
                 <div class="runtime-status-grid">
                   <div class="runtime-row compact">
@@ -310,14 +280,6 @@ onMounted(() => {
               </div>
             </div>
             <div class="profile-runtime-actions">
-              <NButton
-                size="small"
-                type="primary"
-                data-testid="edit-profile-display-name"
-                @click="openDisplayNameModal(profile)"
-              >
-                {{ t('profiles.displayName.customize') }}
-              </NButton>
               <NButton
                 size="small"
                 type="primary"
@@ -389,13 +351,6 @@ onMounted(() => {
         </div>
       </div>
     </NModal>
-
-    <ProfileDisplayNameModal
-      v-if="showDisplayNameModal && displayNameTarget"
-      :profile-name="displayNameTarget.name"
-      @close="showDisplayNameModal = false"
-      @saved="showDisplayNameModal = false"
-    />
   </div>
 </template>
 

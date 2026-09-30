@@ -8,7 +8,7 @@ import { fetchContextLength } from '@/api/studio/sessions'
 import { setModelContext } from '@/api/hermes/model-context'
 import { fetchSkills, type SkillCategory, type SkillInfo } from '@/api/hermes/skills'
 import { deleteSkillBundleApi, fetchSkillBundles, type SkillBundleInfo } from '@/api/hermes/skill-bundles'
-import { NButton, NTooltip, NModal, NInputNumber, NPopover, NSlider, NDropdown, useDialog, useMessage, type DropdownOption } from 'naive-ui'
+import { NSpin, NButton, NTooltip, NModal, NInputNumber, NPopover, NSlider, NDropdown, useDialog, useMessage, type DropdownOption } from 'naive-ui'
 import { computed, ref, nextTick, onMounted, onUnmounted, watch, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToolTraceVisibility } from '@/composables/useToolTraceVisibility'
@@ -16,13 +16,10 @@ import { extractClipboardFiles } from '@/utils/clipboard-files'
 import VoiceDialogueControls from './VoiceDialogueControls.vue'
 import BundleCreateModal from './BundleCreateModal.vue'
 import { BRIDGE_SESSION_COMMAND_DEFINITIONS } from '@/utils/hermes/bridge-session-commands'
-import { clampChatInputHeight } from '@/utils/chat-input-height'
-import { useMobileLayout } from '@/composables/useMediaQuery'
+import { clampChatInputHeight, isMobileChatInputViewport } from '@/utils/chat-input-height'
 import { normalizeComposerVoiceTranscript, useComposerVoiceInput } from '@/composables/useComposerVoiceInput'
 import { extractRepresentativeVideoFrames, isVideoFile } from '@/utils/video-frame-extraction'
 import ImagePreviewOverlay from './ImagePreviewOverlay.vue'
-import { formatBytes, formatCompactCount } from '@/utils/format'
-import { isImageMime as isImage } from '@/utils/attachments'
 
 const chatStore = useChatStore()
 const appStore = useAppStore()
@@ -134,7 +131,7 @@ const activeMessageReference = computed(() => chatStore.activeMessageReference)
 const messageReferencePreview = computed(() =>
   activeMessageReference.value?.content.replace(/\s+/g, ' ').trim() || '',
 )
-const isMobileViewport = useMobileLayout()
+const isMobileViewport = ref(typeof window !== 'undefined' ? isMobileChatInputViewport(window.innerWidth) : false)
 const manualTextareaResize = ref(false)
 const configuredTextareaHeight = computed(() =>
   isMobileViewport.value ? null : clampChatInputHeight(settingsStore.display.chat_input_height),
@@ -292,7 +289,8 @@ const filteredBridgeCommands = computed(() => {
   return commands.filter((command) => {
     const name = command.name.toLowerCase()
     const insertText = command.insertText?.toLowerCase()
-    return name.startsWith(query) || !!insertText?.startsWith(query)
+    const description = command.description.toLowerCase()
+    return name.startsWith(query) || insertText?.startsWith(query) || description.includes(query)
   })
 })
 const filteredSkillPickerItems = computed(() => {
@@ -385,6 +383,11 @@ const inputWrapperStyle = computed(() => {
   if (height === null) return {}
   return { minHeight: `${height + 71}px` }
 })
+
+function syncViewport() {
+  if (typeof window === 'undefined') return
+  isMobileViewport.value = isMobileChatInputViewport(window.innerWidth)
+}
 
 function resetTextareaHeight() {
   manualTextareaResize.value = false
@@ -520,6 +523,8 @@ function saveDraftForActiveSession(value: string) {
 onMounted(() => {
   if (props.initialText) inputText.value = props.initialText
   else if (props.persistDraft) loadDraftForActiveSession()
+  syncViewport()
+  window.addEventListener('resize', syncViewport)
   nextTick(() => {
     applyConfiguredTextareaHeight()
     if (props.initialText) focusComposer()
@@ -585,14 +590,10 @@ function updateSlashState() {
     slashActive.value = false
     return
   }
-  // Prefer DOM value when available (keeps cursor-aware slicing); fall
-  // back to the reactive inputText for VTU's setValue path where
-  // selectionStart stays 0 and the synthetic input event hasn't flushed
-  // the v-model yet.
   const el = textareaRef.value
-  const raw = (el?.value ?? inputText.value) || inputText.value
-  const cursorPos = el && typeof el.selectionStart === 'number' && el.selectionStart > 0 ? el.selectionStart : raw.length
-  const beforeCursor = raw.slice(0, cursorPos)
+  if (!el) return
+  const cursorPos = el.selectionStart
+  const beforeCursor = inputText.value.slice(0, cursorPos)
   if (!beforeCursor.startsWith('/') || beforeCursor.includes(' ') || beforeCursor.includes('\n')) {
     slashActive.value = false
     return
@@ -848,6 +849,12 @@ const usagePercent = computed(() =>
   Math.min((totalTokens.value / contextLength.value) * 100, 100),
 )
 
+function formatTokens(n: number): string {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
+  return String(n)
+}
+
 // --- File attachment helpers ---
 
 function addFile(file: File) {
@@ -1048,7 +1055,7 @@ function handleKeydown(e: KeyboardEvent) {
     // 移动端只有输入框右下角的发送按钮（箭头）才能发送。
     // 这里既不调用 handleSend() 也不 preventDefault()，把回车行为完全交还
     // 浏览器默认实现（插入换行），避免输入法把确认键上报成 229/isComposing
-    // 时出现“有时发送、有时换行”的不确定行为。
+    // 时出现"有时发送、有时换行"的不确定行为。
     return
   }
 
@@ -1085,6 +1092,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', onDocumentMousedown)
+  window.removeEventListener('resize', syncViewport)
 })
 
 function removeAttachment(id: string) {
@@ -1098,6 +1106,16 @@ function removeAttachment(id: string) {
   }
   for (const attachment of removed) URL.revokeObjectURL(attachment.url)
   attachments.value = attachments.value.filter(attachment => !removedIds.has(attachment.id))
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+function isImage(type: string): boolean {
+  return type.startsWith('image/')
 }
 
 function openAttachmentPreview(attachment: Attachment) {
@@ -1130,7 +1148,7 @@ function openAttachmentPreview(attachment: Attachment) {
           <div class="attachment-file">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             <span class="file-name">{{ att.name }}</span>
-            <span class="file-size">{{ formatBytes(att.size) }}</span>
+            <span class="file-size">{{ formatSize(att.size) }}</span>
           </div>
         </template>
         <details v-if="att.context" class="attachment-context">
@@ -1165,6 +1183,35 @@ function openAttachmentPreview(attachment: Attachment) {
       </button>
     </div>
 
+    <div v-if="showContextUsage" class="context-usage-row">
+      <span class="context-info" :class="{ 'context-warning': showContextLimit && usagePercent > 80 }">
+        <template v-if="showSessionUsage">{{ t('chat.sessionUsage') }} </template>
+        {{ formatTokens(totalTokens) }}
+        <template v-if="showContextLimit">
+          /
+          <NTooltip trigger="hover" :disabled="isMobileViewport">
+            <template #trigger>
+              <span class="context-limit-editable" @click="handleEditContextLimit">
+                {{ formatTokens(contextLength) }}
+              </span>
+            </template>
+            <span>{{ t('chat.contextClickToEdit') }}</span>
+          </NTooltip>
+          · {{ t('chat.contextRemaining') }} {{ formatTokens(remainingTokens) }}
+        </template>
+      </span>
+      <div v-if="showContextLimit" class="context-bar">
+        <div
+          class="context-bar-fill"
+          :class="{
+            'context-bar-warn': usagePercent > 60 && usagePercent <= 80,
+            'context-bar-danger': usagePercent > 80,
+          }"
+          :style="{ width: `${usagePercent}%` }"
+        />
+      </div>
+    </div>
+
     <div
       class="input-wrapper"
       :class="{ 'drag-over': isDragging }"
@@ -1188,36 +1235,6 @@ function openAttachmentPreview(attachment: Attachment) {
         @mousedown="startResize"
         @dblclick="resetTextareaHeight"
       ></div>
-      <div v-if="showContextUsage" class="context-usage-row">
-        <span class="context-info" :class="{ 'context-warning': showContextLimit && usagePercent > 80 }">
-          <!-- Coding-agent sessions hide the limit, so what is left is the
-               running total; `sessionUsage` names it better than `contextUsed`. -->
-          <template v-if="!showContextLimit">{{ t('chat.sessionUsage') }} </template>
-          {{ formatCompactCount(totalTokens, { kilo: 'k' }) }}
-          <template v-if="showContextLimit">
-            /
-            <NTooltip trigger="hover" :disabled="isMobileViewport">
-              <template #trigger>
-                <span class="context-limit-editable" @click="handleEditContextLimit">
-                  {{ formatCompactCount(contextLength, { kilo: 'k' }) }}
-                </span>
-              </template>
-              <span>{{ t('chat.contextClickToEdit') }}</span>
-            </NTooltip>
-            · {{ t('chat.contextRemaining') }} {{ formatCompactCount(remainingTokens, { kilo: 'k' }) }}
-          </template>
-        </span>
-        <div v-if="showContextLimit" class="context-bar">
-          <div
-            class="context-bar-fill"
-            :class="{
-              'context-bar-warn': usagePercent > 60 && usagePercent <= 80,
-              'context-bar-danger': usagePercent > 80,
-            }"
-            :style="{ width: `${usagePercent}%` }"
-          />
-        </div>
-      </div>
       <textarea
         ref="textareaRef"
         v-model="inputText"
@@ -1444,7 +1461,7 @@ function openAttachmentPreview(attachment: Attachment) {
         />
         <div class="skill-picker-list">
           <div v-if="skillPickerLoading" class="skill-picker-empty">
-            {{ t('common.loading') }}
+            <NSpin size="small" :description="t('common.loading')" />
           </div>
           <template v-else>
             <div
@@ -1490,7 +1507,7 @@ function openAttachmentPreview(attachment: Attachment) {
         </div>
         <div class="skill-picker-list">
           <div v-if="bundlePickerLoading" class="skill-picker-empty">
-            {{ t('common.loading') }}
+            <NSpin size="small" :description="t('common.loading')" />
           </div>
           <template v-else>
             <div
@@ -1591,7 +1608,7 @@ function openAttachmentPreview(attachment: Attachment) {
 .chat-input-area {
   position: relative;
   z-index: 80;
-  padding: 8px 20px 14px;
+  padding: 6px 12px 10px;
   border-top: 0;
   background-color: $bg-main-surface;
   flex-shrink: 0;
@@ -1885,17 +1902,37 @@ function openAttachmentPreview(attachment: Attachment) {
 .context-usage-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 7px;
-  position: absolute;
-  top: 9px;
-  right: 14px;
-  z-index: 1;
+  position: relative;
+  width: 100%;
   min-width: 0;
-  max-width: calc(100% - 28px);
-  padding: 0;
+  max-width: 100%;
+  margin-inline-start: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--input-border-color);
+  border-bottom: 0;
+  border-radius: $radius-sm $radius-sm 0 0;
+  background-color: $bg-card;
   color: $text-muted;
-  pointer-events: auto;
+  transition: border-color $transition-fast;
+
+  .dark & {
+    background-color: $bg-main-surface;
+  }
+}
+
+.context-usage-row + .input-wrapper {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+}
+
+.chat-input-area:has(.input-wrapper:hover) .context-usage-row {
+  border-color: var(--input-border-hover-color);
+}
+
+.chat-input-area:has(.input-wrapper:focus-within) .context-usage-row {
+  border-color: var(--input-border-focus-color);
 }
 
 .context-info {
@@ -1979,10 +2016,10 @@ function openAttachmentPreview(attachment: Attachment) {
   }
 }
 
-@media (max-width: $breakpoint-mobile) {
+@media (max-width: 768px) {
   .chat-input-area {
     --voice-overlay-mobile-bottom-offset: 146px;
-    padding: 8px 12px 12px;
+    padding: 6px 8px calc(12px + env(safe-area-inset-bottom, 0px));
   }
 
   .input-top-bar {
@@ -2174,8 +2211,8 @@ function openAttachmentPreview(attachment: Attachment) {
   min-height: 150px;
   background-color: $bg-card;
   border: 1px solid var(--input-border-color);
-  border-radius: 18px;
-  padding: 22px 12px 9px;
+  border-radius: $radius-md;
+  padding: 12px 10px 8px;
   position: relative;
   cursor: text;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
@@ -2196,7 +2233,7 @@ function openAttachmentPreview(attachment: Attachment) {
   }
 
   .dark & {
-    background-color: #333333;
+    background-color: $bg-main-surface;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
   }
 }
@@ -2233,7 +2270,7 @@ function openAttachmentPreview(attachment: Attachment) {
   padding: 0;
   overflow-y: auto;
 
-  @media (max-width: $breakpoint-mobile) {
+  @media (max-width: 768px) {
     font-size: 16px;
   }
 
@@ -2579,7 +2616,7 @@ function openAttachmentPreview(attachment: Attachment) {
   font-size: 13px;
 }
 
-@media (max-width: $breakpoint-mobile) {
+@media (max-width: 768px) {
   .skill-picker-item {
     height: 76px;
   }
@@ -2589,7 +2626,13 @@ function openAttachmentPreview(attachment: Attachment) {
   }
 
   .input-wrapper {
-    min-height: 118px;
+    min-height: 96px;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .input-textarea {
+    min-height: 24px;
   }
 
   .input-textarea::placeholder {

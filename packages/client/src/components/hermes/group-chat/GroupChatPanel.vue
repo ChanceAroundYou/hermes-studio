@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import PageSidebar from "@/components/layout/PageSidebar.vue"
+import { usePageSidebarState } from "@/composables/usePageSidebar"
+import { usePageLoadingState } from '@/composables/usePageLoading'
+import PageHeader from '@/components/layout/PageHeader.vue'
+import HeaderSidebarToggle from '@/components/layout/HeaderSidebarToggle.vue'
 import { GROUP_AGENT_OPTIONS } from "@/utils/agent-options"
 import DshSessionPresetSelect from "@/components/coding-agents/dsh/DshSessionPresetSelect.vue"
 import { ref, computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useMessage, NInput, NButton, NSpace, NSelect, NPopconfirm, NInputNumber, NDropdown, NModal, NPopover, NDrawer, NDrawerContent, NSwitch, type DropdownOption } from 'naive-ui'
+import { NSpin, useMessage, NInput, NButton, NSpace, NSelect, NPopconfirm, NInputNumber, NDropdown, NModal, NPopover, NDrawer, NDrawerContent, NSwitch, type DropdownOption } from 'naive-ui'
 import { nextCodingAgentMode, storedPriorAgentMode, submittedCodingAgentSelection } from '@/utils/coding-agent-mode'
 import { useGroupChatStore } from '@/stores/hermes/group-chat'
 import { useAppStore } from '@/stores/hermes/app'
@@ -35,12 +40,11 @@ import GroupMessageList from './GroupMessageList.vue'
 import GroupChatInput from './GroupChatInput.vue'
 import GroupRoomAgentAvatar from './GroupRoomAgentAvatar.vue'
 import MessageQueueFloatPanel from '@/components/hermes/chat/MessageQueueFloatPanel.vue'
+import PendingInteractionCountdown from '@/components/hermes/chat/PendingInteractionCountdown.vue'
 import FolderPicker from '@/components/hermes/chat/FolderPicker.vue'
 import ProfileAvatar from '@/components/hermes/profiles/ProfileAvatar.vue'
 import PageSidebarNav from '@/components/layout/PageSidebarNav.vue'
 import PageSidebarFooter from "@/components/layout/PageSidebarFooter.vue";
-import PendingInteractionCard from '@/components/hermes/chat/PendingInteractionCard.vue'
-import type { PendingCardAction } from '@/utils/hermes/pending-card-action'
 import { copyToClipboard } from '@/utils/clipboard'
 import type { Attachment } from '@/stores/hermes/chat'
 import type {
@@ -111,8 +115,7 @@ const profilesStore = useProfilesStore()
 const filesStore = useFilesStore()
 const toolPanelStore = useToolPanelStore()
 
-const isMobile = useMobileLayout()
-const showSidebar = ref(!props.standalone && !isMobile.value)
+const { expanded: showSidebar } = usePageSidebarState(!props.standalone)
 watch(
     showSidebar,
     expanded => appStore.setPageSidebarExpanded(expanded),
@@ -122,6 +125,7 @@ const showCreateModal = ref(false)
 const showCloneModal = ref(false)
 const showAddAgentDrawer = ref(false)
 const showGroupChatRefactorNotice = ref(false)
+const pageLoading = usePageLoadingState()
 const showManualRoomLinkModal = ref(false)
 const manualRoomLink = ref('')
 const manualRoomLinkInput = ref<HTMLInputElement | null>(null)
@@ -228,7 +232,7 @@ const showWorkspacePanel = ref(false)
 const toolPanelTransitionReady = ref(false)
 const activeWorkspacePanel = ref<'files' | 'terminal' | 'browser'>('files')
 const desktopBrowserAvailable = hasDesktopBrowserBridge()
-const workspacePanelMobile = ref(isMobile.value)
+const workspacePanelMobile = ref(window.innerWidth <= 768)
 const GROUP_CHAT_REFACTOR_NOTICE_STORAGE_KEY = 'hermes.groupChat.refactorNotice.v1.acknowledged'
 const WORKSPACE_PANEL_MIN_WIDTH = 360
 const WORKSPACE_PANEL_DEFAULT_WIDTH = 560
@@ -693,7 +697,6 @@ watch(
 const visibleAgentPairing = computed(() =>
     currentRoomCanManage.value ? pendingAgentPairings.value[0] || null : null,
 )
-const currentWorkspaceLabel = computed(() => workspaceBasename(currentRoom.value?.workspace || ''))
 const groupToolPanelTitle = computed(() => desktopBrowserAvailable
     ? `${t('drawer.files')} / ${t('drawer.terminal')} / ${t('browser.title')}`
     : `${t('drawer.files')} / ${t('drawer.terminal')}`
@@ -743,10 +746,9 @@ async function handleRemoveMember(member: MemberInfo) {
     }
 }
 
-function workspaceBasename(path: string): string {
-    const trimmed = String(path || '').trim().replace(/[\\/]+$/, '')
-    if (!trimmed) return ''
-    return trimmed.split(/[\\/]/).pop() || trimmed
+function formatTokens(tokens: number): string {
+    const value = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)
+    return `${value} ${t('usage.tokens')}`
 }
 
 function toggleSidebar() {
@@ -771,7 +773,7 @@ function clampWorkspacePanelWidth(width: number): number {
 }
 
 function handleWorkspacePanelResize(): void {
-    workspacePanelMobile.value = isMobile.value
+    workspacePanelMobile.value = window.innerWidth <= 768
     if (!workspacePanelMobile.value) workspacePanelWidth.value = clampWorkspacePanelWidth(workspacePanelWidth.value)
 }
 
@@ -842,15 +844,6 @@ function handleToolPanelBeforeLeave(): void {
 
 function handleToolPanelLeaveCancelled(): void {
     toolPanelTransitionReady.value = true
-}
-
-function openWorkspaceFilesPanel(): void {
-    if (!currentRoom.value?.workspace) return
-    if (showWorkspacePanel.value && activeWorkspacePanel.value === 'files') {
-        closeWorkspacePanel()
-        return
-    }
-    selectWorkspacePanel('files')
 }
 
 function selectWorkspacePanel(panel: 'files' | 'terminal' | 'browser'): void {
@@ -959,10 +952,6 @@ function handleGroupAttachmentPreviewRequest(event: Event): void {
     })
 }
 
-function openPageSidebar() {
-    if (props.standalone) return
-    showSidebar.value = true
-}
 
 function acknowledgeGroupChatRefactorNotice() {
     try {
@@ -994,7 +983,7 @@ function handleSelectRemoteRoom(room: RemoteGroupChatRoom) {
     if (!room.inviteCode) return
     const url = `${room.cloudOrigin}/#/share/group-chat/${encodeURIComponent(room.inviteCode)}`
     window.open(url, '_blank', 'noopener,noreferrer')
-    if (isMobile.value) showSidebar.value = false
+    if (window.innerWidth <= 768) showSidebar.value = false
 }
 
 function hasDraggedFiles(event: DragEvent) {
@@ -1296,7 +1285,7 @@ async function handleClearRoomContext() {
 async function handleSelectRoom(roomId: string) {
     try {
         await router.push({ name: 'hermes.groupChatRoom', params: { roomId } })
-        if (isMobile.value) showSidebar.value = false
+        if (window.innerWidth <= 768) showSidebar.value = false
     } catch {
         message.error(t('groupChat.joinFailed'))
     }
@@ -1602,7 +1591,6 @@ onMounted(() => {
             showGroupChatRefactorNotice.value = true
         }
     }
-    window.addEventListener('hermes:open-page-sidebar', openPageSidebar)
     window.addEventListener('hermes:preview-workspace-file', handleWorkspaceFilePreviewRequest)
     window.addEventListener('hermes:preview-group-attachment', handleGroupAttachmentPreviewRequest)
     window.addEventListener(OPEN_DESKTOP_BROWSER_PANEL_EVENT, handleOpenDesktopBrowserPanelRequest)
@@ -1622,7 +1610,6 @@ onMounted(() => {
 
 onUnmounted(() => {
     hideInlineSummaryStatus()
-    window.removeEventListener('hermes:open-page-sidebar', openPageSidebar)
     window.removeEventListener('hermes:preview-workspace-file', handleWorkspaceFilePreviewRequest)
     window.removeEventListener('hermes:preview-group-attachment', handleGroupAttachmentPreviewRequest)
     window.removeEventListener(OPEN_DESKTOP_BROWSER_PANEL_EVENT, handleOpenDesktopBrowserPanelRequest)
@@ -2090,19 +2077,9 @@ async function handleInterruptAgent(agent: RoomAgent) {
     }
 }
 
-const agentPairingActions = computed<PendingCardAction[]>(() => [
-    { key: 'approve', label: t('groupChat.approveAgent'), variant: 'primary', loading: isDecidingAgentPairing.value },
-    { key: 'reject', label: t('groupChat.rejectAgent'), variant: 'error', disabled: isDecidingAgentPairing.value },
-])
-
-function handleAgentPairingAction(key: string) {
-    void handleAgentPairingDecision(key === 'approve')
-}
-
-/** The card only ever emits the grant codes the server offered. */
-async function handleApproval(choice: string) {
+async function handleApproval(choice: 'once' | 'session' | 'always' | 'deny') {
     try {
-        await store.respondApproval(choice as 'once' | 'session' | 'always' | 'deny')
+        await store.respondApproval(choice)
     } catch (err: any) {
         message.error(err.message || t('common.saveFailed'))
     }
@@ -2124,13 +2101,18 @@ async function handleClarify(response?: string) {
     }
 }
 
+function handleClarifyKeydown(event: KeyboardEvent) {
+    if (visibleClarify.value?.responseMode === 'editor') return
+    event.preventDefault()
+    void handleClarify()
+}
+
 </script>
 
 <template>
     <div class="group-chat-panel">
-        <!-- Mobile backdrop -->
-        <div v-if="!props.standalone" class="sidebar-backdrop" :class="{ active: showSidebar }" @click="showSidebar = false" />
         <!-- Room sidebar -->
+        <PageSidebar>
         <div v-if="!props.standalone && showSidebar" class="room-sidebar">
             <div class="sidebar-header">
                 <PageSidebarNav
@@ -2169,7 +2151,7 @@ async function handleClarify(response?: string) {
                             <div class="room-info">
                                 <span class="room-name">{{ room.name || room.id }}</span>
                                 <span v-if="room.inviteCode" class="room-code">{{ room.inviteCode }}</span>
-                                <span class="room-tokens">{{ formatCompactCount(room.totalTokens || 0, { kilo: 'k' }) }} {{ t('usage.tokens') }}</span>
+                                <span class="room-tokens">{{ formatTokens(room.totalTokens || 0) }}</span>
                             </div>
                             <NPopconfirm v-if="canManageRoom(room)" @positive-click="handleDeleteRoom(room.id)">
                                 <template #trigger>
@@ -2226,6 +2208,7 @@ async function handleClarify(response?: string) {
             </div>
             <PageSidebarFooter />
         </div>
+        </PageSidebar>
 
         <NDropdown
             v-if="!props.standalone"
@@ -2260,31 +2243,34 @@ async function handleClarify(response?: string) {
             @dragleave="handleChatDragLeave"
             @drop="handleChatDrop"
         >
+            <PageHeader :disabled="props.standalone">
             <div class="chat-header">
                 <div class="header-left">
-                    <button v-if="!props.standalone" class="icon-btn header-sidebar-toggle" @click="toggleSidebar">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <rect x="3" y="3" width="7" height="7" />
-                            <rect x="14" y="3" width="7" height="7" />
-                            <rect x="3" y="14" width="7" height="7" />
-                            <rect x="14" y="14" width="7" height="7" />
-                        </svg>
-                    </button>
+                    <HeaderSidebarToggle
+                      v-if="!props.standalone"
+                      class="header-sidebar-toggle"
+                      :expanded="showSidebar"
+                      @toggle="toggleSidebar"
+                    />
                     <span class="room-title-text">{{ store.roomName || (store.currentRoomId || t('groupChat.title')) }}</span>
-                    <button
-                        v-if="currentRoom?.workspace"
-                        class="workspace-badge"
-                        type="button"
-                        :title="currentRoom.workspace"
-                        @click="openWorkspaceFilesPanel"
-                    >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                        </svg>
-                        <span>{{ currentWorkspaceLabel }}</span>
-                    </button>
                 </div>
                 <div class="header-info">
+                    <NButton
+                        v-if="currentRoomCanManage"
+                        class="header-workspace-button"
+                        quaternary
+                        size="small"
+                        circle
+                        :title="currentRoom?.workspace || t('chat.setWorkspace')"
+                        :aria-label="t('chat.setWorkspace')"
+                        @click="handleOpenWorkspacePicker()"
+                    >
+                        <template #icon>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                            </svg>
+                        </template>
+                    </NButton>
                     <button
                         v-if="currentRoomCanManage && pendingAgentPairings.length"
                         class="agent-pairing-header-button"
@@ -2337,6 +2323,7 @@ async function handleClarify(response?: string) {
                     <span class="connection-dot" :class="{ connected: store.connected, disconnected: !store.connected }"></span>
                 </div>
             </div>
+            </PageHeader>
 
             <div
                 v-if="hasRoom"
@@ -2487,47 +2474,111 @@ async function handleClarify(response?: string) {
                             @adjust-handoff-settings="handleOpenRoomSettings"
                         />
                         <Transition name="approval-float">
-                            <PendingInteractionCard
-                                v-if="visibleAgentPairing"
-                                class="agent-pairing-float-panel"
-                                kind="custom"
-                                icon="pairing"
-                                :kicker="t('groupChat.agentPairingRequestTitle')"
-                                :title="`@${visibleAgentPairing.agent.name}`"
-                                :description="t('groupChat.agentPairingRequestDescription', {
-                                    user: visibleAgentPairing.ownerName,
-                                    origin: visibleAgentPairing.targetOrigin,
-                                })"
-                                :actions="agentPairingActions"
-                                @select="handleAgentPairingAction"
-                            />
+                            <div v-if="visibleAgentPairing" class="approval-float-panel agent-pairing-float-panel">
+                                <div class="approval-float-header">
+                                    <span class="approval-float-icon" aria-hidden="true">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <circle cx="12" cy="8" r="4" />
+                                            <path d="M4 21a8 8 0 0 1 16 0M19 8v6M16 11h6" />
+                                        </svg>
+                                    </span>
+                                    <span>{{ t('groupChat.agentPairingRequestTitle') }}</span>
+                                </div>
+                                <div class="approval-float-title">
+                                    @{{ visibleAgentPairing.agent.name }}
+                                </div>
+                                <div class="approval-float-desc">
+                                    {{ t('groupChat.agentPairingRequestDescription', {
+                                        user: visibleAgentPairing.ownerName,
+                                        origin: visibleAgentPairing.targetOrigin,
+                                    }) }}
+                                </div>
+                                <div class="approval-float-actions">
+                                    <NButton
+                                        size="small"
+                                        type="primary"
+                                        :loading="isDecidingAgentPairing"
+                                        @click="handleAgentPairingDecision(true)"
+                                    >
+                                        {{ t('groupChat.approveAgent') }}
+                                    </NButton>
+                                    <NButton
+                                        size="small"
+                                        type="error"
+                                        secondary
+                                        :disabled="isDecidingAgentPairing"
+                                        @click="handleAgentPairingDecision(false)"
+                                    >
+                                        {{ t('groupChat.rejectAgent') }}
+                                    </NButton>
+                                </div>
+                            </div>
                         </Transition>
                         <Transition name="approval-float">
-                            <PendingInteractionCard
-                                v-if="visibleApproval"
-                                kind="approval"
-                                :title-prefix="visibleApproval.agentName"
-                                :approval-choices="visibleApproval.choices"
-                                :is-memory-write="visibleApproval.isMemoryWrite"
-                                :description="visibleApproval.description"
-                                :command="visibleApproval.command"
-                                :countdown-deadline="visibleApproval.countdownDeadline"
-                                @select="handleApproval"
-                            />
+                            <div v-if="visibleApproval" class="approval-float-panel">
+                                <div class="approval-float-header">
+                                    <span class="approval-float-icon" aria-hidden="true">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+                                            <path d="m9 12 2 2 4-4" />
+                                        </svg>
+                                    </span>
+                                    <span>{{ t('chat.approvalKicker') }}</span>
+                                    <PendingInteractionCountdown :deadline="visibleApproval.countdownDeadline" />
+                                </div>
+                                <div class="approval-float-title">
+                                    <span v-if="visibleApproval.agentName">@{{ visibleApproval.agentName }} · </span>{{ t('chat.approvalTitle') }}
+                                </div>
+                                <div class="approval-float-desc">{{ visibleApproval.description }}</div>
+                                <code class="approval-float-command">{{ visibleApproval.command }}</code>
+                                <div class="approval-float-actions">
+                                    <NButton v-if="visibleApproval.isMemoryWrite" size="small" type="primary" @click="handleApproval('once')">
+                                        {{ t('chat.approvalAgree') }}
+                                    </NButton>
+                                    <NButton v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('once')" size="small" type="primary" @click="handleApproval('once')">
+                                        {{ t('chat.approvalAllowOnce') }}
+                                    </NButton>
+                                    <NButton v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('always')" size="small" secondary @click="handleApproval('always')">
+                                        {{ t('chat.approvalAlways') }}
+                                    </NButton>
+                                    <NButton v-if="visibleApproval.isMemoryWrite || visibleApproval.choices.includes('deny')" size="small" type="error" secondary @click="handleApproval('deny')">
+                                        {{ t('chat.approvalDeny') }}
+                                    </NButton>
+                                </div>
+                            </div>
                         </Transition>
                         <Transition name="approval-float">
-                            <PendingInteractionCard
-                                v-if="!visibleApproval && visibleClarify"
-                                v-model="clarifyResponse"
-                                :question="visibleClarify.question"
-                                :choices="visibleClarify.choices"
-                                :response-mode="visibleClarify.responseMode"
-                                :countdown-deadline="visibleClarify.countdownDeadline"
-                                :agent-name="visibleClarify.agentName"
-                                @select="handleClarify"
-                                @submit="handleClarify"
-                                @dismiss="handleClarify('')"
-                            />
+                            <div v-if="!visibleApproval && visibleClarify" class="approval-float-panel">
+                                <div class="approval-float-header">
+                                    <span class="approval-float-icon" aria-hidden="true">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <circle cx="12" cy="12" r="10" />
+                                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                                        </svg>
+                                    </span>
+                                    <span>{{ t('chat.clarifyKicker') }}</span>
+                                    <PendingInteractionCountdown :deadline="visibleClarify.countdownDeadline" />
+                                </div>
+                                <div class="approval-float-title">
+                                    <span v-if="visibleClarify.agentName">@{{ visibleClarify.agentName }} · </span>{{ t('chat.clarifyTitle') }}
+                                </div>
+                                <div class="approval-float-desc">{{ visibleClarify.question }}</div>
+                                <div v-if="visibleClarify.choices?.length" class="approval-float-actions">
+                                    <NButton v-for="choice in visibleClarify.choices" :key="choice" size="small" type="primary" @click="handleClarify(choice)">
+                                        {{ choice }}
+                                    </NButton>
+                                    <NButton size="small" type="error" secondary @click="handleClarify('')">
+                                        {{ t('chat.clarifyDismiss') }}
+                                    </NButton>
+                                </div>
+                                <div class="clarify-float-input-row">
+                                    <NInput v-model:value="clarifyResponse" size="small" :type="visibleClarify.responseMode === 'editor' ? 'textarea' : 'text'" :placeholder="t('chat.clarifyPlaceholder')" @keydown.enter="handleClarifyKeydown" />
+                                    <NButton size="small" type="primary" :disabled="visibleClarify.responseMode !== 'editor' && !clarifyResponse.trim()" @click="handleClarify()">
+                                        {{ t('chat.clarifySubmit') }}
+                                    </NButton>
+                                </div>
+                            </div>
                         </Transition>
                     </div>
                     <Transition name="summary-inline">
@@ -2915,7 +2966,7 @@ async function handleClarify(response?: string) {
                         :placeholder="t('groupChat.searchAgentPresets')"
                     />
                     <div v-if="isLoadingAgentPresets" class="agent-preset-dialog-state">
-                        {{ t('groupChat.agentPresetsLoading') }}
+                        <NSpin size="small" :description="t('groupChat.agentPresetsLoading')" />
                     </div>
                     <div v-else-if="agentPresetLoadError" class="agent-preset-dialog-state is-error">
                         <span>{{ agentPresetLoadError }}</span>
@@ -3112,6 +3163,7 @@ async function handleClarify(response?: string) {
             </NModal>
             <NModal
                 v-model:show="showGroupChatRefactorNotice"
+                v-if="!pageLoading"
                 preset="dialog"
                 :title="t('groupChat.refactorNoticeTitle')"
                 :mask-closable="false"
@@ -3399,7 +3451,7 @@ async function handleClarify(response?: string) {
                                 {{ roomSummaryStatusLabel(liveRoomSummaryState?.status) }}
                             </span>
                         </div>
-                        <div v-if="isLoadingRoomSummary" class="summary-loading">{{ t('common.loading') }}</div>
+                        <div v-if="isLoadingRoomSummary" class="summary-loading"><NSpin size="small" :description="t('common.loading')" /></div>
                         <template v-else>
                             <div class="summary-meta">
                                 <span>
@@ -3463,8 +3515,6 @@ async function handleClarify(response?: string) {
 <script lang="ts">
 import { defineComponent } from 'vue'
 import CreateRoomForm from './CreateRoomForm.vue'
-import { formatCompactCount } from '@/utils/format'
-import { useMobileLayout } from '@/composables/useMediaQuery'
 
 export default defineComponent({ components: { CreateRoomForm } })
 </script>
@@ -3543,6 +3593,87 @@ export default defineComponent({ components: { CreateRoomForm } })
     }
 }
 
+.approval-float-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 4px 8px;
+    color: var(--accent-primary);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.approval-float-icon {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-primary);
+    background: rgba(var(--accent-primary-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-primary-rgb), 0.24);
+}
+
+.approval-float-title {
+    padding: 0 4px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+    color: $text-primary;
+}
+
+.approval-float-desc {
+    padding: 0 4px;
+    margin-top: 5px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: $text-secondary;
+}
+
+.approval-float-command {
+    display: block;
+    margin: 8px 4px 0;
+    max-height: 96px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    color: $text-primary;
+    background: rgba(255, 255, 255, 0.68);
+    border: 1px solid $border-color;
+    border-radius: 11px;
+    padding: 8px 10px;
+
+    .dark & {
+        background: rgba(255, 255, 255, 0.08);
+    }
+}
+
+.approval-float-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 10px 4px 0;
+    border-top: 1px solid $border-color;
+}
+
+.clarify-float-input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 10px 4px 0;
+    border-top: 1px solid $border-color;
+}
+
 @media (max-width: 640px) {
     .approval-float-panel {
         left: 8px;
@@ -3553,6 +3684,14 @@ export default defineComponent({ components: { CreateRoomForm } })
         border-radius: 14px;
     }
 
+    .approval-float-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .approval-float-actions :deep(.n-button) {
+        width: 100%;
+    }
 }
 
 .approval-float-enter-active,
@@ -3572,11 +3711,9 @@ export default defineComponent({ components: { CreateRoomForm } })
     width: $sidebar-width;
     min-height: 0;
     align-self: stretch;
-    margin: 10px;
+    margin: 0;
     background: $bg-sidebar-surface;
-    border: 1px solid $border-color;
-    border-radius: 14px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+    border-inline-end: 1px solid $border-color;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -3689,7 +3826,7 @@ export default defineComponent({ components: { CreateRoomForm } })
 .room-list {
     flex: 1;
     overflow-y: auto;
-    padding: 8px;
+    padding: 0 8px 8px;
 }
 
 .room-section + .room-section {
@@ -4515,39 +4652,6 @@ export default defineComponent({ components: { CreateRoomForm } })
         flex-shrink: 0;
     }
 
-    .workspace-badge {
-        border: 0;
-        font-size: 11px;
-        line-height: 16px;
-        color: $text-muted;
-        background: rgba(255, 255, 255, 0.05);
-        padding: 2px 8px;
-        border-radius: 4px;
-        max-width: 160px;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        overflow: hidden;
-        cursor: pointer;
-        flex-shrink: 0;
-
-        svg {
-            flex: 0 0 auto;
-        }
-
-        span {
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        &:hover {
-            color: $text-secondary;
-            background: rgba(var(--accent-primary-rgb), 0.06);
-        }
-    }
-
     .member-count {
         font-size: 12px;
         color: $text-muted;
@@ -5098,9 +5202,9 @@ export default defineComponent({ components: { CreateRoomForm } })
 
     .room-sidebar {
         position: absolute;
-        left: 10px;
-        top: 10px;
-        bottom: 10px;
+        left: 0;
+        top: 0;
+        bottom: 0;
         height: auto;
         margin: 0;
         z-index: 100;

@@ -365,6 +365,7 @@ export default {
 
   // Common
   common: {
+    close: 'إغلاق',
     loading: 'جارٍ التحميل...',
     cancel: 'إلغاء',
     delete: 'حذف',
@@ -1211,6 +1212,9 @@ export default {
     newCliChat: 'CLI جديد',
     deleteSession: 'حذف هذه الجلسة؟',
     sessionDeleted: 'تم حذف الجلسة',
+    sessionListActions: 'إجراءات قائمة الجلسات',
+    filterByProfile: 'التصفية حسب الملف الشخصي',
+    selectedSessions: 'تم تحديد {count}',
     toggleBatchMode: 'تحديد متعدد',
     selectAll: 'تحديد الكل',
     confirmBatchDelete: 'حذف {count} جلسات محددة؟',
@@ -1323,6 +1327,7 @@ export default {
   },
 
   workflow: {
+    listActions: 'إجراءات قائمة سير العمل',
     quality: { results: "JEV quality observations", rerun: "Edit and rerun from this node", decision: { pass: "Passed", needs_improvement: "Needs improvement", unknown: "Unknown" } },
     title: 'مسار العمل',
     profile: 'البروفايل',
@@ -1841,6 +1846,7 @@ export default {
 
   // Skills
   skills: {
+    filterBySource: "تصفية حسب المصدر",
     title: 'المهارات',
     targetFilter: 'بيئة التشغيل',
     targets: {
@@ -2448,6 +2454,10 @@ export default {
 
   // Logs
   logs: {
+    file: "ملف السجل",
+    level: "مستوى السجل",
+    lines: "الأسطر",
+    filters: "تصفية السجلات",
     title: 'السجلات',
     all: 'الكل',
     searchPlaceholder: 'بحث...',

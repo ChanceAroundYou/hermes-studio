@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import PageLoading from '@/components/common/PageLoading.vue'
+import PageHeader from '@/components/layout/PageHeader.vue'
 import { getAgentUpdatePolicies, setAgentAutoUpdate, type AgentUpdatePolicyState } from '@/api/coding-agents'
 import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { NAlert, NButton, NDrawer, NDrawerContent, NPopconfirm, NSpin, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
+import { NAlert, NButton, NDrawer, NDrawerContent, NPopconfirm, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import {
   checkCodingAgentUpdate,
   deleteCodingAgent,
@@ -39,14 +41,6 @@ interface CodingAgentCard {
   command: string
   packageName: string
 }
-
-defineProps<{
-  sidebarCollapsed: boolean
-}>()
-
-const emit = defineEmits<{
-  toggleSidebar: []
-}>()
 
 const codingAgents: CodingAgentCard[] = [
   {
@@ -125,7 +119,7 @@ const router = useRouter()
 
 const tools = ref<CodingAgentToolStatus[]>([])
 const agentStatusSnapshot = ref<AgentStatusSnapshot | null>(null)
-const loading = ref(false)
+const loading = ref(true)
 const loadError = ref('')
 const runtimeManagerVisible = ref(false)
 const hermesCliDetailsVisible = ref(false)
@@ -475,27 +469,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="agent-manager-panel">
+  <PageLoading :show="loading" class="agent-manager-panel">
+      <PageHeader>
       <header class="page-header">
         <div class="agent-manager-header-left">
-          <NButton
-            class="agent-manager-sidebar-toggle"
-            quaternary
-            size="small"
-            circle
-            :title="sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')"
-            :aria-label="sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')"
-            @click="emit('toggleSidebar')"
-          >
-            <template #icon>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
-              </svg>
-            </template>
-          </NButton>
           <h2 class="header-title">{{ t('agentManager.title') }}</h2>
         </div>
         <div class="agent-manager-header-actions">
@@ -507,8 +484,9 @@ onUnmounted(() => {
           </NButton>
         </div>
       </header>
+      </PageHeader>
 
-      <NSpin :show="loading" class="agent-manager-spin">
+      <div class="agent-manager-spin">
         <div class="agent-manager-content">
           <NAlert v-if="loadError" type="error" :bordered="false">
             {{ loadError }}
@@ -694,7 +672,7 @@ onUnmounted(() => {
             </section>
           </div>
         </div>
-      </NSpin>
+      </div>
 
     <VersionManagementModal v-model:show="runtimeManagerVisible" />
 
@@ -737,7 +715,7 @@ onUnmounted(() => {
         />
       </NDrawerContent>
     </NDrawer>
-  </div>
+  </PageLoading>
 </template>
 
 <style scoped lang="scss">
@@ -857,9 +835,6 @@ onUnmounted(() => {
   flex: 1 1 auto;
   overflow-y: auto;
 
-  :deep(.n-spin-content) {
-    height: 100%;
-  }
 }
 
 .agent-manager-content {
@@ -970,10 +945,6 @@ onUnmounted(() => {
   :global(.agent-ai-help-drawer.n-drawer) {
     width: 100vw !important;
     max-width: 100vw;
-  }
-
-  .agent-manager-sidebar-toggle {
-    display: none;
   }
 
   .agent-manager-content {

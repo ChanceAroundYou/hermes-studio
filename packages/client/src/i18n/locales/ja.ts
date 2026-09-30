@@ -499,6 +499,7 @@ export default {
 
   // 共通
   common: {
+    close: '閉じる',
     loading: '読み込み中...',
     cancel: 'キャンセル',
     retry: '再試行',
@@ -1279,6 +1280,9 @@ export default {
     interactionCountdown: '残り {time}',
     interactionCountdownElapsed: '00:00 · サーバー確認待ち',
     deleteSession: 'このセッションを削除しますか？',
+    sessionListActions: 'セッション一覧の操作',
+    filterByProfile: 'プロファイルで絞り込み',
+    selectedSessions: '{count} 件選択中',
     toggleBatchMode: '一括選択',
     selectAll: 'すべて選択',
     confirmBatchDelete: '{count}件のセッションを削除しますか？',
@@ -1520,6 +1524,7 @@ export default {
 
   // スキル
   skills: {
+    filterBySource: "ソースで絞り込む",
     title: 'スキル',
     targetFilter: 'ランタイム',
     targets: {
@@ -2119,6 +2124,10 @@ export default {
 
   // ログ
   logs: {
+    file: "ログファイル",
+    level: "ログレベル",
+    lines: "行数",
+    filters: "ログを絞り込む",
     title: 'ログ',
     all: 'すべて',
     searchPlaceholder: '検索...',
@@ -3073,6 +3082,7 @@ export default {
   },
 
   workflow: {
+    listActions: 'ワークフロー一覧の操作',
     quality: { results: "JEV quality observations", rerun: "Edit and rerun from this node", decision: { pass: "Passed", needs_improvement: "Needs improvement", unknown: "Unknown" } },
     title: 'ワークフロー',
     profile: 'プロファイル',

@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import PageSidebar from "@/components/layout/PageSidebar.vue"
+import { usePageSidebarState } from "@/composables/usePageSidebar"
+import { usePageLoadingTask } from '@/composables/usePageLoading'
+import PageHeader from '@/components/layout/PageHeader.vue'
+import HeaderSidebarToggle from '@/components/layout/HeaderSidebarToggle.vue'
 import { AGENT_OPTIONS } from "@/utils/agent-options"
 import { setSessionPinned } from "@/api/studio/sessions";
 import DshSessionPresetSelect from "@/components/coding-agents/dsh/DshSessionPresetSelect.vue";
@@ -24,6 +29,7 @@ import { useFilesStore } from "@/stores/hermes/files";
 import { useToolPanelStore } from "@/stores/hermes/tool-panel";
 import { useSessionBrowserPrefsStore } from "@/stores/hermes/session-browser-prefs";
 import {
+  NSpin,
   NButton,
   NDrawer,
   NDrawerContent,
@@ -36,7 +42,6 @@ import {
   NPopconfirm,
   NRadioButton,
   NRadioGroup,
-  NSpin,
   useMessage,
   type DropdownOption,
 } from "naive-ui";
@@ -51,6 +56,7 @@ import RealtimeVoiceStage from "./RealtimeVoiceStage.vue";
 import ConversationMonitorPane from "./ConversationMonitorPane.vue";
 import MessageList from "./MessageList.vue";
 import SessionListItem from "./SessionListItem.vue";
+import ListActionsMenu from "@/components/layout/ListActionsMenu.vue";
 import OutlinePanel from "./OutlinePanel.vue";
 import TerminalPanel from "./TerminalPanel.vue";
 import SubagentStreamPanel from "./SubagentStreamPanel.vue";
@@ -60,16 +66,14 @@ import { buildSessionCategoryMenuChildren, resolveRecentSessionCategoryLabel } f
 import { buildActiveSessionMenuOptions, buildSessionContextMenuOptions } from "./session-menu-options";
 import PageSidebarNav from "@/components/layout/PageSidebarNav.vue";
 import PageSidebarFooter from "@/components/layout/PageSidebarFooter.vue";
-import { getActiveProfileName, isStoredSuperAdmin } from "@/api/client";
-import { useRecentWorkspaces } from "@/composables/useRecentWorkspaces";
-import { useWorkspacePreferences } from "@/composables/useWorkspacePreferences";
-import { resolveProfileDisplayName } from "@/utils/hermes/profile-display-name";
-import { workspaceFolderName } from "@/utils/hermes/workspace-path";import { useCollapsedProviderGroups } from "@/composables/useCollapsedProviderGroups";
+import { isStoredSuperAdmin } from "@/api/client";
+import { workspaceFolderName } from "@/utils/hermes/workspace-path";
+import { useDefaultWorkspace } from "@/composables/useDefaultWorkspace";
+import { useCollapsedProviderGroups } from "@/composables/useCollapsedProviderGroups";
 import { canScopedCodingAgentUseProvider, usesServerManagedProviderAuth, isKeylessModelProvider, openCodeFreeApiMode } from "@/utils/codingAgentProviders";
 import { OPEN_SUBAGENT_STREAM_EVENT, type OpenSubagentStreamDetail } from "@/utils/hermes/subagent-stream";
 import { desktopBridge, hasDesktopBrowserBridge } from "@/utils/desktop-bridge";
 import { OPEN_DESKTOP_BROWSER_PANEL_EVENT } from "@/utils/desktop-browser";
-import { useMobileLayout } from '@/composables/useMediaQuery'
 import {
   createBrowserAnnotationAttachment,
   type BrowserAnnotationSubmission,
@@ -121,7 +125,6 @@ const showRealtimeVoice = ref(false);
 const messageListRef = ref<InstanceType<typeof MessageList> | null>(null);
 const chatInputRef = ref<(InstanceType<typeof ChatInput> & {
   addFiles?: (files: File[]) => void;
-
   focusComposer?: () => void;
 }) | null>(null);
 const chatContentWrapperRef = ref<HTMLElement | null>(null);
@@ -160,17 +163,12 @@ const selectedSessionKeys = ref<Set<string>>(new Set());
 const showBatchDeleteConfirm = ref(false);
 const isBatchDeleting = ref(false);
 
-// Initialize synchronously from the media query so first paint is correct.
-// On narrow viewports the session list is an absolute-positioned overlay
-// (z-index 10) on top of the chat area; if we default to `true`, onMounted
-// only flips it to `false` AFTER the first render, causing a visible flash
-// where the session list covers the chat content ("auto-fixes after a
-// moment" — that was the race).
-const isMobile = useMobileLayout();
-const showSessions = ref(!props.standalone && !isMobile.value);
-const pageSidebarExpanded = computed(
-  () => !props.standalone && currentMode.value === "chat" && showSessions.value,
+const { expanded: showSessions, isMobile } = usePageSidebarState(!props.standalone)
+
+const hasPageSidebar = computed(
+  () => !props.standalone && currentMode.value === "chat" && props.contentMode === "chat",
 );
+const pageSidebarExpanded = computed(() => hasPageSidebar.value && showSessions.value);
 const toolPanelStyle = computed(() => ({
   width: isMobile.value ? "100%" : `min(${toolPanelWidth.value}px, 100%)`,
 }));
@@ -363,6 +361,7 @@ async function handleSessionClick(
     setCategoryRevealSuppressedSessionId(null);
   }
   chatStore.clearSessionCompletedUnread(sessionId);
+  if (isMobile.value) showSessions.value = false;
   await router.push({
     name: chatStore.runtimeMode === "global_agent" ? "hermes.globalAgentSession" : "hermes.session",
     params: { sessionId },
@@ -370,7 +369,6 @@ async function handleSessionClick(
   if (chatStore.activeSessionId !== sessionId) {
     await chatStore.switchSession(sessionId);
   }
-  if (isMobile.value) showSessions.value = false;
 }
 
 async function handleRecentSessionClick(sessionId: string) {
@@ -379,15 +377,6 @@ async function handleRecentSessionClick(sessionId: string) {
   await handleSessionClick(sessionId, { preserveCategoryCollapse: true });
 }
 
-watch(isMobile, (mobile) => {
-  if (mobile && showSessions.value) {
-    showSessions.value = false;
-  }
-}, { immediate: true });
-
-function openPageSidebar() {
-  showSessions.value = true;
-}
 
 watch(
   pageSidebarExpanded,
@@ -499,7 +488,9 @@ function handleOpenDesktopBrowserPanelRequest() {
 }
 
 onMounted(() => {
-  window.addEventListener("hermes:open-page-sidebar", openPageSidebar);
+
+
+
   window.addEventListener("hermes:preview-workspace-file", handleWorkspaceFilePreviewRequest);
   window.addEventListener(OPEN_DESKTOP_BROWSER_PANEL_EVENT, handleOpenDesktopBrowserPanelRequest);
   window.addEventListener(OPEN_SUBAGENT_STREAM_EVENT, handleOpenSubagentStreamRequest);
@@ -550,7 +541,7 @@ watch(
 );
 
 onUnmounted(() => {
-  window.removeEventListener("hermes:open-page-sidebar", openPageSidebar);
+
   window.removeEventListener("hermes:preview-workspace-file", handleWorkspaceFilePreviewRequest);
   window.removeEventListener(OPEN_DESKTOP_BROWSER_PANEL_EVENT, handleOpenDesktopBrowserPanelRequest);
   window.removeEventListener(OPEN_SUBAGENT_STREAM_EVENT, handleOpenSubagentStreamRequest);
@@ -603,6 +594,7 @@ const sessionProfileFilter = computed(() => chatStore.sessionProfileFilter);
 const sessionCategories = ref<SessionCategory[]>([]);
 const sessionCategoriesLoading = ref(false);
 const sessionCategoriesLoaded = ref(false);
+usePageLoadingTask(() => !props.standalone && props.contentMode === 'chat' && !sessionCategoriesLoaded.value);
 const sessionCategoriesLoadFailed = ref(false);
 const showCreateCategoryModal = ref(false);
 const createCategoryValue = ref("");
@@ -666,18 +658,8 @@ function toggleCategoryGroup(key: string) {
   collapsedCategories.value = next;
   persistCollapsedCategories();
 }
-const profileFilterOptions = computed(() => [
-  { label: t("chat.allProfiles"), value: "__all__" },
-  ...profilesStore.profiles.map((profile) => ({
-    // Same resolver as everywhere else, so `alias` and the custom name resolve
-    // identically here.
-    label: resolveProfileDisplayName(profilesStore.profiles, profile.name) || profile.name,
-    value: profile.name,
-  })),
-]);
-
-async function handleProfileFilterChange(value: string) {
-  chatStore.setSessionProfileFilter(value === "__all__" ? null : value);
+async function handleProfileFilterChange(value: string | null) {
+  chatStore.setSessionProfileFilter(value);
   await chatStore.loadSessions(chatStore.sessionProfileFilter);
 }
 
@@ -901,40 +883,98 @@ async function handleNewChatCategoryChange(value: string | number | null) {
   }
 }
 
-// Two independent, account-scoped features, both server-owned so they are the
-// same in every browser and on every device:
-//   - favourites: a shared list of directories, used by every profile;
-//   - default: the single directory one profile works in, auto-applied when a
-//     new session starts for that profile.
-// Only "recently used" is device-local, because it is genuine usage history.
-const recentState = useRecentWorkspaces();
-const recentWorkspaces = recentState.recentWorkspaces;
-const workspacePreferences = useWorkspacePreferences();
-
-const profileDefaultWorkspace = computed(() => workspacePreferences.defaultWorkspaceFor(newChatProfile.value));
+// Default workspace feature (multiple defaults supported)
+const defaultWorkspaces = ref<string[]>([]);
+const recentWorkspaces = ref<Array<{ path: string; lastUsed: number; useCount: number }>>([]);
+let workspaceComposable: ReturnType<typeof useDefaultWorkspace> | null = null;
 
 function initWorkspaceComposable(profile: string) {
-  void workspacePreferences.refresh(profile);
-  recentState.loadRecentWorkspaces();
+  workspaceComposable = useDefaultWorkspace(profile);
+  defaultWorkspaces.value = workspaceComposable.loadDefaultWorkspaces();
+  recentWorkspaces.value = workspaceComposable.loadRecentWorkspaces();
+}
+
+function handleToggleDefaultWorkspace() {
+  if (!workspaceComposable) return;
+  const currentPath = newChatWorkspace.value;
+  if (!currentPath) return;
+  
+  const isDefault = defaultWorkspaces.value.includes(currentPath);
+  if (isDefault) {
+    workspaceComposable.removeDefaultWorkspace(currentPath);
+    defaultWorkspaces.value = defaultWorkspaces.value.filter(p => p !== currentPath);
+  } else {
+    workspaceComposable.addDefaultWorkspace(currentPath);
+    defaultWorkspaces.value = [...defaultWorkspaces.value, currentPath];
+  }
 }
 
 function handleSelectRecentWorkspace(path: string) {
   newChatWorkspace.value = path;
 }
 
-async function handleTogglePinRecent(path: string) {
-  await workspacePreferences.toggleFavorite(path);
+function handleSelectDefaultWorkspace(path: string) {
+  newChatWorkspace.value = path;
+  showDefaultWorkspaceMenu.value = false;
 }
 
-// The header's workspace modal edits the live session, not the new-chat draft,
-// and it targets the profile that session belongs to.
-const liveSessionProfile = computed(() => chatStore.activeSession?.profile || getActiveProfileName() || "default");
+function handleTogglePinRecent(path: string) {
+  if (!workspaceComposable) return;
+  const isDefault = defaultWorkspaces.value.includes(path);
+  if (isDefault) {
+    workspaceComposable.removeDefaultWorkspace(path);
+    defaultWorkspaces.value = defaultWorkspaces.value.filter(p => p !== path);
+  } else {
+    workspaceComposable.addDefaultWorkspace(path);
+    defaultWorkspaces.value = [...defaultWorkspaces.value, path];
+  }
+}
 
-const getFolderName = workspaceFolderName;
+const isCurrentWorkspaceDefault = computed(() => {
+  return Boolean(newChatWorkspace.value && defaultWorkspaces.value.includes(newChatWorkspace.value));
+});
 
-// A profile has exactly one default workspace: it is either set or it is not,
-// so there is nothing to paginate and no "more" menu.
-const mostRecentDefaultWorkspace = computed(() => profileDefaultWorkspace.value || null);
+const showDefaultWorkspaceMenu = ref(false);
+
+function getFolderName(path: string | null): string {
+  if (!path) return '';
+  const parts = path.split('/');
+  return parts[parts.length - 1] || path;
+}
+
+const mostRecentDefaultWorkspace = computed(() => {
+  if (defaultWorkspaces.value.length === 0) return null;
+  
+  // 从最近使用记录中找第一个默认工作区
+  const recent = [...recentWorkspaces.value].sort((a, b) => b.lastUsed - a.lastUsed);
+  for (const entry of recent) {
+    if (defaultWorkspaces.value.includes(entry.path)) {
+      return entry.path;
+    }
+  }
+  
+  // 如果没有使用记录，返回第一个默认工作区
+  return defaultWorkspaces.value[0];
+});
+
+// 动态计算可见的工作区数量（根据容器宽度）
+const visibleDefaultWorkspaces = computed(() => {
+  if (defaultWorkspaces.value.length === 0) return [];
+  
+  // 简单策略：前2个总是可见，其余通过"更多"菜单
+  // 未来可以根据实际容器宽度动态调整
+  const maxVisible = Math.min(2, defaultWorkspaces.value.length);
+  return defaultWorkspaces.value.slice(0, maxVisible);
+});
+
+const hasHiddenDefaults = computed(() => {
+  return defaultWorkspaces.value.length > visibleDefaultWorkspaces.value.length;
+});
+
+const hiddenDefaultWorkspaces = computed(() => {
+  const visible = new Set(visibleDefaultWorkspaces.value);
+  return defaultWorkspaces.value.filter(ws => !visible.has(ws));
+});
 
 const newChatAgentOptions = computed(() => AGENT_OPTIONS.map(option => ({ ...option })));
 
@@ -976,29 +1016,6 @@ function getSelectableModelGroupsForProfile(profile: string) {
   return getModelGroupsForProfile(profile).filter(isNewChatProviderAllowed);
 }
 
-function resolveProfileDefault(
-  profile: string,
-  groups: AvailableModelGroup[],
-): { provider: string; model: string } | null {
-  const profileModels = appStore.profileModelGroups.find(
-    (entry) => entry.profile === profile,
-  );
-  const defaultProvider = profileModels?.default_provider || "";
-  const defaultModel = profileModels?.default || "";
-  if (!defaultProvider || !defaultModel) return null;
-  const providerGroup = groups.find((g) => g.provider === defaultProvider);
-  const isUnlistedDefault = !!(
-    providerGroup && !providerGroup.models.includes(defaultModel)
-  );
-  if (isUnlistedDefault) return { provider: defaultProvider, model: defaultModel };
-  if (!providerGroup) {
-    const knownInCustom = (appStore.customModels[defaultProvider] || []).includes(defaultModel);
-    if (knownInCustom) return { provider: defaultProvider, model: defaultModel };
-    return { provider: defaultProvider, model: defaultModel };
-  }
-  return { provider: defaultProvider, model: defaultModel };
-}
-
 function getDefaultModelForProfile(profile: string) {
   const groups = getSelectableModelGroupsForProfile(profile);
   const activeProfileName = profilesStore.activeProfileName || "default";
@@ -1016,26 +1033,29 @@ function getDefaultModelForProfile(profile: string) {
       model: selectedModel,
     };
   }
-  const resolved = resolveProfileDefault(profile, groups);
-  if (resolved) return resolved;
-  const fallbackGroup = groups.find((group) => group.models.length > 0);
+  const profileModels = appStore.profileModelGroups.find(
+    (entry) => entry.profile === profile,
+  );
+  const defaultProvider = profileModels?.default_provider || "";
+  const defaultModel = profileModels?.default || "";
+  const providerGroup = defaultProvider
+    ? groups.find((group) => group.provider === defaultProvider)
+    : undefined;
+  const fallbackGroup = providerGroup || groups.find((group) => group.models.length > 0);
   return {
     provider: fallbackGroup?.provider || "",
-    model: fallbackGroup?.models[0] || "",
+    model: fallbackGroup?.models.includes(defaultModel)
+      ? defaultModel
+      : fallbackGroup?.models[0] || "",
   };
 }
 
-// The label is what the user calls the profile (e.g. "小鸡毛"); the value stays
-// the real profile name because every API call uses it.
-const newChatProfileOptions = computed(() => {
-  const options = profilesStore.profiles.map(profile => ({
-    label: resolveProfileDisplayName(profilesStore.profiles, profile.name) || profile.name,
+const newChatProfileOptions = computed(() =>
+  (profilesStore.profiles.length > 0 ? profilesStore.profiles : [{ name: "default" }]).map((profile) => ({
+    label: profile.name,
     value: profile.name,
-  }))
-  if (options.length > 0) return options
-  // Profiles not loaded yet: still prefer the custom name if it is already known.
-  return [{ label: resolveProfileDisplayName(profilesStore.profiles, "default") || "default", value: "default" }]
-})
+  })),
+);
 
 const newChatModelGroups = computed(() => {
   const groups = getSelectableModelGroupsForProfile(newChatProfile.value);
@@ -1147,10 +1167,18 @@ function handleNewChatModelKindChange(value: "model" | "moa") {
     newChatProvider.value = "moa";
     newChatModel.value = group.models[0];
   } else {
-    const defaults = getDefaultModelForProfile(newChatProfile.value);
     newChatModelKind.value = "model";
-    newChatProvider.value = defaults.provider;
-    newChatModel.value = defaults.model;
+    const groups = getSelectableModelGroupsForProfile(newChatProfile.value)
+      .filter((group) => group.provider !== "moa");
+    const profileModels = appStore.profileModelGroups.find(
+      (entry) => entry.profile === newChatProfile.value,
+    );
+    const defaultGroup = groups.find((group) => group.provider === profileModels?.default_provider);
+    const group = defaultGroup || groups.find((item) => item.models.length > 0);
+    newChatProvider.value = group?.provider || "";
+    newChatModel.value = group?.models.includes(profileModels?.default || "")
+      ? profileModels?.default || ""
+      : group?.models[0] || "";
   }
   newChatBaseUrl.value = "";
   newChatApiKey.value = "";
@@ -1333,8 +1361,9 @@ async function confirmNewChat() {
     apiMode: isNewChatCodingAgent.value && !isGlobalCodingAgent ? newChatApiMode.value : undefined,
   });
   // Record workspace to recent list
-  if (newChatWorkspace.value) {
-    recentState.recordWorkspaceUsage(newChatWorkspace.value);
+  if (newChatWorkspace.value && workspaceComposable) {
+    workspaceComposable.recordWorkspaceUsage(newChatWorkspace.value);
+    recentWorkspaces.value = workspaceComposable.loadRecentWorkspaces();
   }
   
   await router.push({
@@ -1367,10 +1396,6 @@ async function copySessionLink(id?: string) {
   }
 }
 
-function toggleSessionOutline() {
-  showOutline.value = !showOutline.value;
-}
-
 async function copySessionId(id?: string) {
   const sessionId = id || chatStore.activeSessionId;
   if (sessionId) {
@@ -1391,6 +1416,10 @@ const activeSessionMenuOptions = computed<DropdownOption[]>(() => buildActiveSes
   canRename: activeSessionSupportsPersistence.value,
   canOpen: activeSessionSupportsPersistence.value,
 }));
+
+function toggleSessionOutline() {
+  showOutline.value = !showOutline.value;
+}
 
 function activeSessionMenuProps() {
   return {
@@ -1531,7 +1560,9 @@ function handleActiveSessionMenuSelect(key: string) {
   const sessionId = chatStore.activeSessionId;
   if (!sessionId) return;
   restoreActiveSessionMenuTriggerFocus = key !== "rename";
-  if (key === "rename") {
+  if (key === "outline") {
+    showOutline.value = !showOutline.value;
+  } else if (key === "rename") {
     if (!activeSessionSupportsPersistence.value) return;
     openRenameSession(sessionId);
   } else if (key === "open-link") {
@@ -2163,15 +2194,7 @@ async function openSessionModelModal(sessionId: string) {
     ? groups.find((group) => group.provider === session.provider)
     : undefined;
   const fallbackGroup = providerGroup || groups.find((group) => group.models.length > 0);
-  // A-fix: if the session already has a valid provider+model, trust it even when
-  // the live catalog doesn't yet list that model (e.g. custom model not in
-  // provider_models cache). Only fall back to groups[0] when both are empty.
-  const hasValidSessionModel = !!(session?.provider && session?.model);
-  const sessionProfile = session?.profile || profilesStore.activeProfileName || "default";
-  const profileDefault = hasValidSessionModel
-    ? { provider: session!.provider!, model: session!.model! }
-    : resolveProfileDefault(sessionProfile, groups);
-  const defaults = profileDefault || {
+  const defaults = {
     provider: fallbackGroup?.provider || "",
     model: fallbackGroup?.models.includes(session?.model || "")
       ? session?.model || ""
@@ -2181,10 +2204,10 @@ async function openSessionModelModal(sessionId: string) {
   sessionModelKind.value = usesMoa ? "moa" : "model";
   sessionModelValue.value = usesMoa
     ? session?.model || ""
-    : (profileDefault ? profileDefault.model : (providerGroup ? session?.model || defaults.model || "" : defaults.model || ""));
+    : providerGroup ? session?.model || defaults.model || "" : defaults.model || "";
   sessionModelProvider.value = usesMoa
     ? "moa"
-    : (profileDefault ? profileDefault.provider : (providerGroup ? session?.provider || "" : defaults.provider || ""));
+    : providerGroup ? session?.provider || "" : defaults.provider || "";
   sessionModelCustomProvider.value = usesMoa ? defaults.provider : sessionModelProvider.value;
   sessionModelSearch.value = "";
   sessionModelCustomInput.value = "";
@@ -2296,67 +2319,45 @@ async function handleSessionModelCustomSubmit() {
 
 <template>
   <div class="chat-panel" :class="{ 'chat-panel--standalone': standalone }">
-    <div
-      v-if="currentMode === 'chat' && !standalone"
-      class="session-backdrop"
-      :class="{ active: showSessions }"
-      @click="showSessions = false"
-    />
+    <PageSidebar>
     <aside
-      v-if="currentMode === 'chat' && !standalone"
+      v-if="hasPageSidebar"
       class="session-list"
-      :class="{ collapsed: !showSessions }"
+      :class="{ collapsed: !showSessions, 'session-list--navigation': contentMode !== 'chat' }"
     >
       <div v-if="showSessions" class="page-sidebar-top">
         <PageSidebarNav
           :active="contentMode === 'connections' ? 'connections' : contentMode === 'agents' ? 'agents' : contentMode === 'models' ? 'models' : chatStore.runtimeMode === 'global_agent' ? 'global' : 'chat'"
           :primary-label="t('chat.newChat')"
           @primary="openNewChatModal"
-        />
-        <div class="session-list-toolbar">
-          <NSelect
-            class="session-profile-filter"
-            :value="sessionProfileFilter || '__all__'"
-            :options="profileFilterOptions"
-            size="small"
-            :loading="profilesStore.loading"
-            @update:value="handleProfileFilterChange"
-          />
-          <div class="session-list-actions">
-            <button class="session-close-btn" @click="showSessions = false">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
+        >
+          <template #actions>
+            <ListActionsMenu
+              v-if="contentMode === 'chat'"
+              :label="t('chat.sessionListActions')"
+              :profiles="profilesStore.profiles"
+              :profile="sessionProfileFilter"
+              :loading="profilesStore.loading"
+              :batch-mode="isBatchMode"
+              @filter="handleProfileFilterChange"
+              @batch="toggleBatchMode"
+            />
+            <button
+              v-if="isMobile"
+              class="session-close-btn"
+              type="button"
+              :aria-label="t('common.close')"
+              @click="showSessions = false"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="m18 6-12 12M6 6l12 12" />
               </svg>
             </button>
-            <NButton
-              v-if="!isBatchMode"
-              quaternary
-              size="tiny"
-              @click="toggleBatchMode"
-              :title="t('chat.toggleBatchMode')"
-            >
-              <template #icon>
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path d="M9 11l3 3L22 4" />
-                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-                </svg>
-              </template>
-            </NButton>
+          </template>
+        </PageSidebarNav>
+        <div v-if="contentMode === 'chat' && isBatchMode" class="session-list-toolbar">
+          <span class="session-selection-count" role="status">{{ t('chat.selectedSessions', { count: selectedCount }) }}</span>
+          <div class="session-list-actions">
             <NButton
               v-if="isBatchMode"
               quaternary
@@ -2364,6 +2365,7 @@ async function handleSessionModelCustomSubmit() {
               @click="selectAllSessions"
               :disabled="!canSelectAll || isBatchDeleting"
               :title="t('chat.selectAll')"
+              :aria-label="t('chat.selectAll')"
             >
               <template #icon>
                 <svg
@@ -2387,7 +2389,7 @@ async function handleSessionModelCustomSubmit() {
               @positive-click="handleBatchDeleteConfirm"
             >
               <template #trigger>
-                <NButton quaternary size="tiny" type="error" :loading="isBatchDeleting" :disabled="isBatchDeleting">
+                <NButton quaternary size="tiny" :title="t('common.delete')" :aria-label="t('common.delete')" :loading="isBatchDeleting" :disabled="isBatchDeleting">
                   <template #icon>
                     <svg
                       width="14"
@@ -2411,30 +2413,24 @@ async function handleSessionModelCustomSubmit() {
               size="tiny"
               @click="toggleBatchMode"
               :disabled="isBatchDeleting"
+              :title="t('common.cancel')"
+              :aria-label="t('common.cancel')"
             >
               <template #icon>
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="m18 6-12 12M6 6l12 12" />
                 </svg>
               </template>
             </NButton>
           </div>
         </div>
       </div>
-      <div v-if="showSessions" class="session-items">
+      <div v-if="contentMode === 'chat' && showSessions" class="session-items">
         <div
           v-if="chatStore.isLoadingSessions && chatStore.sessions.length === 0"
           class="session-loading"
         >
-          {{ t("common.loading") }}
+          <NSpin size="small" :description="t('common.loading')" />
         </div>
         <div v-else-if="chatStore.sessions.length === 0" class="session-empty">
           {{ t("chat.noSessions") }}
@@ -2611,6 +2607,7 @@ async function handleSessionModelCustomSubmit() {
       </div>
       <PageSidebarFooter v-if="showSessions" />
     </aside>
+    </PageSidebar>
 
     <NDropdown
       :key="contextMenuCategoriesKey"
@@ -2726,8 +2723,7 @@ async function handleSessionModelCustomSubmit() {
       style="width: 520px"
       @positive-click="handleWorkspaceConfirm"
     >
-      <!-- Favourite and default are both set from the picker's context menu. -->
-      <FolderPicker v-model="workspaceValue" :profile="liveSessionProfile" />
+      <FolderPicker v-model="workspaceValue" />
     </NModal>
 
     <NModal
@@ -3027,14 +3023,62 @@ async function handleSessionModelCustomSubmit() {
           <div class="new-chat-field">
             <span class="new-chat-label">
               {{ t("chat.workspace") }}
-              <NTooltip v-if="newChatWorkspace === profileDefaultWorkspace">
+              <NTooltip v-if="isCurrentWorkspaceDefault">
                 <template #trigger>
                   <span class="workspace-default-badge">{{ t("chat.workspaceDefault") }}</span>
                 </template>
                 {{ t("chat.workspaceDefaultTooltip") }}
               </NTooltip>
             </span>
-            <FolderPicker v-model="newChatWorkspace" :profile="newChatProfile" />
+            <!-- Default workspace chips -->
+            <div v-if="defaultWorkspaces.length > 0" class="default-workspace-chips">
+              <span class="default-workspace-label">{{ t("chat.defaultWorkspace") }}:</span>
+              <div class="workspace-chips-container">
+                <template v-for="(ws, index) in visibleDefaultWorkspaces" :key="ws">
+                  <div
+                    class="workspace-chip"
+                    :class="{ active: newChatWorkspace === ws }"
+                    @click="handleSelectDefaultWorkspace(ws)"
+                    :title="ws"
+                  >
+                    {{ getFolderName(ws) }}
+                  </div>
+                  <span v-if="index < visibleDefaultWorkspaces.length - 1 || hasHiddenDefaults" class="workspace-chip-separator">/</span>
+                </template>
+                <div v-if="hasHiddenDefaults" class="workspace-chip-dropdown">
+                  <button
+                    class="workspace-chip-more"
+                    type="button"
+                    :aria-expanded="showDefaultWorkspaceMenu"
+                    @click="showDefaultWorkspaceMenu = !showDefaultWorkspaceMenu"
+                  >
+                    <span>{{ t("chat.more") }}</span>
+                    <svg class="workspace-more-chevron" :class="{ expanded: showDefaultWorkspaceMenu }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </button>
+                  <div v-if="showDefaultWorkspaceMenu" class="workspace-dropdown-menu">
+                    <div
+                      v-for="ws in hiddenDefaultWorkspaces"
+                      :key="ws"
+                      class="workspace-dropdown-item"
+                      @click="handleSelectDefaultWorkspace(ws)"
+                      :title="ws"
+                    >
+                      {{ getFolderName(ws) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <FolderPicker
+              v-model="newChatWorkspace"
+              show-favorite
+              :favorite="isCurrentWorkspaceDefault"
+              :favorite-disabled="!newChatWorkspace"
+              :favorite-title="isCurrentWorkspaceDefault ? t('chat.workspaceUnpin') : t('chat.workspacePin')"
+              @toggle-favorite="handleToggleDefaultWorkspace"
+            />
             <div v-if="recentWorkspaces.length > 0" class="recent-workspaces">
               <span class="recent-workspaces-label">{{ t("chat.workspaceRecent") }}:</span>
               <div class="recent-workspaces-chips">
@@ -3048,10 +3092,13 @@ async function handleSessionModelCustomSubmit() {
                   <template #icon>
                     <span
                       class="recent-pin-icon"
-                      :class="{ 'is-pinned': workspacePreferences.isFavorite(ws.path) }"
+                      :class="{ 'is-pinned': defaultWorkspaces.includes(ws.path) }"
                       @click.stop="handleTogglePinRecent(ws.path)"
-                      :title="workspacePreferences.isFavorite(ws.path) ? t('chat.workspaceUnfavorite') : t('chat.workspacePin')"
-                    ><StarIcon :filled="workspacePreferences.isFavorite(ws.path)" width="14" height="14" /></span></template>
+                      :title="defaultWorkspaces.includes(ws.path) ? t('chat.workspaceUnpin') : t('chat.workspacePin')"
+                    >
+                      <StarIcon :filled="defaultWorkspaces.includes(ws.path)" width="14" height="14" />
+                    </span>
+                  </template>
                   {{ getFolderName(ws.path) }}
                 </NButton>
               </div>
@@ -3075,51 +3122,28 @@ async function handleSessionModelCustomSubmit() {
 
     <div
       class="chat-main"
-      :class="{ 'chat-main--sidebar-collapsed': currentMode !== 'chat' || !showSessions }"
+      :class="{ 'chat-main--sidebar-collapsed': !pageSidebarExpanded }"
     >
       <ConnectionsPanel
         v-if="contentMode === 'connections'"
-        :sidebar-collapsed="!showSessions"
-        @toggle-sidebar="showSessions = !showSessions"
       />
       <AgentManagerPanel
         v-else-if="contentMode === 'agents'"
-        :sidebar-collapsed="!showSessions"
-        @toggle-sidebar="showSessions = !showSessions"
       />
       <ModelsPanel
         v-else-if="contentMode === 'models'"
-        :sidebar-collapsed="!showSessions"
-        @toggle-sidebar="showSessions = !showSessions"
       />
       <template v-else>
+      <PageHeader>
       <header v-if="!standalone" class="chat-header">
         <div class="header-left">
-          <NButton
+          <HeaderSidebarToggle
             v-if="currentMode === 'chat'"
             class="header-sidebar-toggle"
-            quaternary
-            size="small"
-            @click="showSessions = !showSessions"
-            circle
-          >
-            <template #icon>
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-              >
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
-              </svg>
-            </template>
-          </NButton>
-          <div
+            :expanded="showSessions"
+            @toggle="showSessions = !showSessions"
+          />
+                    <div
             class="header-identity"
             :class="{ 'header-identity--with-workspace': !!chatStore.activeSession?.workspace }"
           >
@@ -3174,7 +3198,7 @@ async function handleSessionModelCustomSubmit() {
               </template>
               {{ desktopBrowserAvailable ? `${t("drawer.files")} / ${t("drawer.terminal")} / ${t("browser.title")}` : `${t("drawer.files")} / ${t("drawer.terminal")}` }}
             </NTooltip>
-            <NTooltip trigger="hover">
+                        <NTooltip trigger="hover">
               <template #trigger>
                 <NButton
                   class="header-session-outline-toggle"
@@ -3209,8 +3233,7 @@ async function handleSessionModelCustomSubmit() {
                 </NButton>
               </template>
               {{ t("chat.outlineTitle") }}
-            </NTooltip>
-            <NDropdown
+            </NTooltip><NDropdown
               v-model:show="showActiveSessionMenu"
               trigger="click"
               placement="bottom-end"
@@ -3238,17 +3261,10 @@ async function handleSessionModelCustomSubmit() {
                     circle
                   >
                     <template #icon>
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.4"
-                        stroke-linecap="round"
-                        aria-hidden="true"
-                      >
-                        <path d="M5 12h.01M12 12h.01M19 12h.01" />
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <circle cx="5" cy="12" r="1.6" />
+                        <circle cx="12" cy="12" r="1.6" />
+                        <circle cx="19" cy="12" r="1.6" />
                       </svg>
                     </template>
                   </NButton>
@@ -3259,6 +3275,7 @@ async function handleSessionModelCustomSubmit() {
           </template>
         </div>
       </header>
+      </PageHeader>
 
       <template v-if="currentMode === 'chat'">
         <div
@@ -3640,11 +3657,9 @@ async function handleSessionModelCustomSubmit() {
   width: $sidebar-width;
   min-height: 0;
   align-self: stretch;
-  margin: 10px;
+  margin: 0;
   background: $bg-sidebar-surface;
-  border: 1px solid $border-color;
-  border-radius: 14px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  border-inline-end: 1px solid $border-color;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -3652,6 +3667,11 @@ async function handleSessionModelCustomSubmit() {
     width $transition-normal,
     opacity $transition-normal;
   overflow: hidden;
+
+  &--navigation .page-sidebar-top {
+    flex: 1;
+    overflow-y: auto;
+  }
 
   &.collapsed {
     width: 0;
@@ -3665,26 +3685,22 @@ async function handleSessionModelCustomSubmit() {
 
   @media (max-width: $breakpoint-mobile) {
     position: absolute;
-    left: 10px;
-    top: 10px;
-    bottom: 10px;
+    left: 0;
+    top: 0;
+    bottom: 0;
     height: auto;
     margin: 0;
     z-index: 120;
     width: $sidebar-width;
 
     &.collapsed {
-      transform: translateX(calc(-100% - 10px));
+      transform: translateX(-100%);
       opacity: 0;
     }
   }
 }
 
 @media (max-width: $breakpoint-mobile) {
-  .session-close-btn {
-    display: flex;
-  }
-
   .session-backdrop {
     position: absolute;
     inset: 0;
@@ -3704,7 +3720,6 @@ async function handleSessionModelCustomSubmit() {
 .page-sidebar-top {
   flex-shrink: 0;
   padding: 12px;
-  border-bottom: 1px solid $border-color;
 }
 
 .page-sidebar-tabs {
@@ -3755,7 +3770,14 @@ async function handleSessionModelCustomSubmit() {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 8px;
+  justify-content: space-between;
+}
+
+.session-selection-count {
+  min-width: 0;
+  font-size: 12px;
+  color: $text-secondary;
 }
 
 .session-list-actions {
@@ -3774,7 +3796,7 @@ async function handleSessionModelCustomSubmit() {
 }
 
 .session-close-btn {
-  display: none;
+  display: inline-flex;
   border: none;
   background: none;
   cursor: pointer;
@@ -3798,11 +3820,6 @@ async function handleSessionModelCustomSubmit() {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   line-height: 22px;
-}
-
-.session-profile-filter {
-  min-width: 0;
-  flex: 1;
 }
 
 .conversation-switch {
@@ -4028,7 +4045,7 @@ async function handleSessionModelCustomSubmit() {
 .session-items {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 6px 12px;
+  padding: 0 6px 12px;
 }
 
 .session-loading,
@@ -4115,42 +4132,10 @@ async function handleSessionModelCustomSubmit() {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   overflow: hidden;
   flex: 1;
   min-width: 0;
-}
-
-// Session title on top, workspace directory underneath.
-//
-// The block is deliberately sized to exactly --app-menu-btn-size (18px title
-// line + 2px gap + 16px badge) and keeps `min-height` at that size. Because the
-// column is `justify-content: center`, the block's centre therefore lands on
-// the centre line of whatever sits to its left -- the grid button on desktop,
-// the menu button on mobile -- instead of drifting down as the lines change.
-.header-identity {
-  // Metrics of the workspace badge below, declared once so the badge and the
-  // title's indent cannot drift apart.
-  --ws-badge-pad: 8px;
-  --ws-badge-icon: 12px;
-  --ws-badge-gap: 4px;
-
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 2px;
-  min-width: 0;
-  min-height: var(--app-menu-btn-size);
-  overflow: hidden;
-}
-
-// The title's left edge lines up with the folder ICON's left edge, i.e. it only
-// clears the badge's own inset. Adding the icon width and the gap as well would
-// line the title up with the "workspace" text instead, which reads as too much
-// indent. Only applied when a badge is actually rendered below.
-.header-identity--with-workspace .header-session-title {
-  padding-inline-start: var(--ws-badge-pad);
 }
 
 .header-session-title {
@@ -4205,48 +4190,14 @@ async function handleSessionModelCustomSubmit() {
   .header-sidebar-toggle {
     display: none;
   }
-}
 
-.workspace-badge {
-  border: 0;
-  font-size: 11px;
-  line-height: 14px;
-  color: $text-muted;
-  background: rgba(255, 255, 255, 0.05);
-  padding: 1px var(--ws-badge-pad);
-  border-radius: 4px;
-  max-width: 160px;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ws-badge-gap);
-  overflow: hidden;
-  cursor: pointer;
-
-  svg {
-    flex: 0 0 auto;
-    inline-size: var(--ws-badge-icon);
-    block-size: var(--ws-badge-icon);
+  .header-session-title {
+    font-size: 14px;
   }
 
-  span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &:hover {
-    color: $text-secondary;
-    background: rgba(var(--accent-primary-rgb), 0.06);
-  }
 }
 
 .header-tool-toggle.active {
-  color: var(--accent-primary);
-  background: rgba(var(--accent-primary-rgb), 0.1);
-}
-
-.header-session-outline-toggle.active {
   color: var(--accent-primary);
   background: rgba(var(--accent-primary-rgb), 0.1);
 }
@@ -4660,4 +4611,83 @@ async function handleSessionModelCustomSubmit() {
     opacity: 1;
   }
 }
+.header-identity {
+  // Metrics of the workspace badge below, declared once so the badge and the
+  // title's indent cannot drift apart.
+  --ws-badge-pad: 8px;
+  --ws-badge-icon: 12px;
+  --ws-badge-gap: 4px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: var(--app-menu-btn-size);
+  overflow: hidden;
+}
+
+.workspace-badge {
+  border: 0;
+  font-size: 11px;
+  line-height: 14px;
+  color: $text-muted;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px var(--ws-badge-pad);
+  border-radius: 4px;
+  max-width: 160px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ws-badge-gap);
+  overflow: hidden;
+  cursor: pointer;
+
+  svg {
+    flex: 0 0 auto;
+    inline-size: var(--ws-badge-icon);
+    block-size: var(--ws-badge-icon);
+  }
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:hover {
+    color: $text-secondary;
+    background: rgba(var(--accent-primary-rgb), 0.06);
+  }
+}
+
+.header-identity--with-workspace .header-session-title {
+  padding-inline-start: var(--ws-badge-pad);
+}
+
+.header-session-outline-toggle.active {
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.1);
+}
+
+.header-session-title {
+  font-size: 16px;
+  line-height: 18px;
+  font-weight: 600;
+  color: $text-primary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+@media (max-width: $breakpoint-mobile) {
+  .chat-header {
+    // Same top offset and reserve as the menu button, plus 8px of clearance, so
+    // the identity block's centre line meets the button's centre line exactly.
+    padding: var(--app-menu-btn-top) 12px 16px
+      calc(var(--app-menu-btn-inset) + var(--app-menu-btn-size) + 8px);
+  }
+
 </style>
