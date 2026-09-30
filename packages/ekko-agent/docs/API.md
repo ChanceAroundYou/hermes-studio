@@ -3130,6 +3130,11 @@ export class EkkoSkillManager {
   runtimeSkills(profile = 'default'): AgentSkill[]
 }
 ```
+### `src/skills/review-evidence.ts`
+
+```ts
+export function skillReviewEvidence(messages: AgentMessage[])
+```
 ### `src/skills/review.ts`
 
 ```ts
@@ -3635,6 +3640,7 @@ export interface AgentToolContext {
   memoryDefaultWriteScope?: import('../memory/types').MemoryScope
   browserSessionId?: string
   mcpServers?: Record<string, unknown>
+  mcpSessionSignal?: AbortSignal
   timeoutMs?: number
   signal?: AbortSignal
   requestToolApproval?: AgentToolApprovalRequester

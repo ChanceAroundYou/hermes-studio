@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { browserIntent, matchBrowserSnapshot, verifyBrowserResult } from './browser/jev.mjs'
+import { validateBrowserArguments } from './browser/arguments.mjs'
+import { browserOutput } from './browser/output.mjs'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { createInterface } from 'node:readline'
@@ -166,10 +168,9 @@ function errorText(message) {
 async function request(path, options = {}) {
   const envelope = await requestEnvelope(path, options)
   if (envelope.status < 200 || envelope.status >= 300) {
-    if (envelope.status === 401) {
-      throw new Error(`${envelope.body?.error || 'Unauthorized'}. ${authHint()}`)
-    }
-    throw new Error(envelope.body?.error || envelope.bodyText || `HTTP ${envelope.status}`)
+    const message = envelope.status === 401 ? `${envelope.body?.error || 'Unauthorized'}. ${authHint()}`
+      : envelope.body?.error || envelope.bodyText || `HTTP ${envelope.status}`
+    throw Object.assign(new Error(message), { status: envelope.status })
   }
   return envelope.body
 }
@@ -936,8 +937,18 @@ const tools = [
   {
     name: 'ekko_studio_browser_snapshot',
     toolset: 'browser',
-    description: 'Return a bounded accessibility snapshot with stable element refs. Pass its snapshot_id to read text, click, or type; stale snapshots are rejected. Supply target to request optional JEV element matching when enabled in Models > JEV; inspect elementMatch alongside the unchanged snapshot. A match is advisory and still requires snapshot_id/ref for interaction.',
-    inputSchema: browserInputSchema({ tab_id: { type: 'string' }, target: { type: 'string', minLength: 1, maxLength: 2000, description: 'Describe the unique element to find in the snapshot.' } }, ['tab_id']),
+    description: 'Read an accessibility snapshot in bounded pages. Large pages: use selector for a CSS region (e.g. #form-demo-layout), query for local label/text search, or interactive_only for controls. These search the full document before paging and require no JEV. When hasMore is true, continue with snapshot_id and offset=nextOffset instead of repeating or scrolling the same tree. Refs stay stable across pages of that snapshot; use snapshot_id/ref for click/type. Optional target adds JEV advice only when configured.',
+    inputSchema: browserInputSchema({
+      tab_id: { type: 'string' },
+      selector: { type: 'string', minLength: 1, maxLength: 2000, description: 'CSS selector for one region in the main document. A URL #anchor often identifies the intended demo/form. Omit to inspect the whole document.' },
+      query: { type: 'string', minLength: 1, maxLength: 2000, description: 'Local case-insensitive substring search of rendered names, roles and descriptions across the full selected region. Works without JEV.' },
+      interactive_only: { type: 'boolean', description: 'Return controls and links, excluding static text and layout containers. Works without JEV.' },
+      snapshot_id: { type: 'string', minLength: 1, maxLength: 2000, description: 'Continue the latest cached snapshot without re-reading the page. Do not combine with selector/query/interactive_only; omit for a fresh snapshot.' },
+      offset: { type: 'number', minimum: 0, description: 'Zero-based node offset, normally the previous nextOffset. Defaults to 0.' },
+      limit: { type: 'number', minimum: 1, maximum: 300, description: 'Nodes per response, default 100. Use pagination rather than increasing the limit for large documents.' },
+      include_text: { type: 'boolean', description: 'Include the duplicate text rendering alongside nodes. Defaults to false.' },
+      target: { type: 'string', minLength: 1, maxLength: 2000, description: 'Optional JEV semantic advice within the returned page; use local selector/query/interactive_only to locate missing controls first.' },
+    }, ['tab_id']),
   },
   {
     name: 'ekko_studio_browser_read_text',
@@ -959,6 +970,7 @@ const tools = [
     inputSchema: browserInputSchema({
       tab_id: { type: 'string' },
       expectation: { type: 'string', minLength: 1, maxLength: 2000, description: 'Expected visible outcome to judge after the action, when enabled in Models > JEV.' },
+      include_text: { type: 'boolean', description: 'Include the duplicate text rendering alongside snapshot nodes. Defaults to false.' },
       action: { type: 'string', enum: ['click', 'type', 'press', 'scroll'] },
       ref: { type: 'string' }, snapshot_id: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' },
       direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] }, pixels: { type: 'number' },
@@ -967,11 +979,12 @@ const tools = [
   {
     name: 'ekko_studio_browser_batch',
     toolset: 'browser',
-    description: 'Execute 1-50 click/type/press/scroll actions sequentially in one tab in a single call. For click/type, pass one current snapshot_id and refs from that snapshot; original DOM targets are revalidated before each step. Stops on the first failure, navigation, user takeover, or the 30-second execution budget. Returns zero-based per-step completed/failed/skipped results and a fresh snapshot when available. Completed actions are not rolled back. Existing high-risk action confirmations still apply. Supply expectation for optional JEV verification of the final snapshot after a fully completed batch; verification does not change completion status or retry actions.',
+    description: 'Execute 1-50 click/type/press/scroll actions sequentially in one tab in a single call. For click/type, pass one current snapshot_id and refs from that snapshot; original DOM targets are revalidated before each step. Stops on the first failure, navigation, user takeover, or the 30-second execution budget. Returns zero-based per-step completed/failed/skipped results and a fresh snapshot when available. Completed actions are not rolled back. Supply expectation for optional JEV verification of the final snapshot after a fully completed batch; verification does not change completion status or retry actions.',
     inputSchema: browserInputSchema({
       tab_id: { type: 'string' },
       snapshot_id: { type: 'string', description: 'Current snapshot used by all click/type refs; optional for a batch containing only press/scroll.' },
-      expectation: { type: 'string', minLength: 1, maxLength: 2000, description: 'Expected visible outcome after all actions finish.' },
+      include_text: { type: 'boolean', description: 'Include the duplicate text rendering alongside final snapshot nodes. Defaults to false.' },
+      expectation: { type: 'string', minLength: 1, maxLength: 2000, description: 'Expected visible outcome after all actions finish. Prefer one batch assessment over assessing every intermediate click.' },
       actions: {
         type: 'array', minItems: 1, maxItems: 50,
         items: {
@@ -1933,6 +1946,11 @@ async function callTool(name, args = {}, signal) {
   const resolvedName = resolveToolName(name)
   const categoryToolset = categoryToolsetDefinition(ACTIVE_TOOLSET)
   if (resolvedName === categoryToolset?.name) return await callCategoryToolset(args, signal)
+  const browserTool = tools.find(tool => tool.name === resolvedName && tool.toolset === 'browser')
+  if (browserTool) {
+    const error = validateBrowserArguments(browserTool, args)
+    if (error) return errorText(`${error}. Use ekko_studio_browser_toolset action=describe tool=${resolvedName} for the schema.`)
+  }
   switch (resolvedName) {
     case 'ekko_studio_browser_tabs': {
       if (args.action === 'list') return jsonText(await browserRequest('tabs.list'))
@@ -1952,8 +1970,12 @@ async function callTool(name, args = {}, signal) {
     }
     case 'ekko_studio_browser_snapshot': {
       const target = browserIntent(args.target, 'target')
-      const envelope = await browserRequest('snapshot', { tab_id: args.tab_id }, signal)
-      return jsonText(await matchBrowserSnapshot(request, envelope, target, signal))
+      const params = { tab_id: args.tab_id }
+      for (const key of ['selector', 'query', 'interactive_only', 'snapshot_id', 'offset', 'limit']) {
+        if (args[key] !== undefined) params[key] = args[key]
+      }
+      const envelope = await browserRequest('snapshot', params, signal)
+      return browserOutput(await matchBrowserSnapshot(request, envelope, target, signal), args.include_text)
     }
     case 'ekko_studio_browser_read_text':
       return jsonText(await browserRequest('text.read', {
@@ -1971,13 +1993,13 @@ async function callTool(name, args = {}, signal) {
         if (args[key] !== undefined) action[key] = args[key]
       }
       const envelope = await browserRequest('interact', { tab_id: args.tab_id, action }, signal)
-      return jsonText(await verifyBrowserResult(request, envelope, expectation, () => browserRequest('snapshot', { tab_id: args.tab_id }, signal), signal))
+      return browserOutput(await verifyBrowserResult(request, envelope, expectation, () => browserRequest('snapshot', { tab_id: args.tab_id }, signal), signal), args.include_text)
     }
     case 'ekko_studio_browser_batch': {
       const expectation = browserIntent(args.expectation, 'expectation')
       const executed = await browserRequest('interact.batch', { tab_id: args.tab_id, snapshot_id: args.snapshot_id, actions: args.actions }, signal)
       const envelope = await verifyBrowserResult(request, executed, expectation, () => browserRequest('snapshot', { tab_id: args.tab_id }, signal), signal)
-      return { ...jsonText(envelope), ...(envelope.result?.completed < envelope.result?.total ? { isError: true } : {}) }
+      return { ...browserOutput(envelope, args.include_text), ...(envelope.result?.completed < envelope.result?.total ? { isError: true } : {}) }
     }
     case 'ekko_studio_browser_screenshot': {
       try {
