@@ -16,8 +16,22 @@ export const useProfilesStore = defineStore('profiles', () => {
   const loading = ref(false)
   const switching = ref(false)
   const hermesAvailable = ref(false)
+  let profilesRequest: Promise<void> | null = null
 
-  async function fetchProfiles() {
+  function fetchProfiles(): Promise<void> {
+    // The page and its Profile selector mount together; share their initial load.
+    if (profilesRequest) return profilesRequest
+    profilesRequest = loadProfiles().finally(() => { profilesRequest = null })
+    return profilesRequest
+  }
+
+  async function refreshProfilesAfterMutation() {
+    // An earlier list request may predate the mutation, so always fetch again.
+    if (profilesRequest) await profilesRequest
+    await fetchProfiles()
+  }
+
+  async function loadProfiles() {
     loading.value = true
     try {
       profiles.value = await profilesApi.fetchProfiles()
@@ -137,7 +151,7 @@ export const useProfilesStore = defineStore('profiles', () => {
 
   async function createProfile(name: string, clone?: boolean) {
     const res = await profilesApi.createProfile(name, clone)
-    if (res.success) await fetchProfiles()
+    if (res.success) await refreshProfilesAfterMutation()
     return res
   }
 
@@ -145,7 +159,7 @@ export const useProfilesStore = defineStore('profiles', () => {
     const ok = await profilesApi.deleteProfile(name)
     if (ok) {
       delete detailMap.value[name]
-      await fetchProfiles()
+      await refreshProfilesAfterMutation()
     }
     return ok
   }
@@ -160,7 +174,7 @@ export const useProfilesStore = defineStore('profiles', () => {
     const ok = await profilesApi.renameProfile(name, newName)
     if (ok) {
       delete detailMap.value[name]
-      await fetchProfiles()
+      await refreshProfilesAfterMutation()
     }
     return ok
   }
@@ -205,7 +219,7 @@ export const useProfilesStore = defineStore('profiles', () => {
 
   async function importProfile(file: File) {
     const result = await profilesApi.importProfile(file)
-    if (result.success) await fetchProfiles()
+    if (result.success) await refreshProfilesAfterMutation()
     return result
   }
 

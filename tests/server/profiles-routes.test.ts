@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
+import AdmZip from 'adm-zip'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
 import { Readable } from 'stream'
@@ -25,6 +26,12 @@ const gatewayAutostartMocks = vi.hoisted(() => ({
   restartGatewayForProfile: vi.fn(),
 }))
 
+const agentStatusMocks = vi.hoisted(() => ({
+  hermesAvailable: true,
+}))
+
+const userProfilesMocks = vi.hoisted(() => ({ listUserProfiles: vi.fn() }))
+vi.mock('../../packages/server/src/modules/studio/public/users', () => userProfilesMocks)
 // Mock hermes-cli
 vi.mock('../../packages/server/src/modules/hermes/services/runtime/cli', () => ({
   listProfiles: vi.fn(),
@@ -64,7 +71,8 @@ vi.mock('../../packages/server/src/modules/hermes/services/history/session-delet
 }))
 
 vi.mock('../../packages/server/src/modules/studio/public/agent-status-registry', () => ({
-  isHermesAgentAvailable: vi.fn(() => true),
+  // Reads the hoisted flag so a test can simulate Hermes not being installed.
+  isHermesAgentAvailable: vi.fn(() => agentStatusMocks.hermesAvailable),
 }))
 
 vi.mock('../../packages/server/src/modules/hermes/services/gateway/autostart', () => ({
@@ -83,6 +91,9 @@ describe('Profile Routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // The "without Hermes" cases flip this flag; reset it so the shared
+    // isHermesAgentAvailable mock does not stay false for every later test.
+    agentStatusMocks.hermesAvailable = true
     agentBridgeMocks.destroyProfile.mockResolvedValue({ destroyed: 0 })
     gatewayAutostartMocks.prepareGatewayForProfileDelete.mockResolvedValue(undefined)
     skillInjectorMocks.injectMissingSkills.mockResolvedValue({ targets: [] })
@@ -299,6 +310,183 @@ describe('Profile Routes', () => {
       expect(ctx.status).toBe(400)
       expect(ctx.body).toEqual({ error: "Profile name 'hermes' is reserved and cannot be used" })
       expect(hermesCli.renameProfile).not.toHaveBeenCalled()
+    })
+  })
+
+describe('profile lifecycle without Hermes', () => {
+    it('creates a normalized Studio-owned profile skeleton without invoking Hermes CLI', async () => {
+      const hermesHome = await mkdtemp(join(tmpdir(), 'studio-native-profile-create-'))
+      tempHomes.push(hermesHome)
+      process.env.HERMES_HOME = hermesHome
+      agentStatusMocks.hermesAvailable = false
+      const { create } = await import('../../packages/server/src/modules/hermes/controllers/profiles')
+      const ctx: any = {
+        request: { body: { name: '  Work_One  ', clone: false } },
+        status: 200,
+        body: undefined,
+      }
+
+      await create(ctx)
+
+      const profileDir = join(hermesHome, 'profiles', 'work_one')
+      expect(ctx.status).toBe(200)
+      expect(ctx.body).toMatchObject({ success: true, message: "Profile 'work_one' created by Studio" })
+      expect(hermesCli.createProfile).not.toHaveBeenCalled()
+      expect(existsSync(join(profileDir, 'config.yaml'))).toBe(true)
+      expect(existsSync(join(profileDir, '.env'))).toBe(true)
+      expect(existsSync(join(profileDir, 'SOUL.md'))).toBe(true)
+      expect(existsSync(join(profileDir, 'skills'))).toBe(true)
+      expect(skillInjectorMocks.resolveTargetDirForProfile).toHaveBeenCalledWith('work_one')
+    })
+
+    it('rejects path-like and command names before touching either implementation', async () => {
+      const hermesHome = await mkdtemp(join(tmpdir(), 'studio-native-profile-invalid-'))
+      tempHomes.push(hermesHome)
+      process.env.HERMES_HOME = hermesHome
+      agentStatusMocks.hermesAvailable = false
+      const { create } = await import('../../packages/server/src/modules/hermes/controllers/profiles')
+
+      for (const name of ['../outside', 'work/name', '.hidden', 'gateway']) {
+        const ctx: any = { request: { body: { name } }, status: 200, body: undefined }
+        await create(ctx)
+        expect(ctx.status).toBe(400)
+        expect(ctx.body.code).toMatch(/^profile_name_/)
+      }
+
+      expect(hermesCli.createProfile).not.toHaveBeenCalled()
+      expect(existsSync(join(hermesHome, 'profiles'))).toBe(false)
+    })
+
+    it('deletes only the selected profile directory and resets active_profile', async () => {
+      const hermesHome = await mkdtemp(join(tmpdir(), 'studio-native-profile-delete-'))
+      tempHomes.push(hermesHome)
+      process.env.HERMES_HOME = hermesHome
+      agentStatusMocks.hermesAvailable = false
+      const profileDir = join(hermesHome, 'profiles', 'work')
+      const siblingDir = join(hermesHome, 'profiles', 'keep')
+      await mkdir(profileDir, { recursive: true })
+      await mkdir(siblingDir, { recursive: true })
+      await writeFile(join(hermesHome, 'active_profile'), 'work\n', 'utf-8')
+      const { remove } = await import('../../packages/server/src/modules/hermes/controllers/profiles')
+      const ctx: any = { params: { name: 'work' }, status: 200, body: undefined }
+
+      await remove(ctx)
+
+      expect(ctx.status).toBe(200)
+      expect(ctx.body).toEqual({ success: true })
+      expect(agentBridgeMocks.destroyProfile).not.toHaveBeenCalled()
+      expect(gatewayAutostartMocks.prepareGatewayForProfileDelete).toHaveBeenCalledWith('work', { useHermesCli: false })
+      expect(hermesCli.deleteProfile).not.toHaveBeenCalled()
+      expect(existsSync(profileDir)).toBe(false)
+      expect(existsSync(siblingDir)).toBe(true)
+      expect(readFileSync(join(hermesHome, 'active_profile'), 'utf-8')).toBe('default\n')
+    })
+
+    it.each([
+      ['list', true], ['list', false], ['listForApp', true], ['listForApp', false],
+    ] as const)('%s lists local metadata without CLI or runtime probes (Hermes installed: %s)', async (endpoint, installed) => {
+      const hermesHome = await mkdtemp(join(tmpdir(), 'studio-native-profile-list-'))
+      tempHomes.push(hermesHome)
+      process.env.HERMES_HOME = hermesHome
+      agentStatusMocks.hermesAvailable = installed
+      await mkdir(join(hermesHome, 'profiles', 'work'), { recursive: true })
+      await writeFile(join(hermesHome, 'config.yaml'), 'model: default-model\n')
+      await writeFile(join(hermesHome, 'profiles', 'work', 'config.yaml'), 'model:\n  default: work-model\n')
+      await writeFile(join(hermesHome, 'active_profile'), 'default\n')
+      // A broken or slow CLI must not affect page bootstrap.
+      vi.mocked(hermesCli.listProfiles).mockRejectedValue(new Error('CLI unavailable'))
+      const controller = await import('../../packages/server/src/modules/hermes/controllers/profiles')
+      const ctx: any = {
+        state: { profile: { name: 'work' } },
+        get: vi.fn(),
+        status: 200,
+        body: undefined,
+      }
+
+      await controller[endpoint](ctx)
+
+      expect(ctx.status).toBe(200)
+      expect(ctx.body.profiles).toMatchObject([
+        { name: 'default', active: false, model: 'default-model' },
+        { name: 'work', active: true, model: 'work-model' },
+      ])
+      expect(hermesCli.listProfiles).not.toHaveBeenCalled()
+      expect(gatewayAutostartMocks.getGatewayRuntimeStatusForProfile).not.toHaveBeenCalled()
+      expect(AgentBridgeClient).not.toHaveBeenCalled()
+      expect(await readFile(join(hermesHome, 'active_profile'), 'utf8')).toBe('default\n')
+    })
+
+    it.each(['list', 'listForApp'] as const)('%s keeps user access and reserved-profile filtering', async endpoint => {
+      const hermesHome = await mkdtemp(join(tmpdir(), 'studio-profile-access-'))
+      tempHomes.push(hermesHome)
+      process.env.HERMES_HOME = hermesHome
+      await Promise.all(['work', 'private', 'hermes'].map(name => mkdir(join(hermesHome, 'profiles', name), { recursive: true })))
+      userProfilesMocks.listUserProfiles.mockReturnValue([{ profile_name: 'work' }, { profile_name: 'hermes' }])
+      const controller = await import('../../packages/server/src/modules/hermes/controllers/profiles')
+      const ctx: any = { state: { user: { id: 'user-1', role: 'user' }, profile: { name: 'work' } }, status: 200 }
+
+      await controller[endpoint](ctx)
+
+      expect(ctx.status).toBe(200)
+      expect(ctx.body.profiles.map((profile: any) => profile.name)).toEqual(['work'])
+      expect(userProfilesMocks.listUserProfiles).toHaveBeenCalledWith('user-1')
+    })
+
+    it('exports a profile without invoking Hermes CLI', async () => {
+      const hermesHome = await mkdtemp(join(tmpdir(), 'studio-native-profile-export-'))
+      tempHomes.push(hermesHome)
+      process.env.HERMES_HOME = hermesHome
+      agentStatusMocks.hermesAvailable = false
+      await mkdir(join(hermesHome, 'profiles', 'work'), { recursive: true })
+      await writeFile(join(hermesHome, 'profiles', 'work', 'config.yaml'), 'model:\n  default: test\n', 'utf8')
+      const { exportProfile } = await import('../../packages/server/src/modules/hermes/controllers/profiles')
+      const ctx: any = {
+        params: { name: 'work' },
+        status: 200,
+        body: undefined,
+        set: vi.fn(),
+        res: { on: vi.fn() },
+      }
+
+      await exportProfile(ctx)
+
+      expect(ctx.status).toBe(200)
+      expect(ctx.body).toBeInstanceOf(Readable)
+      expect(hermesCli.exportProfile).not.toHaveBeenCalled()
+      for await (const _chunk of ctx.body) {
+        // Drain the response so its temporary directory is cleaned up.
+      }
+    })
+
+    it('imports a profile and injects bundled skills without invoking Hermes CLI', async () => {
+      const hermesHome = await mkdtemp(join(tmpdir(), 'studio-native-profile-import-'))
+      tempHomes.push(hermesHome)
+      process.env.HERMES_HOME = hermesHome
+      agentStatusMocks.hermesAvailable = false
+      const zip = new AdmZip()
+      zip.addFile('travel/config.yaml', Buffer.from('model:\n  default: zip-model\n'))
+      const archive = zip.toBuffer()
+      const boundary = 'studio-native-profile-import-boundary'
+      const multipart = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="travel.zip"\r\nContent-Type: application/zip\r\n\r\n`, 'latin1'),
+        archive,
+        Buffer.from(`\r\n--${boundary}--\r\n`, 'latin1'),
+      ])
+      const { importProfile } = await import('../../packages/server/src/modules/hermes/controllers/profiles')
+      const ctx: any = {
+        get: vi.fn(() => `multipart/form-data; boundary=${boundary}`),
+        req: Readable.from([multipart]),
+        status: 200,
+        body: undefined,
+      }
+
+      await importProfile(ctx)
+
+      expect(ctx.status).toBe(200)
+      expect(ctx.body).toEqual({ success: true, message: "Profile 'travel' imported by Studio" })
+      expect(await readFile(join(hermesHome, 'profiles', 'travel', 'config.yaml'), 'utf8')).toContain('zip-model')
+      expect(skillInjectorMocks.resolveTargetDirForProfile).toHaveBeenCalledWith('travel')
+      expect(hermesCli.importProfile).not.toHaveBeenCalled()
     })
   })
 

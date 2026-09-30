@@ -5,7 +5,7 @@ import {
   type Message,
   type ContentBlock,
 } from "@/stores/hermes/chat";
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMessage } from "naive-ui";
 import { downloadFile, getDownloadUrl } from "@/api/studio/download";
@@ -40,7 +40,11 @@ import { formatBytes } from '@/utils/format'
 import { isImageMime as isImage } from '@/utils/attachments'
 import { isVideoMime as isVideo } from '@/utils/attachments'
 
-const MarkdownRenderer = defineAsyncComponent(async () => (await import("./MarkdownRenderer.vue")).default);
+// MarkdownRenderer stays its own chunk: the chat route is already lazy, so a
+// synchronous import here costs nothing (entry chunk is 1242 KB either way)
+// and lets an already-loaded message render its Markdown on the first paint
+// instead of flashing an empty bubble while the dynamic import resolves.
+import MarkdownRenderer from "./MarkdownRenderer.vue";
 
 const TOOL_PAYLOAD_DISPLAY_LIMIT = 1000;
 const JSON_STRING_DISPLAY_LIMIT = 200;
