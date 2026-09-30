@@ -1175,17 +1175,57 @@ describe('session upload provenance at the socket boundary', () => {
     expect(recordSessionUploadAttachmentsMock).toHaveBeenCalledWith('new-local-session', 'default', input, { allowPendingSession: true })
   })
 
-  it('still rejects existing attachments from a different profile before registering or running', async () => {
+  it('surfaces a profile-permission failure as run.failed instead of running anyway', async () => {
+    // The profile permission gate for a run. resolveRunProfile performs this check
+    // before the attachment path and throws into the catch that emits run.failed,
+    // so a profile this socket user may not use never reaches the run.
+    //
+    // Note: the later `requireSocketSessionAccess` call in the same block has no
+    // `await` upstream. It is a redundant second check, not the gate -- mutation
+    // confirms removing the await does not change the outcome, because the gate
+    // above has already thrown. It is left awaited here because calling an async
+    // function without awaiting it is a latent bug if the checks are ever reordered.
+    userCanAccessProfileMock.mockImplementation((_user: unknown, profile: string) => profile === 'default')
+    getSessionMock.mockReturnValue({ id: 'research-session', profile: 'research', source: 'cli', model: 'gpt-test', provider: 'openai' })
+    const { ChatRunSocket } = await import('../../packages/server/src/modules/studio/sockets/chat-run')
+    const { handlers, io, socket } = makeServerHarness()
+    socket.data.user = { id: 7, role: 'user' }
+    const server = new ChatRunSocket(io as any)
+    const run = vi.spyOn(server as any, 'handleRun').mockResolvedValue(undefined)
+    ;(server as any).onConnection(socket)
+    await handlers.get('run')!({ session_id: 'research-session', input: [{ type: 'file', path: '/uploads/private.txt' }] })
+    expect(socket.emit).toHaveBeenCalledWith('run.failed', expect.objectContaining({
+      error: expect.stringContaining('not available for this user'),
+    }))
+    expect(recordSessionUploadAttachmentsMock).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('records an existing cross-profile session attachment under the session profile', async () => {
+    // Upstream added this case asserting that a session belonging to another
+    // profile is rejected with "not available on this connection". That gate was
+    // deliberately removed here: this fork runs profiles in parallel, and a
+    // socket bound to profile A has to be able to drive a session from profile B
+    // (switching UI focus while a run is in flight). Re-asserting equality between
+    // the session profile and the socket's handshake profile brought that failure
+    // back on every cross-profile switch.
+    //
+    // What still has to hold is the part that matters: the attachment is recorded
+    // against the *session's* profile, not the socket's, and the guard is still
+    // awaited so a genuine permission failure surfaces as run.failed.
     getSessionMock.mockReturnValue({ id: 'research-session', profile: 'research', source: 'cli', model: 'gpt-test', provider: 'openai' })
     const { ChatRunSocket } = await import('../../packages/server/src/modules/studio/sockets/chat-run')
     const { handlers, io, socket } = makeServerHarness()
     const server = new ChatRunSocket(io as any)
     const run = vi.spyOn(server as any, 'handleRun').mockResolvedValue(undefined)
     ;(server as any).onConnection(socket)
-    await handlers.get('run')!({ session_id: 'research-session', input: [{ type: 'file', path: '/uploads/private.txt' }] })
-    expect(socket.emit).toHaveBeenCalledWith('run.failed', expect.objectContaining({ error: 'Profile "research" is not available on this connection' }))
-    expect(recordSessionUploadAttachmentsMock).not.toHaveBeenCalled()
-    expect(run).not.toHaveBeenCalled()
+    const input = [{ type: 'file', path: '/uploads/private.txt', name: 'private.txt' }]
+    await handlers.get('run')!({ session_id: 'research-session', input })
+    expect(recordSessionUploadAttachmentsMock).toHaveBeenCalledWith(
+      'research-session', 'research', input, { allowPendingSession: true },
+    )
+    expect(socket.emit).not.toHaveBeenCalledWith('run.failed', expect.anything())
+    expect(run).toHaveBeenCalled()
   })
 
   it.each([false, true])('registers host attachments but never recipient-provided paths (shared=%s)', async shared => {

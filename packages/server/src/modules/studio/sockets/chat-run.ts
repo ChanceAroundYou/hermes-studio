@@ -999,8 +999,11 @@ export class ChatRunSocket {
       try {
         runProfile = resolveRunProfile(data.session_id, data.profile)
         if (!shared && data.session_id && Array.isArray(data.input)) {
-          // New chats carry a client-generated id; the runtime persists them on the first run.
-          if (getSession(data.session_id)) requireSocketSessionAccess(data.session_id)
+          // New chats carry a client-generated id; the runtime persists them on the first
+          // run, so requireSocketSessionAccess is only meaningful once the session exists.
+          // Permission itself was already checked by resolveRunProfile above, which runs
+          // first and throws into the same catch -- this call is a second consistency check.
+          if (getSession(data.session_id)) await requireSocketSessionAccess(data.session_id)
           await recordSessionUploadAttachments(data.session_id, runProfile, data.input, { allowPendingSession: true })
         }
       } catch (err) {
