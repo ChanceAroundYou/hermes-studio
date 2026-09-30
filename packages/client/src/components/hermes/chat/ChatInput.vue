@@ -820,6 +820,12 @@ const totalTokens = computed(() => {
   return input + output
 })
 const showContextUsage = computed(() => !!chatStore.activeSession)
+const showContextLimit = computed(() => {
+  const session = chatStore.activeSession
+  return !isCodingAgentSession.value
+    || session?.codingAgentId === 'ekko-agent'
+    || session?.agent === 'ekko-agent'
+})
 
 const remainingTokens = computed(() => Math.max(0, contextLength.value - totalTokens.value))
 
@@ -1168,19 +1174,23 @@ function openAttachmentPreview(attachment: Attachment) {
         @dblclick="resetTextareaHeight"
       ></div>
       <div v-if="showContextUsage" class="context-usage-row">
-        <span class="context-info" :class="{ 'context-warning': usagePercent > 80 }">
-          {{ formatCompactCount(totalTokens, { kilo: 'k' }) }} /
-          <NTooltip trigger="hover" :disabled="isMobileViewport">
-            <template #trigger>
-              <span class="context-limit-editable" @click="handleEditContextLimit">
-                {{ formatCompactCount(contextLength, { kilo: 'k' }) }}
-              </span>
-            </template>
-            <span>{{ t('chat.contextClickToEdit') }}</span>
-          </NTooltip>
-          · {{ t('chat.contextRemaining') }} {{ formatCompactCount(remainingTokens, { kilo: 'k' }) }}
+<span class="context-info" :class="{ 'context-warning': showContextLimit && usagePercent > 80 }">
+          <template v-if="!showContextLimit">{{ t('chat.contextUsed') }} </template>
+          {{ formatCompactCount(totalTokens, { kilo: 'k' }) }}
+          <template v-if="showContextLimit">
+            /
+            <NTooltip trigger="hover" :disabled="isMobileViewport">
+              <template #trigger>
+                <span class="context-limit-editable" @click="handleEditContextLimit">
+                  {{ formatCompactCount(contextLength, { kilo: 'k' }) }}
+                </span>
+              </template>
+              <span>{{ t('chat.contextClickToEdit') }}</span>
+            </NTooltip>
+            · {{ t('chat.contextRemaining') }} {{ formatCompactCount(remainingTokens, { kilo: 'k' }) }}
+          </template>
         </span>
-        <div class="context-bar">
+        <div v-if="showContextLimit" class="context-bar">
           <div
             class="context-bar-fill"
             :class="{
