@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { EkkoJevClient } from '../jev'
 import { watch, type FSWatcher } from 'node:fs'
 import {
   agentReasoningEstimatedTokens,
@@ -163,6 +164,7 @@ function cloneAgentMessages(messages: AgentMessage[]): AgentMessage[] {
 }
 
 export class AgentRuntime {
+  readonly jev: EkkoJevClient
   private readonly modelClient?: AgentRuntimeOptions['modelClient']
   private readonly profileId?: string
   private readonly toolsEnabled: boolean
@@ -196,6 +198,7 @@ export class AgentRuntime {
   private readonly runtimeLogger?: EkkoRuntimeLogger
 
   constructor(options: AgentRuntimeOptions) {
+    this.jev = new EkkoJevClient(options.jev)
     this.profileId = String(options.profileId || '').trim() || undefined
     this.modelClient = options.modelClient
     this.toolsEnabled = options.toolsEnabled !== false
