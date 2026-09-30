@@ -1,7 +1,9 @@
+import { configureLiveActivityCatchup } from '../notifications/live-activity-catchup'
 import { businessEvents } from './business-events'
 import { getChatWebhookDispatcher } from './dispatcher'
 // import { notifySessionPush } from '../../public/social-messages'
 import { createRunPushConsumer } from '../notifications/run-push'
+import { createLiveActivityConsumer } from '../notifications/live-activity'
 
 // const SOCIAL_EVENTS = new Set(['chat.run.completed', 'chat.approval.requested', 'chat.clarification.requested'])
 let initialized = false
@@ -9,6 +11,9 @@ export function ensureBusinessConsumers(): void {
   if (initialized) return
   initialized = true
   businessEvents.subscribe('run-push', createRunPushConsumer())
+  const liveConsumer = createLiveActivityConsumer()
+  businessEvents.subscribe('live-activity', liveConsumer)
+  configureLiveActivityCatchup((event, connectionId) => liveConsumer(event, false, connectionId))
   businessEvents.subscribe('http-webhook', event => event.chat ? getChatWebhookDispatcher().enqueue(event.chat) : false)
   // Social message delivery is temporarily disabled alongside its UI entry points.
   // businessEvents.subscribe('social-messages', event => {
