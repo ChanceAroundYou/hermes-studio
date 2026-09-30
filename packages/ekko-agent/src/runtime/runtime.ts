@@ -1409,6 +1409,9 @@ export class AgentRuntime {
     let cacheReadTokens = 0
     let cacheWriteTokens = 0
     let reasoningTokens = 0
+    let costUsd = 0
+    let pricedCalls = 0
+    let costSource: 'reported' | 'estimated' = 'reported'
     let childRunId: string | undefined
     const streamedTextSteps = new Set<number>()
     const childPromise = (async (): Promise<AgentToolResult> => {
@@ -1512,6 +1515,11 @@ export class AgentRuntime {
               cacheReadTokens += event.usage.cacheReadTokens || 0
               cacheWriteTokens += event.usage.cacheWriteTokens || 0
               reasoningTokens += event.usage.reasoningTokens || 0
+              if (typeof event.usage.costUsd === 'number' && Number.isFinite(event.usage.costUsd) && event.usage.costUsd >= 0) {
+                costUsd += event.usage.costUsd
+                pricedCalls++
+                if (event.usage.costSource === 'estimated') costSource = 'estimated'
+              }
             }
           },
         })
@@ -1560,6 +1568,7 @@ export class AgentRuntime {
         cacheReadTokens,
         cacheWriteTokens,
         reasoningTokens,
+        ...(apiCalls > 0 && pricedCalls === apiCalls ? { costUsd, costSource } : {}),
         ...(continuationContext ? { continuationContext } : {}),
       })
       const payload = {

@@ -1,26 +1,29 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { useUsageStore } from '@/stores/hermes/usage'
-import { formatCompactCount } from '@/utils/format'
+import { computed } from 'vue'
+import { formatUsageCost, usageCostState } from '@/utils/usage-cost'
 
 const { t } = useI18n()
 const usageStore = useUsageStore()
+const costState = computed(() => usageCostState(usageStore.estimatedCost, usageStore.stats?.cost_coverage, usageStore.hasData))
 
-function formatCost(n: number): string {
-  if (n === 0) return '$0.00'
-  if (n < 0.01) return '<$0.01'
-  return '$' + n.toFixed(2)
+function formatTokens(n: number): string {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
+  return String(n)
 }
+
 </script>
 
 <template>
   <div class="stat-cards">
     <div class="stat-card">
       <div class="stat-label">{{ t('usage.totalTokens') }}</div>
-      <div class="stat-value">{{ formatCompactCount(usageStore.totalTokens) }}</div>
+      <div class="stat-value">{{ formatTokens(usageStore.totalTokens) }}</div>
       <div class="stat-sub">
-        {{ formatCompactCount(usageStore.totalInputTokens) }} {{ t('usage.inputTokens') }} /
-        {{ formatCompactCount(usageStore.totalOutputTokens) }} {{ t('usage.outputTokens') }}
+        {{ formatTokens(usageStore.totalInputTokens) }} {{ t('usage.inputTokens') }} /
+        {{ formatTokens(usageStore.totalOutputTokens) }} {{ t('usage.outputTokens') }}
       </div>
     </div>
     <div class="stat-card">
@@ -29,14 +32,15 @@ function formatCost(n: number): string {
       <div class="stat-sub">{{ t('usage.avgPerDay', { n: usageStore.avgSessionsPerDay.toFixed(1) }) }}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">{{ t('usage.estimatedCost') }}</div>
-      <div class="stat-value">{{ formatCost(usageStore.estimatedCost) }}</div>
+      <div class="stat-label">{{ t('usage.cost') }} (USD)</div>
+      <div class="stat-value">{{ formatUsageCost(usageStore.estimatedCost, usageStore.stats?.cost_coverage, usageStore.hasData) ?? t('usage.costStates.unknown') }}</div>
+      <div v-if="costState && costState !== 'unknown'" class="stat-sub">{{ t(`usage.costStates.${costState}`) }}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">{{ t('usage.cacheHitRate') }}</div>
       <div class="stat-value">{{ usageStore.cacheHitRate !== null ? usageStore.cacheHitRate.toFixed(1) + '%' : '--' }}</div>
       <div class="stat-sub" v-if="usageStore.cacheHitRate !== null">
-        {{ formatCompactCount(usageStore.totalCacheTokens) }} {{ t('usage.tokens') }}
+        {{ formatTokens(usageStore.totalCacheTokens) }} {{ t('usage.tokens') }}
       </div>
     </div>
   </div>
@@ -78,7 +82,7 @@ function formatCost(n: number): string {
   margin-top: 4px;
 }
 
-@media (max-width: $breakpoint-mobile) {
+@media (max-width: 768px) {
   .stat-cards {
     grid-template-columns: repeat(2, 1fr);
   }
