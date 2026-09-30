@@ -2468,10 +2468,25 @@ export const useChatStore = defineStore('chat', () => {
     // next time it's called, so incoming run events land on the correct
     // connection. In-flight runs in other profiles keep running untouched.
     const targetProfile = activeSession.value?.profile || 'default'
+    // The message page below is profile-scoped HTTP and does not need the
+    // interactive profile to have been switched first, so a cross-profile switch
+    // must not sit in front of it. Awaiting it here serialised the whole open
+    // behind `PUT /api/hermes/profiles/active`, which spawns the hermes CLI
+    // (~0.8s) and re-scans the profile's skill tree -- on every session open.
+    //
+    // Opening a session in the profile you are already in is the common case and
+    // then there is nothing to wait for, so that path stays fully synchronous:
+    // `connectChatRun` is still primed before anything else, and no extra
+    // microtask is introduced. Only a real cross-profile switch is handed to the
+    // caller as a promise, which the socket resume below awaits.
+    let profileSwitch: Promise<unknown> | null = null
     try {
       const profilesStore = useProfilesStore()
       if (targetProfile !== getProfileName()) {
-        await profilesStore.switchHermesProfile(targetProfile)
+        profileSwitch = profilesStore.switchHermesProfile(targetProfile)
+          .catch(err => {
+            console.warn('[switchSession] failed to switch active profile to', targetProfile, ':', err)
+          })
       }
       // Prime the chat-run socket for this profile so streaming events /
       // resume / send all attach to the connection bound to targetProfile.
@@ -2537,6 +2552,10 @@ export const useChatStore = defineStore('chat', () => {
     // the session list has no isWorking field — gating on it skips the resume
     // and leaves a live绘画 run stuck at isWorking=false.
     try {
+      // The resume travels on the chat-run socket, which is bound to a profile,
+      // so it has to wait for a cross-profile switch. The message page already
+      // loaded in parallel, which is where the perceived open time came from.
+      if (profileSwitch) await profileSwitch
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('resume timeout')), 15_000)
         resumeSession(sessionId, (data) => {

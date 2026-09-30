@@ -822,6 +822,27 @@ export async function switchProfile(ctx: any) {
   try {
     if (denyProfile(ctx, name)) return
 
+    // Opening a chat calls this endpoint every time, because switching sessions
+    // re-asserts the profile they belong to. The expensive part -- spawning the
+    // hermes CLI (`profile use`, measured ~0.8s) and re-scanning the profile's
+    // skill tree to inject bundled skills -- only needs to happen when the
+    // active profile actually changes. Re-running it for a profile that is
+    // already active put a guaranteed sub-second stall in front of the message
+    // fetch on every session open, and the client awaits this before it starts
+    // loading messages.
+    //
+    // The transition itself is still done synchronously; only the redundant
+    // repeat is skipped, so a genuine switch is unchanged.
+    if (getActiveProfileName() === name) {
+      logger.debug('[switchProfile] profile "%s" already active, skipping redundant switch', name)
+      ctx.body = {
+        success: true,
+        message: `Profile ${name} is already active`,
+        active: name,
+      }
+      return
+    }
+
     const output = await useProfileWithFallback(name)
 
     const actualActive = getActiveProfileName()
