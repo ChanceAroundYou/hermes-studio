@@ -60,4 +60,4 @@ packages/client/src/**/*.js
 .ekko-tmp/
 
 # local build backups created by the release build
-dist.dist.bak.*
+dist.bak.*
