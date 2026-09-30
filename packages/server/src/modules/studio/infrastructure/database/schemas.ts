@@ -151,6 +151,20 @@ export const MESSAGES_SCHEMA: Record<string, string> = {
 
 export const MESSAGES_INDEX = 'CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)'
 
+// Opening a session reads the newest page with
+// `WHERE session_id = ? ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`.
+// With only `idx_messages_session_id` SQLite has to fetch every row for the
+// session, sort it in a temp B-tree, and throw all but the page away -- 46MB of
+// content and reasoning for the largest session here, ~550ms per open, and the
+// cost grows with the transcript instead of staying flat. A composite index in
+// the exact order the query asks for turns that scan into a bounded seek:
+// measured 555ms -> 11ms per open on this database, for ~4MB of index.
+//
+// `id` is the tie-breaker the query already sorts on, so it belongs in the index
+// too; without it SQLite still has to sort the ties within a timestamp.
+export const MESSAGES_PAGE_INDEX =
+  'CREATE INDEX IF NOT EXISTS idx_messages_session_page ON messages(session_id, timestamp DESC, id DESC)'
+
 export const SKILL_USAGE_EVENTS_TABLE = 'skill_usage_events'
 
 export const SKILL_USAGE_EVENTS_SCHEMA: Record<string, string> = {
@@ -1627,6 +1641,10 @@ export function initAllHermesTables(): void {
     createIndexes(db, SESSIONS_INDEXES)
     syncTable(MESSAGES_TABLE, MESSAGES_SCHEMA)
     db.exec(MESSAGES_INDEX)
+    // `CREATE INDEX IF NOT EXISTS`, so this is a no-op after the first run. The
+    // build is a one-off sort of the table (~0.4s on a 120k-row database) and it
+    // happens before the server accepts traffic.
+    db.exec(MESSAGES_PAGE_INDEX)
     syncTable(SKILL_USAGE_EVENTS_TABLE, SKILL_USAGE_EVENTS_SCHEMA, {
       indexes: SKILL_USAGE_EVENTS_INDEXES,
     })
