@@ -264,6 +264,23 @@ function findMatchingBrace(content, openBrace) {
     const ch = content[i]
     const prev = content[i - 1]
 
+    // Comments must be skipped before quote detection. A line comment holding
+    // an apostrophe ("the profile's skill tree") otherwise opens a phantom
+    // string literal, and brace matching then runs away to the end of the file
+    // and reports no match. The caller treats that as "no handler source", so
+    // the endpoint silently lost its requestBody in the published spec -- a
+    // documentation regression caused by a code comment.
+    if (!quote && ch === '/' && content[i + 1] === '/') {
+      const newline = content.indexOf('\n', i)
+      i = newline < 0 ? content.length : newline
+      continue
+    }
+    if (!quote && ch === '/' && content[i + 1] === '*') {
+      const end = content.indexOf('*/', i + 2)
+      i = end < 0 ? content.length : end + 1
+      continue
+    }
+
     if (quote) {
       if (escaped) {
         escaped = false

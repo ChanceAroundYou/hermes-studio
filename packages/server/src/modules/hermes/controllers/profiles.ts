@@ -824,8 +824,8 @@ export async function switchProfile(ctx: any) {
 
     // Opening a chat calls this endpoint every time, because switching sessions
     // re-asserts the profile they belong to. The expensive part -- spawning the
-    // hermes CLI (`profile use`, measured ~0.8s) and re-scanning the profile's
-    // skill tree to inject bundled skills -- only needs to happen when the
+    // hermes CLI (`profile use`, measured ~0.8s) and re-scanning the skill tree
+    // of the target profile to inject bundled skills -- only needs to happen when the
     // active profile actually changes. Re-running it for a profile that is
     // already active put a guaranteed sub-second stall in front of the message
     // fetch on every session open, and the client awaits this before it starts
