@@ -74,6 +74,20 @@ export interface RoomSummaryState {
     lastError: string | null
 }
 
+export interface RoomSummaryReview {
+    id: string
+    roomId: string
+    sourceVersion: number
+    sourceSummaryHash: string
+    status: 'completed' | 'skipped'
+    decision: 'pass' | 'needs_improvement' | 'unknown'
+    ruleResults: Array<{ id: string; decision: 'pass' | 'needs_improvement' | 'unknown'; confidence?: number }>
+    reasonCode: string
+    durationMs: number
+    createdAt: number
+    appliedRevisionVersion: number | null
+}
+
 export interface RoomSummaryAnchor {
     id: string
     timestamp: number
@@ -110,6 +124,12 @@ export type RoomAgentSummary = Pick<
     RoomAgent,
     'id' | 'roomId' | 'agentId' | 'agent' | 'name' | 'avatar'
 >
+
+export interface GroupMessageRoutingDecision {
+    messageId: string; roomId: string; targetAgentId: string | null; targetAgentName: string | null
+    mode: 'suggest' | 'auto'; status: 'suggested' | 'queued' | 'skipped'; queueId: string | null
+    confidence: number | null; handoffComplete: boolean | null; loopDetected: boolean | null; createdAt: number; updatedAt: number
+}
 
 export interface GroupAgentActivity {
     roomId: string
@@ -541,7 +561,7 @@ export async function updateRoomWorkspace(roomId: string, workspace: string): Pr
     })
 }
 
-export async function getRoomSummary(roomId: string): Promise<{ summary: RoomSummaryState; anchor: RoomSummaryAnchor | null }> {
+export async function getRoomSummary(roomId: string): Promise<{ summary: RoomSummaryState; review: RoomSummaryReview | null; anchor: RoomSummaryAnchor | null }> {
     return request(`/api/studio/group-chat/rooms/${roomId}/summary`)
 }
 

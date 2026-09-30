@@ -4,6 +4,19 @@ export { choice, score, noul } from '@typesafe-ai/sdk'
 export type { Questions, SystemOneRequest, SystemOneResult } from '@typesafe-ai/sdk'
 
 export interface JevSettings {
+  groupSummaryReviewEnabled: boolean
+  groupSummaryReviewMinConfidence: number
+  groupSummaryRevisionEnabled: boolean
+  groupSummaryReviewTimeoutMs: number
+  workflowQualityEnabled: boolean
+  workflowQualityMinConfidence: number
+  workflowQualityTimeoutMs: number
+  groupMessageRoutingEnabled: boolean
+  groupHandoffReviewEnabled: boolean
+  groupLoopDetectionEnabled: boolean
+  groupMessageRoutingMinConfidence: number
+  groupMessageRoutingMode: 'suggest' | 'auto'
+  groupMessageRoutingTimeoutMs: number
   browserMatchEnabled: boolean
   browserMatchCandidateLimit: number
   browserMatchMinConfidence: number

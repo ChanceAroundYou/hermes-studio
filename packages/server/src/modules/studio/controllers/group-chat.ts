@@ -14,6 +14,7 @@ import {
     groupChatUserProfiles as userProfiles,
     isGroupChatRoomOwner,
 } from '../services/group-chat/access'
+import { userCanAccessProfile } from '../public/users'
 import { setGroupChatRuntimeServer } from '../services/group-chat/runtime'
 import * as inviteCtrl from './group-chat-invite'
 import * as uploadCtrl from './group-chat-upload'
@@ -1371,9 +1372,9 @@ export async function updateRoomConfig(ctx: any) {
                     summaryApiMode: apiMode,
                     summaryEveryTurns: everyTurns,
                 } : {}),
-                agentHandoffEnabled,
-                agentHandoffMaxDepth,
-                agentHandoffUnlimited,
+                ...(agentHandoffEnabled !== undefined ? { agentHandoffEnabled } : {}),
+                ...(agentHandoffMaxDepth !== undefined ? { agentHandoffMaxDepth } : {}),
+                ...(agentHandoffUnlimited !== undefined ? { agentHandoffUnlimited } : {}),
             })
         }
     })
@@ -1554,11 +1555,13 @@ export async function getRoomSummary(ctx: any) {
     }
 
     const summary = chatServer.getRoomSummaryService().getState(roomId)
+    const review = storage.getLatestSummaryReview?.(roomId) || null
     const anchorMessage = summary.summaryThroughMessageId
         ? storage.getMessage(summary.summaryThroughMessageId)
         : null
     ctx.body = {
         summary,
+        review,
         anchor: anchorMessage ? {
             id: anchorMessage.id,
             timestamp: anchorMessage.timestamp,

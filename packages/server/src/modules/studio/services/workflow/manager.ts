@@ -32,6 +32,7 @@ import {
   type WorkflowRunNodeStatus,
   type WorkflowRunRecord,
 } from '../../repositories/workflow-run-store'
+import { cancelWorkflowQualityReviews, scheduleWorkflowQualityReview } from './quality-review'
 import { createSession, deleteSession, getSession, getSessionDetail } from '../../repositories/session-store'
 import type { ContentBlock } from '../../contracts/runs/session'
 import type { AuthenticatedUser } from '../../public/auth'
@@ -1173,6 +1174,7 @@ export class WorkflowManager extends EventEmitter<WorkflowManagerEvents> {
     if (!run || run.workflow_id !== workflowId) return null
     if (run.status !== 'queued' && run.status !== 'running') return run
     this.canceledRunIds.add(runId)
+    cancelWorkflowQualityReviews(runId)
     this.cancelPendingNodeApprovals(runId)
     const finishedAt = Date.now()
     const nodeStatuses: Record<string, WorkflowRuntimeState> = {}
@@ -1571,7 +1573,8 @@ export class WorkflowManager extends EventEmitter<WorkflowManagerEvents> {
         if (isCanceled()) throw new Error(getWorkflowRun(run.id)?.error || 'Workflow run canceled')
         if (!approved) throw new Error('Workflow node approval rejected')
         outputs.set(node.id, output)
-        updateWorkflowRunNodeSession(nodeSession.id, { status: 'completed', finished_at: Date.now(), error: null })
+        const completedNodeSession = updateWorkflowRunNodeSession(nodeSession.id, { status: 'completed', finished_at: Date.now(), error: null })
+        if (completedNodeSession) scheduleWorkflowQualityReview({ run, node, nodeSession: completedNodeSession, input: assembledInput, output })
         nodeStatuses[node.id] = 'completed'
         const outgoingEdges = forwardEdges.filter(item => activeIds.has(item.target) && item.source === node.id)
         const conditionContext = workflowOutputConditionContext(output, outgoingEdges)
@@ -2148,7 +2151,8 @@ export class WorkflowManager extends EventEmitter<WorkflowManagerEvents> {
             runId: run.id,
             nodeStatuses: { ...nodeStatuses },
           })
-          updateWorkflowRunNodeSession(nodeSession.id, { status: 'completed', finished_at: Date.now(), error: null })
+          const completedNodeSession = updateWorkflowRunNodeSession(nodeSession.id, { status: 'completed', finished_at: Date.now(), error: null })
+          if (completedNodeSession) scheduleWorkflowQualityReview({ run, node, nodeSession: completedNodeSession, input: assembledInput, output })
           return { node, ok: true }
           })()
           inFlight.set(node.id, execution)

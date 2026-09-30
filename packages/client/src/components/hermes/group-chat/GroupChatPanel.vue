@@ -51,6 +51,7 @@ import type {
     RoomSummaryAnchor,
     RoomSummaryConfig,
     RoomSummaryState,
+    RoomSummaryReview,
 } from '@/api/studio/group-chat'
 import { useFilesStore } from '@/stores/hermes/files'
 import { useToolPanelStore } from '@/stores/hermes/tool-panel'
@@ -144,6 +145,7 @@ const agentHandoffRecommendation = computed(() => Math.max(4, store.agents.lengt
 const isContinuingHandoff = ref(false)
 const roomSummaryState = ref<RoomSummaryState | null>(null)
 const roomSummaryAnchor = ref<RoomSummaryAnchor | null>(null)
+const roomSummaryReview = ref<RoomSummaryReview | null>(null)
 const roomSummaryDraft = ref('')
 const isLoadingRoomSummary = ref(false)
 const isSavingRoomSummary = ref(false)
@@ -407,6 +409,10 @@ const summaryApiModeOptions = computed(() => [
     { label: t('codingAgents.protocolOpenAiResponses'), value: 'codex_responses' },
     { label: t('codingAgents.protocolAnthropicMessages'), value: 'anthropic_messages' },
 ])
+const liveRoomSummaryReview = computed(() => {
+    const roomId = store.currentRoomId
+    return roomId ? store.roomSummaryReviews.get(roomId) || roomSummaryReview.value : roomSummaryReview.value
+})
 const liveRoomSummaryState = computed(() => {
     const roomId = store.currentRoomId
     return (roomId && store.roomSummaryStates.get(roomId))
@@ -1633,6 +1639,8 @@ async function loadRoomSummaryState(roomId: string) {
         if (store.currentRoomId !== roomId) return
         roomSummaryState.value = store.roomSummaryStates.get(roomId) || result.summary
         roomSummaryAnchor.value = result.anchor
+        roomSummaryReview.value = result.review
+        if (result.review) store.applyRoomSummaryReview(result.review)
         roomSummaryDraft.value = roomSummaryState.value.summary
     } catch {
         // A missing summary should not block entering or reading the room.
@@ -1859,6 +1867,8 @@ async function handleOpenRoomSettings() {
         if (store.currentRoomId !== summaryRoomId) return
         roomSummaryState.value = store.roomSummaryStates.get(summaryRoomId) || result.summary
         roomSummaryAnchor.value = result.anchor
+        roomSummaryReview.value = result.review
+        if (result.review) store.applyRoomSummaryReview(result.review)
         roomSummaryDraft.value = roomSummaryState.value.summary
     } catch (err: any) {
         message.error(err?.message || t('groupChat.summaryLoadFailed'))
@@ -3393,6 +3403,13 @@ async function handleClarify(response?: string) {
                                     <span>{{ t('groupChat.summarizedTurns') }}</span>
                                     <strong>{{ liveRoomSummaryState?.summarizedTurnCount || 0 }}</strong>
                                 </span>
+                            </div>
+                            <div v-if="liveRoomSummaryReview" class="summary-review" :class="`is-${liveRoomSummaryReview.decision}`">
+                                <strong>{{ t('groupChat.summaryQuality') }} · {{ t(`groupChat.summaryQualityDecision.${liveRoomSummaryReview.decision}`) }}</strong>
+                                <span>{{ t('groupChat.summaryQualityVersion', { version: liveRoomSummaryReview.sourceVersion }) }}</span>
+                                <ul v-if="liveRoomSummaryReview.ruleResults.length">
+                                    <li v-for="rule in liveRoomSummaryReview.ruleResults" :key="rule.id">{{ t(`groupChat.summaryQualityRule.${rule.id}`) }} · {{ t(`groupChat.summaryQualityDecision.${rule.decision}`) }}</li>
+                                </ul>
                             </div>
                             <div v-if="liveRoomSummaryState?.lastError" class="summary-error">
                                 {{ liveRoomSummaryState.lastError }}
@@ -5164,4 +5181,11 @@ export default defineComponent({ components: { CreateRoomForm } })
     }
 
 }
+</style>
+
+<style scoped lang="scss">
+.summary-review { margin: 12px 0; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; display: grid; gap: 6px; }
+.summary-review.is-pass { border-color: #18a058; }
+.summary-review.is-needs_improvement { border-color: #f0a020; }
+.summary-review ul { margin: 0; padding-inline-start: 20px; }
 </style>

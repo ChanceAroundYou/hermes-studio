@@ -3892,6 +3892,14 @@ function nodeColor(node: { data: WorkflowAgentNodeData }) {
               <span aria-hidden="true">›</span>
             </button>
           </div>
+          <div v-if="selectedWorkflowRun.quality_evaluations?.length" class="workflow-quality-results" data-testid="workflow-quality-results">
+            <h3>{{ t('workflow.quality.results') }}</h3>
+            <article v-for="quality in selectedWorkflowRun.quality_evaluations" :key="quality.id" class="workflow-quality-result">
+              <strong>{{ workflowEditorNodeName(quality.node_id) }} · {{ t(`workflow.quality.decision.${quality.decision}`) }}</strong>
+              <ul><li v-for="criterion in quality.criteria" :key="criterion.id">{{ criterion.id }} · {{ t(`workflow.quality.decision.${criterion.decision}`) }}</li></ul>
+              <button v-if="quality.decision === 'needs_improvement'" type="button" @click="rerunWorkflowFromNode(quality.node_id, true, undefined)">{{ t('workflow.quality.rerun') }}</button>
+            </article>
+          </div>
           <div class="workflow-evidence-tabs" data-testid="workflow-evidence-tabs" role="tablist" :aria-label="t('workflow.evidence.pathChecks')" @keydown="handleWorkflowEvidenceTabKeydown">
             <button id="workflow-evidence-tab-actual" type="button" role="tab" aria-controls="workflow-evidence-tabpanel" :aria-selected="workflowEvidenceTab === 'actual'" :tabindex="workflowEvidenceTab === 'actual' ? 0 : -1" @click="selectWorkflowEvidenceTab('actual')">
               {{ t('workflow.evidence.actualExecution') }} <span>{{ workflowEvidenceTabCounts.actual }}</span>

@@ -25,6 +25,11 @@ import baseline from '../fixtures/i18n-missing-baseline.json'
  */
 const locales: Record<string, unknown> = { en, ar, de, es, fr, ja, ko, pt, ru, zh, 'zh-TW': zhTW }
 const allowed = baseline as Record<string, string[]>
+// Upstream's JEV checks iterate the canonical locale list and read the raw
+// (unmerged) messages. This fork's ratchet only needs the merged set, so both
+// names are aliased onto what it already has.
+const supportedLocales = Object.keys(locales)
+const rawMessages = locales as Record<string, Record<string, unknown>>
 
 function flatten(value: unknown, prefix = '', out = new Set<string>()): Set<string> {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -86,6 +91,39 @@ describe('i18n coverage', () => {
       `unrecorded missing keys in ${locale}: ${unexpected.slice(0, 8).join(', ')}`,
     ).toEqual([])
   })
+it('does not expose locale-code placeholders in generated JEV copy', () => {
+  const guardedKeys = ['groupMessageRoutingEnabled', 'groupRoutingDisabled', 'groupRoutingReady', 'groupMessageRoutingMinConfidence', 'groupMessageRoutingMinConfidenceHint', 'groupMessageRoutingTimeout', 'groupMessageRoutingTimeoutHint', 'workflowQualityEnabled', 'workflowQualityDisabled', 'workflowQualityReady', 'workflowQualityMinConfidence', 'workflowQualityMinConfidenceHint', 'workflowQualityTimeout', 'workflowQualityTimeoutHint']
+  for (const locale of supportedLocales) {
+    const actual = flattenLeafPaths(rawMessages[locale].jev)
+    for (const key of guardedKeys) {
+      const value = actual.get(key)!
+      expect(value, `${locale}: jev.${key} starts with a locale-code placeholder`).not.toMatch(/^(?:zh(?:-TW)?|en|ja|ko|fr|es|de|pt|ru|ar)\s+/i)
+    }
+  }
+})
+
+const SKILLS_USAGE_LOCALIZED_KEYS = [
+  'sidebar.skillsUsage',
+  'skillsUsage.title',
+  'skillsUsage.subtitle',
+  'skillsUsage.refresh',
+  'skillsUsage.periodSelector',
+  'skillsUsage.periodLabel',
+  'skillsUsage.summary',
+  'skillsUsage.totalActions',
+  'skillsUsage.loads',
+  'skillsUsage.edits',
+  'skillsUsage.distinctSkills',
+  'skillsUsage.topSkills',
+  'skillsUsage.dailyTrend',
+  'skillsUsage.periodSummary',
+  'skillsUsage.skill',
+  'skillsUsage.share',
+  'skillsUsage.lastUsed',
+  'skillsUsage.noData',
+  'skillsUsage.loadFailed',
+  'skillsUsage.otherSkills',
+]
 
   it('records no key that a locale has already translated', () => {
     const stale: string[] = []
