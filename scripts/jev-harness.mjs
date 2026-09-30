@@ -83,7 +83,7 @@ export function jevUsage(file, source) {
   let used = false
   let evaluates = false
   let directSdk = false
-  const evaluators = new Set(['evaluateJev'])
+  const evaluators = new Set(['evaluateJev', 'evaluateMemory'])
   walk(ast, node => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       if (!node.moduleSpecifier || !ts.isStringLiteralLike(node.moduleSpecifier)) return
@@ -96,7 +96,7 @@ export function jevUsage(file, source) {
       for (const item of elements) {
         if (item.isTypeOnly) continue
         const imported = name(item.propertyName ?? item.name)
-        if (imported === 'evaluateJev') evaluators.add(name(item.name))
+        if (['evaluateJev', 'evaluateMemory'].includes(imported)) evaluators.add(name(item.name))
         if (/^(EkkoJevClient|evaluateJev|getJevRuntimeConfig)$/.test(imported)) used = true
       }
       if (/(?:^|\/)jev(?:\/|$|\.)/.test(specifier)) used = true
@@ -235,9 +235,13 @@ export function jevHarnessViolations(sources, manifest) {
     ids.add(id)
     if (!['configuration-only', 'active'].includes(status)) fail(`${id} needs an explicit configuration-only or active status`)
     if (!enabledKey || !Array.isArray(options)) { fail(`${id} must declare an independent switch and options list`); continue }
+    if (integration.studioDefaultEnabled !== undefined && typeof integration.studioDefaultEnabled !== 'boolean') {
+      fail(`${id}: studioDefaultEnabled must be a boolean`)
+    }
+    const studioDefault = integration.studioDefaultEnabled === true
     if (sharedFields.has(enabledKey) || serverFields.get(enabledKey) !== 'boolean' || clientFields.get(enabledKey) !== 'boolean'
-      || defaults.get(enabledKey)?.kind !== ts.SyntaxKind.FalseKeyword || settings.fields[enabledKey]?.control !== 'NSwitch') {
-      fail(`${id} requires its own boolean switch with a false default and frontend NSwitch`)
+      || defaults.get(enabledKey)?.kind !== (studioDefault ? ts.SyntaxKind.TrueKeyword : ts.SyntaxKind.FalseKeyword) || settings.fields[enabledKey]?.control !== 'NSwitch') {
+      fail(`${id} requires its own boolean switch with a ${studioDefault} Studio default and frontend NSwitch`)
     }
     for (const key of [enabledKey, ...options]) {
       if (owners.has(key) || sharedFields.has(key)) fail(`${id}: ${key} must belong to one integration; shared provider settings are not feature switches`)

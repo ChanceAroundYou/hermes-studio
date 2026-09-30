@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   APIError, APITimeoutError, APIUserAbortError, TypeSafeClient,
   type Questions, type SystemOneRequest, type SystemOneResult,
@@ -19,6 +20,33 @@ export interface EkkoJevSettings extends Omit<EkkoJevConfig, 'apiKey'> {
   hasApiKey: boolean
 }
 
+/** Compact diagnostics only; never include request text, evidence or provider errors. */
+export interface EkkoJevDiagnostic {
+  stage: 'recall' | 'routing' | 'filter' | 'rerank' | 'write_review'
+  status: 'completed' | 'fallback' | 'skipped' | 'cancelled'
+  durationMs: number
+  reason?: string
+  threshold?: number
+  candidateCount?: number
+  selectedCount?: number
+  kindProbabilities?: Record<string, number>
+  removedIds?: string[]
+  cardDecisions?: Array<{ nodeId: string; decision: string; confidence: number }>
+}
+
+interface EkkoJevRunContext {
+  client: EkkoJevClient
+  signal?: AbortSignal
+  onDiagnostic?: (diagnostic: EkkoJevDiagnostic) => void
+}
+
+const runContext = new AsyncLocalStorage<EkkoJevRunContext>()
+
+/** Internal run-local access; memory services can be shared across profiles. */
+export function currentEkkoJevRun(): EkkoJevRunContext | undefined {
+  return runContext.getStore()
+}
+
 /** Ekko-owned evaluator. Receives configuration values only; never reads or writes files. */
 export class EkkoJevClient {
   #config: EkkoJevConfig
@@ -30,6 +58,11 @@ export class EkkoJevClient {
   /** Replace the effective in-memory settings. Already-started requests retain their snapshot. */
   configure(config?: EkkoJevOverrides): void {
     this.#config = resolveEkkoJevConfig(config)
+  }
+
+  /** Freeze this run's effective settings without changing the shared memory service. */
+  runScoped<T>(signal: AbortSignal | undefined, operation: () => T, onDiagnostic?: EkkoJevRunContext['onDiagnostic']): T {
+    return runContext.run({ client: new EkkoJevClient(this.#config), signal, onDiagnostic }, operation)
   }
 
   get available(): boolean {

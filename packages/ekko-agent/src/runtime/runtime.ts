@@ -360,9 +360,15 @@ export class AgentRuntime {
   }
 
   async run(input: AgentRuntimeRunInput): Promise<AgentRuntimeRunResult> {
+    const runId = randomUUID()
+    return this.jev.runScoped(input.signal, () => this.runWithSnapshot(input, runId), diagnostic => {
+      this.runtimeLogger?.memoryJev(runId, diagnostic, { sessionId: this.contextKeyFor(input), ...input.logContext })
+    })
+  }
+
+  private async runWithSnapshot(input: AgentRuntimeRunInput, runId: string): Promise<AgentRuntimeRunResult> {
     await this.refreshTools(this.runToolContext(input))
 
-    const runId = randomUUID()
     const events: AgentRuntimeEvent[] = []
     const steps: AgentRuntimeStep[] = []
     const maxSteps = input.maxSteps ?? this.maxSteps
