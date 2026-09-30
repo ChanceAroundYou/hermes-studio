@@ -6,6 +6,7 @@ import { getActiveProfileName, request } from '@/api/client'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useWorkspacePreferences } from '@/composables/useWorkspacePreferences'
 import { workspaceFolderName } from '@/utils/hermes/workspace-path'
+import StarIcon from '@/components/common/StarIcon.vue'
 
 interface FolderEntry {
   name: string
@@ -550,11 +551,19 @@ const flatNodes = computed<FlatNode[]>(() => {
     <div v-if="selectedPath" class="folder-selected">
       <span class="folder-selected-label">{{ t('chat.folderPickerSelected') }}</span>
       <span class="folder-selected-path" :title="selectedPath">{{ selectedPath }}</span>
-      <span class="folder-selected-marks" aria-hidden="true">
+<span class="folder-selected-marks" aria-hidden="false">
         <span v-if="isProfileDefault(selectedPath)" class="folder-shortcut-default">●</span>
-        <span v-if="isFavorite(selectedPath)" class="folder-shortcut-star">★</span>
-      </span>
-    </div>
+        <button
+          v-if="isFavorite(selectedPath)"
+          class="folder-selected-favorite"
+          type="button"
+          :title="t('chat.workspaceUnfavorite')"
+          :aria-label="t('chat.workspaceUnfavorite')"
+          @click.stop="toggleFavorite(selectedPath)"
+        >
+          <StarIcon :filled="true" />
+        </button>
+      </span>    </div>
 
     <NDropdown
       :show="contextMenuVisible"
@@ -716,12 +725,34 @@ const flatNodes = computed<FlatNode[]>(() => {
   min-width: 0;
 }
 
-.folder-selected-star {
-  font-size: 16px;
-  line-height: 1;
+.folder-selected-favorite {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  padding: 0;
+  margin-inline-start: 2px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s, color 0.15s;
 
+  &:hover:not(:disabled) {
+    color: var(--accent-primary);
+    background: rgba(var(--accent-primary-rgb), 0.08);
+    transform: scale(1.08);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
   &.is-pinned {
-    color: #f5a623;
+    color: var(--accent-primary);
   }
 }
 

@@ -7,6 +7,7 @@ import { useAppStore } from '@/stores/hermes/app'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import ProfileAvatar from '@/components/hermes/profiles/ProfileAvatar.vue'
+import PinIcon from '@/components/common/PinIcon.vue'
 import { formatTimestampMs } from '@/shared/session-display'
 import { chatSessionAgentAvatar } from '@/utils/chat-agent-avatar'
 import { resolveSessionNavigation } from './session-list-item-navigation'
@@ -129,11 +130,7 @@ onUnmounted(() => {
       <span class="session-item-title-row">
         <span class="session-item-title-main">
           <span v-if="pinned" class="session-item-pin" aria-hidden="true">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 17v5" />
-              <path d="M5 8l14 0" />
-              <path d="M8 3l8 0 0 5 3 5-14 0 3-5z" />
-            </svg>
+            <PinIcon width="13" height="13" filled />
           </span>
           <span v-if="completedUnread" class="session-item-unread-dot" aria-hidden="true" />
           <span class="session-item-title" dir="auto">
