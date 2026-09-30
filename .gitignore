@@ -58,3 +58,6 @@ packages/client/src/**/*.js
 
 # Agent scratch space
 .ekko-tmp/
+
+# local build backups created by the release build
+dist.dist.bak.*
