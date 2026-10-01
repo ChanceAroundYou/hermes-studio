@@ -1174,7 +1174,7 @@ function openAttachmentPreview(attachment: Attachment) {
         @dblclick="resetTextareaHeight"
       ></div>
       <div v-if="showContextUsage" class="context-usage-row">
-<span class="context-info" :class="{ 'context-warning': showContextLimit && usagePercent > 80 }">
+        <span class="context-info" :class="{ 'context-warning': showContextLimit && usagePercent > 80 }">
           <template v-if="!showContextLimit">{{ t('chat.contextUsed') }} </template>
           {{ formatCompactCount(totalTokens, { kilo: 'k' }) }}
           <template v-if="showContextLimit">
