@@ -32,7 +32,7 @@ export type ContentBlock = ContentBlockImport
 export const LIVE_CHAT_MESSAGE_PAGE_SIZE = 150
 export const LIVE_CHAT_MAX_LOADED_MESSAGES = 300
 const LEGACY_WORKSPACE_RUN_CHANGE_MESSAGE_PREFIX = 'workspace-run-change:'
-type ChatAgentId = 'hermes' | 'claude' | 'codex' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'ekko-agent'
+type ChatAgentId = 'hermes' | 'claude' | 'codex' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor' | 'ekko-agent'
 
 function agentToCodingAgentId(agent?: string): ChatCodingAgentId | undefined {
   if (agent === 'codex') return 'codex'
@@ -40,6 +40,7 @@ function agentToCodingAgentId(agent?: string): ChatCodingAgentId | undefined {
   if (agent === 'grok') return 'grok'
   if (agent === 'dsh') return 'dsh'
   if (agent === 'opencode') return 'opencode'
+  if (agent === 'cursor') return 'cursor'
   if (agent === 'claude') return 'claude-code'
   if (agent === 'ekko-agent') return 'ekko-agent'
   return undefined
@@ -51,6 +52,7 @@ function codingAgentIdToAgent(id?: ChatCodingAgentId): ChatAgentId | undefined {
   if (id === 'grok') return 'grok'
   if (id === 'dsh') return 'dsh'
   if (id === 'opencode') return 'opencode'
+  if (id === 'cursor') return 'cursor'
   if (id === 'claude-code') return 'claude'
   if (id === 'ekko-agent') return 'ekko-agent'
   return undefined
@@ -448,7 +450,7 @@ export interface QueueInsertionState {
   generation: string
   runId?: string
   queueId: string
-  runtime: 'hermes' | 'ekko' | 'claude-code' | 'codex' | 'pi' | 'grok' | 'opencode' | 'dsh'
+  runtime: 'hermes' | 'ekko' | 'claude-code' | 'codex' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor'
   phase: 'requesting' | 'waiting_for_tool_batch' | 'stopping_current_turn'
   guarantee: 'strict' | 'immediate'
   requestedAt: number
@@ -480,6 +482,8 @@ export interface Session {
   isLoadingOlderMessages?: boolean
   inputTokens?: number
   outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
   contextTokens?: number
   endedAt?: number | null
   parentSessionId?: string | null
@@ -1275,6 +1279,16 @@ function lastVisibleMessageRole(messages?: Message[] | null): string | null {
   return lastVisibleMessage(messages)?.role || null
 }
 
+function applySessionTokenUsage(session: Session, usage: {
+  inputTokens?: number | null; outputTokens?: number | null
+  cacheReadTokens?: number | null; cacheWriteTokens?: number | null; contextTokens?: number | null
+}) {
+  for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'contextTokens'] as const) {
+    const value = usage[key]
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) session[key] = value
+  }
+}
+
 function mapHermesSession(s: SessionSummary): Session {
   const codingAgentId = agentToCodingAgentId(s.agent)
   const isCodingAgentSession = s.source === 'coding_agent' || Boolean(codingAgentId)
@@ -1308,6 +1322,8 @@ function mapHermesSession(s: SessionSummary): Session {
     hasMoreBefore: false,
     inputTokens: s.input_tokens,
     outputTokens: s.output_tokens,
+    cacheReadTokens: s.cache_read_tokens,
+    cacheWriteTokens: s.cache_write_tokens,
     endedAt: s.ended_at != null ? Math.round(s.ended_at * 1000) : null,
     parentSessionId: s.parent_session_id || null,
     forkPointMessageId: (s as any).fork_point_message_id != null ? String((s as any).fork_point_message_id) : null,
@@ -2197,8 +2213,7 @@ export const useChatStore = defineStore('chat', () => {
           existing.reasoningEffort = fresh.reasoningEffort
           if (!pushEnabledWriteTargets.has(existing.id)) existing.pushEnabled = fresh.pushEnabled
           existing.messageCount = fresh.messageCount
-          existing.inputTokens = fresh.inputTokens
-          existing.outputTokens = fresh.outputTokens
+          applySessionTokenUsage(existing, fresh)
           existing.workspace = fresh.workspace
           existing.isPinned = fresh.isPinned
           existing.categoryId = fresh.categoryId
@@ -2614,9 +2629,8 @@ export const useChatStore = defineStore('chat', () => {
           // The server snapshot is authoritative: it is the only thing that can
           // correct a compression whose completion event we never received.
           reconcileCompressionState(sessionId, data.compression, !!data.isWorking)
-          if (data.inputTokens != null) target.inputTokens = data.inputTokens
-          if (data.outputTokens != null) target.outputTokens = data.outputTokens
-          if ((data as any).contextTokens != null) target.contextTokens = (data as any).contextTokens
+          if (!data.isWorking) setCompressionState(sessionId, null)
+          applySessionTokenUsage(target, data)
           applyResumedSessionSettings(data)
           if (typeof data.workspace === 'string') {
             target.workspace = data.workspace.trim() || null
@@ -3512,10 +3526,8 @@ export const useChatStore = defineStore('chat', () => {
       target.title = (evt as any).title
     }
 
-    if (action === 'usage' && target) {
-      target.inputTokens = (evt as any).inputTokens
-      target.outputTokens = (evt as any).outputTokens
-      if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
+    if (action === 'usage' && target && (evt as any).available !== false) {
+      applySessionTokenUsage(target, evt as any)
     }
 
     if (action === 'destroy') {
@@ -3705,6 +3717,9 @@ export const useChatStore = defineStore('chat', () => {
         || raw.runtime === 'codex'
         || raw.runtime === 'pi'
         || raw.runtime === 'grok'
+        || raw.runtime === 'opencode'
+        || raw.runtime === 'dsh'
+        || raw.runtime === 'cursor'
         ? raw.runtime
         : 'hermes',
       phase,
@@ -4130,6 +4145,9 @@ export const useChatStore = defineStore('chat', () => {
     if (codingAgentId === 'opencode') {
       return { icon: '/coding-agents/opencode.png' }
     }
+    if (codingAgentId === 'cursor') {
+      return { icon: '/coding-agents/cursor.svg' }
+    }
     if (codingAgentId === 'ekko-agent') {
       return { icon: './coding-agents/ekko-agent.png' }
     }
@@ -4495,9 +4513,7 @@ export const useChatStore = defineStore('chat', () => {
         }
         // keep compression visible (no auto-clear on !isWorking)
 
-        if (data.inputTokens != null) target.inputTokens = data.inputTokens
-        if (data.outputTokens != null) target.outputTokens = data.outputTokens
-        if (data.contextTokens != null) target.contextTokens = data.contextTokens
+        applySessionTokenUsage(target, data)
         applyResumedSessionSettings(data)
 
         if (Array.isArray(data.messages)) {
@@ -4908,9 +4924,7 @@ export const useChatStore = defineStore('chat', () => {
               if ((evt as any).inputTokens != null) {
                 const target = sessions.value.find(s => s.id === sid)
                 if (target) {
-                  target.inputTokens = (evt as any).inputTokens
-                  target.outputTokens = (evt as any).outputTokens
-                  if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
+                  applySessionTokenUsage(target, evt as any)
                 }
               }
               // Belt-and-suspenders: some providers may deliver the final
@@ -5065,9 +5079,7 @@ export const useChatStore = defineStore('chat', () => {
               if ((evt as any).inputTokens != null) {
                 const target = sessions.value.find(s => s.id === sid)
                 if (target) {
-                  target.inputTokens = (evt as any).inputTokens
-                  target.outputTokens = (evt as any).outputTokens
-                  if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
+                  applySessionTokenUsage(target, evt as any)
                 }
               }
               if (queueInsertionInterruption) {
@@ -5091,9 +5103,7 @@ export const useChatStore = defineStore('chat', () => {
             case 'usage.updated': {
               const target = sessions.value.find(s => s.id === sid)
               if (target) {
-                target.inputTokens = (evt as any).inputTokens
-                target.outputTokens = (evt as any).outputTokens
-                if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
+                applySessionTokenUsage(target, evt as any)
               }
               break
             }
@@ -5535,9 +5545,7 @@ export const useChatStore = defineStore('chat', () => {
           if ((evt as any).inputTokens != null) {
             const target = sessions.value.find(s => s.id === sid)
             if (target) {
-              target.inputTokens = (evt as any).inputTokens
-              target.outputTokens = (evt as any).outputTokens
-              if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
+              applySessionTokenUsage(target, evt as any)
             }
           }
           // Check if backend provided parsed content (from stringified array format)
@@ -5683,9 +5691,7 @@ export const useChatStore = defineStore('chat', () => {
           if ((evt as any).inputTokens != null) {
             const target = sessions.value.find(s => s.id === sid)
             if (target) {
-              target.inputTokens = (evt as any).inputTokens
-              target.outputTokens = (evt as any).outputTokens
-              if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
+              applySessionTokenUsage(target, evt as any)
             }
           }
           const hasQueue = (evt as any).queue_remaining > 0
@@ -5716,9 +5722,7 @@ export const useChatStore = defineStore('chat', () => {
         case 'usage.updated': {
           const target = sessions.value.find(s => s.id === sid)
           if (target) {
-            target.inputTokens = (evt as any).inputTokens
-            target.outputTokens = (evt as any).outputTokens
-            if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
+            applySessionTokenUsage(target, evt as any)
           }
           break
         }
@@ -5910,6 +5914,7 @@ export const useChatStore = defineStore('chat', () => {
             // correct a compression whose terminal event we never received.
             reconcileCompressionState(sid, data.compression, !!data.isWorking)
             applyResumedSessionSettings(data)
+            if (activeSession.value) applySessionTokenUsage(activeSession.value, data)
             if (Array.isArray(data.messages) && activeSession.value) {
               if (typeof data.workspace === 'string') {
                 activeSession.value.workspace = data.workspace.trim() || null

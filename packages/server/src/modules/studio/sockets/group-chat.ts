@@ -245,8 +245,9 @@ interface RoomAgent {
     id: string
     roomId: string
     agentId: string
-    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
+    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor'
     agentMode: 'scoped' | 'global'
+    priorAgentMode: 'scoped' | 'global' | ''
     profile: string
     provider: string
     model: string
@@ -275,8 +276,9 @@ interface GroupAgentActivity {
 }
 
 interface RoomAgentMetadata {
-    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
+    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor'
     agentMode?: 'scoped' | 'global'
+    priorAgentMode?: 'scoped' | 'global' | ''
     provider?: string
     model?: string
     apiMode?: string
@@ -302,6 +304,10 @@ export class RoomParticipantNameConflictError extends Error {
 
 function canonicalParticipantName(name: string): string {
     return name.trim().normalize('NFKC').toLocaleLowerCase()
+}
+
+function storedPriorAgentMode(value: unknown): 'scoped' | 'global' | '' {
+    return value === 'global' || value === 'scoped' ? value : ''
 }
 
 const GROUP_MEMBER_AVATAR_MAX_LENGTH = 1_500_000
@@ -394,6 +400,7 @@ const ROOM_AGENT_SELECT_COLUMNS = [
     'agentId',
     'agent',
     'agentMode',
+    'priorAgentMode',
     'profile',
     'provider',
     'model',
@@ -2635,6 +2642,7 @@ class ChatStorage {
         const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
         const agent = metadata.agent || 'hermes'
         const agentMode = metadata.agentMode === 'global' ? 'global' : 'scoped'
+        const priorAgentMode = storedPriorAgentMode(metadata.priorAgentMode)
         const provider = agentMode === 'global' ? '' : String(metadata.provider || '').trim()
         const model = agentMode === 'global' ? '' : String(metadata.model || '').trim()
         const apiMode = agent === 'hermes' || agentMode === 'global' ? '' : String(metadata.apiMode || '').trim()
@@ -2647,17 +2655,17 @@ class ChatStorage {
         const remoteOrigin = String(metadata.remoteOrigin || '').trim()
         this.db()?.prepare(
             `INSERT INTO gc_room_agents (
-                id, roomId, agentId, agent, agentMode, profile, provider, model, apiMode,
+                id, roomId, agentId, agent, agentMode, priorAgentMode, profile, provider, model, apiMode,
                 reasoningEffort, agentPreset, name, description, avatar, invited,
                 executorType, ownerMemberId, connectorId, remoteOrigin
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
-            id, roomId, agentId, agent, agentMode, profile, provider, model, apiMode,
+            id, roomId, agentId, agent, agentMode, priorAgentMode, profile, provider, model, apiMode,
             reasoningEffort, agentPreset, name, description, avatar, invited,
             executorType, ownerMemberId, connectorId, remoteOrigin,
         )
         return {
-            id, roomId, agentId, agent, agentMode, profile, provider, model, apiMode,
+            id, roomId, agentId, agent, agentMode, priorAgentMode, profile, provider, model, apiMode,
             reasoningEffort, agentPreset, name, description, avatar, invited,
             executorType, ownerMemberId, connectorId, remoteOrigin,
         }
@@ -2715,6 +2723,7 @@ class ChatStorage {
         this.assertParticipantNameAvailable(roomId, name, { excludeAgentRef: existing.id })
         const agent = metadata.agent || 'hermes'
         const agentMode = metadata.agentMode === 'global' ? 'global' : 'scoped'
+        const priorAgentMode = storedPriorAgentMode(metadata.priorAgentMode)
         const provider = agentMode === 'global' ? '' : String(metadata.provider || '').trim()
         const model = agentMode === 'global' ? '' : String(metadata.model || '').trim()
         const apiMode = agent === 'hermes' || agentMode === 'global' ? '' : String(metadata.apiMode || '').trim()
@@ -2723,9 +2732,9 @@ class ChatStorage {
         const avatar = String(metadata.avatar || '').trim()
         this.db()?.prepare(
             `UPDATE gc_room_agents
-             SET agent = ?, agentMode = ?, profile = ?, provider = ?, model = ?, apiMode = ?, reasoningEffort = ?, agentPreset = ?, name = ?, description = ?, avatar = ?
+             SET agent = ?, agentMode = ?, priorAgentMode = ?, profile = ?, provider = ?, model = ?, apiMode = ?, reasoningEffort = ?, agentPreset = ?, name = ?, description = ?, avatar = ?
              WHERE roomId = ? AND removedAt = 0 AND (id = ? OR agentId = ?)`
-        ).run(agent, agentMode, profile, provider, model, apiMode, reasoningEffort, agentPreset, name, description, avatar, roomId, agentRef, agentRef)
+        ).run(agent, agentMode, priorAgentMode, profile, provider, model, apiMode, reasoningEffort, agentPreset, name, description, avatar, roomId, agentRef, agentRef)
         return this.getRoomAgent(roomId, agentRef)
     }
 

@@ -1,6 +1,6 @@
 import { getBaseUrlValue } from '@/api/client'
 export interface ChatAgentAvatar {
-  label: 'Hermes' | 'Ekko' | 'Claude' | 'Codex' | 'Pi' | 'Grok' | 'OpenCode' | 'DeepSeek Harness'
+  label: 'Hermes' | 'Ekko' | 'Claude' | 'Codex' | 'Pi' | 'Grok' | 'OpenCode' | 'DeepSeek Harness' | 'Cursor'
   src: string
 }
 
@@ -12,7 +12,7 @@ interface ChatAgentSessionIdentity {
 
 const BASE = getBaseUrlValue()
 const AGENT_AVATARS = {
-  hermes: { label: 'Hermes', src: `${BASE}/coding-agents/hermes.png` },
+   hermes: { label: 'Hermes', src: `${BASE}/coding-agents/hermes.png` },
   'ekko-agent': { label: 'Ekko', src: `${BASE}/coding-agents/ekko-agent.png` },
   'claude-code': { label: 'Claude', src: `${BASE}/coding-agents/claude-code.svg` },
   codex: { label: 'Codex', src: `${BASE}/coding-agents/codex-openai.png` },
@@ -20,6 +20,7 @@ const AGENT_AVATARS = {
   grok: { label: 'Grok', src: `${BASE}/coding-agents/grok.svg` },
   opencode: { label: 'OpenCode', src: `${BASE}/coding-agents/opencode.png` },
   dsh: { label: 'DeepSeek Harness', src: `${BASE}/coding-agents/deepseek.svg` },
+  cursor: { label: 'Cursor', src: `${BASE}/coding-agents/cursor.svg` },
 } as const satisfies Record<string, ChatAgentAvatar>
 
 export function chatSessionAgentAvatar(session?: ChatAgentSessionIdentity | null): ChatAgentAvatar {
@@ -32,6 +33,7 @@ export function chatSessionAgentAvatar(session?: ChatAgentSessionIdentity | null
   if (runtime === 'grok') return AGENT_AVATARS.grok
   if (runtime === 'dsh') return AGENT_AVATARS.dsh
   if (runtime === 'opencode') return AGENT_AVATARS.opencode
+  if (runtime === 'cursor') return AGENT_AVATARS.cursor
   if (session?.source === 'coding_agent') return AGENT_AVATARS['claude-code']
   return AGENT_AVATARS.hermes
 }

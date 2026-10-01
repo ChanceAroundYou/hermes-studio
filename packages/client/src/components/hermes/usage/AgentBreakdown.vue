@@ -16,6 +16,7 @@ const agentLabels: Record<string, string> = {
   grok: 'grok',
   opencode: 'opencode',
   dsh: 'dsh',
+  cursor: 'cursor',
   ekko_agent: 'ekkoAgent',
 }
 
