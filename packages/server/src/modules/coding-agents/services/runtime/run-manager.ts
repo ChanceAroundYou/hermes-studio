@@ -37,7 +37,12 @@ import { RunToolTiming } from './tool-timing'
 import { readOpenCodeMessageModel } from './native-model'
 import { readCodexTurnAccounting } from './codex-usage'
 import { getCodingAgentGlobalHome } from '../../../studio/public/coding-agent-global-home'
-import { isContextWindowExceededError, nativeContextRecoveryMessage, resetNativeSessionAfterContextOverflow } from '../context-recovery'
+import {
+  isContextWindowExceededError,
+  nativeContextRecoveryMessage,
+  nativeTurnContextRecoveryMessage,
+  resetNativeSessionAfterContextOverflow,
+} from '../context-recovery'
 
 export { isolatedCodingAgentChildEnv } from './child-env'
 
@@ -2459,24 +2464,41 @@ export class CodingAgentRunManager {
   private recoverFailedNativeCompact(run: ManagedCodingAgentRun, error: unknown) {
     if (!run.nativeCompactCommandActive) return
     run.nativeCompactCommandActive = false
-    if (!isContextWindowExceededError(error)) return
+    this.recoverNativeSessionAfterContextOverflow(run, error, 'compact')
+  }
+
+  private recoverNativeSessionAfterContextOverflow(
+    run: ManagedCodingAgentRun,
+    error: unknown,
+    action: 'compact' | 'recover',
+  ): boolean {
+    if (!isContextWindowExceededError(error)) return false
     const recovery = resetNativeSessionAfterContextOverflow(run.launch.sessionId, run.launch.agentId)
-    if (!recovery.reset) return
+    if (!recovery.reset) return false
     run.launch.agentNativeSessionId = ''
     run.nativeResumeReady = false
     run.disposeAfterTurn = true
-    const agentName = run.launch.agentId === 'grok' ? 'Grok' : 'Claude Code'
+    const agentName = run.launch.agentId === 'codex'
+      ? 'Codex'
+      : run.launch.agentId === 'grok'
+        ? 'Grok'
+        : run.launch.agentId === 'pi'
+          ? 'Pi'
+          : 'Claude Code'
     this.emitToChat(run.launch.sessionId, 'session.command', {
       event: 'session.command',
       session_id: run.launch.sessionId,
-      command: 'compact',
-      action: 'compact',
+      command: action,
+      action,
       ok: true,
       terminal: true,
       compacted: false,
       resetNativeThread: true,
-      message: nativeContextRecoveryMessage(agentName),
+      message: action === 'compact'
+        ? nativeContextRecoveryMessage(agentName)
+        : nativeTurnContextRecoveryMessage(agentName),
     })
+    return true
   }
 
   private failClaudePrintTurn(run: ManagedCodingAgentRun, errorText: string) {
@@ -3197,6 +3219,8 @@ export class CodingAgentRunManager {
       this.completeCodexExecTurn(run, run.codexPendingUsage)
       return
     }
+    const error = run.codexPendingError || exitErrorMessage('Codex', code, run.currentChildStderr)
+    this.recoverNativeSessionAfterContextOverflow(run, error, 'recover')
     this.handleClaudePrintResponseEvent(run, {
       type: 'response.failed',
       data: {
@@ -3206,7 +3230,7 @@ export class CodingAgentRunManager {
           object: 'response',
           status: 'failed',
           model: run.launch.model,
-          error: { message: run.codexPendingError || exitErrorMessage('Codex', code, run.currentChildStderr) },
+          error: { message: error },
           output: [],
           usage: run.codexPendingUsage,
         },
@@ -3319,9 +3343,11 @@ export class CodingAgentRunManager {
 
   private deferCodexExecError(run: ManagedCodingAgentRun, message: string) {
     // Codex emits broad `error` events for recoverable stream retries as well as
-    // failures. Let the native process exit status arbitrate the turn: exit 0
-    // discards this provisional error, while a non-zero exit reports it.
-    if (childIsRunning(run.currentChild) || (run.launch.mode === 'global' && run.currentChild)) {
+    // failures. Keep errors provisional while the child reference still exists,
+    // including final buffered JSONL parsed after the child has exited. The exit
+    // status then arbitrates the turn: exit 0 discards the error, while a non-zero
+    // exit reports it.
+    if (run.currentChild) {
       run.codexPendingError = message
       return
     }
@@ -3329,6 +3355,7 @@ export class CodingAgentRunManager {
   }
 
   private failCodexExecTurn(run: ManagedCodingAgentRun, message: string, usage?: unknown) {
+    this.recoverNativeSessionAfterContextOverflow(run, message, 'recover')
     this.handleClaudePrintResponseEvent(run, {
       type: 'response.failed',
       data: {
