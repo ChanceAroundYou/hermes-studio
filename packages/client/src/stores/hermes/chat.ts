@@ -2629,7 +2629,7 @@ export const useChatStore = defineStore('chat', () => {
           // The server snapshot is authoritative: it is the only thing that can
           // correct a compression whose completion event we never received.
           reconcileCompressionState(sessionId, data.compression, !!data.isWorking)
-          if (!data.isWorking) setCompressionState(sessionId, null)
+          if (!data.isWorking && !data.compression) setCompressionState(sessionId, null)
           applySessionTokenUsage(target, data)
           applyResumedSessionSettings(data)
           if (typeof data.workspace === 'string') {
