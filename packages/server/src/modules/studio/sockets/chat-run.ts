@@ -961,6 +961,11 @@ export class ChatRunSocket {
       }
       return profile
     }
+    // Read access must not be pinned to the handshake profile: the UI switches profiles
+    // without always reconnecting (see #1884), so requiring `sessionProfile ===
+    // currentProfile()` made `resume` fail and left the conversation permanently blank.
+    // `resume` and `app.resume` therefore only check that the user can reach the owning
+    // profile. Mutating operations keep the stricter connection-scoped check.
     const requireSocketSessionAccess = async (sessionId: string) => {
       const session = getSession(sessionId)
       // Session may only exist in a Hermes Agent state.db (e.g. Feishu-imported
@@ -988,7 +993,6 @@ export class ChatRunSocket {
       // switch. Permission is already checked above via canAccessProfile.
       return sessionProfile
     }
-
     socket.on('run', async (data: {
       push_snapshot?: unknown
       input: string | ContentBlock[]
@@ -1281,7 +1285,7 @@ export class ChatRunSocket {
       if (!data.session_id || typeof data.id !== 'string' || data.id.length > 128) return
       const sid = data.session_id
       try {
-        requireSocketSessionAccess(sid)
+        await requireSocketSessionAccess(sid)
       } catch (err) {
         socket.emit('run.failed', {
           event: 'run.failed',
