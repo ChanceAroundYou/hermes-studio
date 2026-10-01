@@ -25,7 +25,6 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import { formatDateTime } from '@/utils/format'
-import { NARROW_DRAWER_QUERY, matchesMediaQuery } from '@/utils/viewport'
 
 type SkillDescriptionLoadState = 'idle' | 'loading' | 'loaded' | 'failed'
 
@@ -76,7 +75,6 @@ const graphSize = ref({ width: 1, height: 1 })
 const playing = ref(false)
 const playbackIndex = ref(-1)
 const detailDrawerOpen = ref(false)
-const drawerWidth = ref(380)
 
 let playbackTimer: number | null = null
 let clearSelectionTimer: number | null = null
@@ -595,7 +593,7 @@ function togglePlayback() {
 }
 
 function updateViewportMetrics() {
-  drawerWidth.value = matchesMediaQuery(NARROW_DRAWER_QUERY) ? window.innerWidth : 380
+
   const rect = graphWrapRef.value?.getBoundingClientRect()
   if (rect) graphSize.value = { width: rect.width, height: rect.height }
 }
@@ -879,7 +877,7 @@ defineExpose({
           </main>
         </div>
 
-        <NDrawer v-model:show="detailDrawerOpen" :width="drawerWidth" placement="right">
+        <NDrawer v-model:show="detailDrawerOpen" width="var(--studio-drawer-width)" placement="right">
           <NDrawerContent v-if="selectedNode" class="journey-detail-drawer" :native-scrollbar="false" closable>
             <template #header>
               <div class="drawer-title-row">

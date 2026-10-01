@@ -2710,7 +2710,6 @@ async function handleSessionModelCustomSubmit() {
         ref="renameInputRef"
         v-model:value="renameValue"
         :placeholder="t('chat.enterNewTitle')"
-        @keydown.enter="handleRenameConfirm"
       />
     </NModal>
 
@@ -2720,7 +2719,7 @@ async function handleSessionModelCustomSubmit() {
       :title="t('chat.setWorkspaceTitle')"
       :positive-text="t('common.ok')"
       :negative-text="t('common.cancel')"
-      style="width: 520px"
+      style="width: var(--studio-workspace-picker-width)"
       @positive-click="handleWorkspaceConfirm"
     >
       <FolderPicker v-model="workspaceValue" />
@@ -2909,7 +2908,7 @@ async function handleSessionModelCustomSubmit() {
       v-model:show="showNewChatModal"
       class="new-chat-drawer"
       placement="right"
-      width="min(440px, 100vw)"
+      width="var(--studio-drawer-width)"
       :mask-closable="true"
     >
       <NDrawerContent :title="t('chat.newChat')" closable>

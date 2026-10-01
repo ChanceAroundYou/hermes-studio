@@ -679,7 +679,7 @@ onUnmounted(() => {
     <NDrawer
       v-model:show="hermesCliDetailsVisible"
       placement="right"
-      width="min(620px, 100vw)"
+      width="var(--studio-drawer-width)"
     >
       <NDrawerContent :title="t('runtimeVersions.cliDetailsTitle')" closable>
         <div data-testid="hermes-cli-details" class="hermes-cli-details">
@@ -704,7 +704,7 @@ onUnmounted(() => {
       v-model:show="aiHelpDrawerVisible"
       class="agent-ai-help-drawer"
       placement="right"
-      width="min(760px, 100vw)"
+      width="var(--studio-drawer-width)"
     >
       <NDrawerContent :title="t('agentManager.aiHelpDrawerTitle')" closable body-content-style="padding: 0; overflow: hidden;">
         <AiHelpChatPanel
@@ -942,11 +942,6 @@ onUnmounted(() => {
 }
 
 @media (max-width: $breakpoint-mobile) {
-  :global(.agent-ai-help-drawer.n-drawer) {
-    width: 100vw !important;
-    max-width: 100vw;
-  }
-
   .agent-manager-content {
     padding: 16px;
   }
