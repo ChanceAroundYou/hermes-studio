@@ -35,14 +35,14 @@ not the count. See `docs/harness/validation.md`.
 
 | SHA | PR | Scope | Conflicts | Status |
 |---|---|---|---|---|
-| `8f14d5db2` | #3110 | Cursor CLI integration with isolated Studio MCP | **6 files / 6 hunks** | pending |
-| `c19521d99` | #3232 | unify Studio navigation, headers and mobile layouts | **36 files / 74 hunks** | pending |
-| `809e76ace` | #3191 | sidebar account menu + centred model loading | **4 files / 9 hunks** | pending |
-| `c8ea5ba06` | #3226 | usage costs + local model pricing and limits | **4 files / 6 hunks** | pending |
-| `83fff7d87` | #3199 | unify Agent picker order across chat and workflows | **5 files / 5 hunks** | pending |
-| `5053c1346` | #3222 | product logo on Agent Manager cards | **5 files / 5 hunks** | pending |
-| `458561cdb` | #3176 | desktop update progress + isolated test builds | **1 files / 3 hunks** | pending |
-| `3d2fe623f` | #3151 | ignore legacy session push opt-out | clean | pending |
+| `8f14d5db2` | #3110 | Cursor CLI integration with isolated Studio MCP | **6 files / 6 hunks** | done — `07363b131` (Cursor CLI integration) |
+| `c19521d99` | #3232 | unify Studio navigation, headers and mobile layouts | **36 files / 74 hunks** | blocked — 36 files / 74 hunks of UI; see the table below |
+| `809e76ace` | #3191 | sidebar account menu + centred model loading | **4 files / 9 hunks** | blocked — rewrites the sidebar footer this fork has customised |
+| `c8ea5ba06` | #3226 | usage costs + local model pricing and limits | **4 files / 6 hunks** | done — `8a5e4aa19` (usage costs + local model pricing) |
+| `83fff7d87` | #3199 | unify Agent picker order across chat and workflows | **5 files / 5 hunks** | done — `c8506f96e` (Agent picker order) |
+| `5053c1346` | #3222 | product logo on Agent Manager cards | **5 files / 5 hunks** | done — `01eca9793` (Cursor product logo) |
+| `458561cdb` | #3176 | desktop update progress + isolated test builds | **1 files / 3 hunks** | blocked — our `a485b57d6` (#3177) is a newer superset of the test-build files; the progress/cancellation UI + runtime files are the only missing piece. Merge only the new files (`updater-types.ts`, `updater-source.ts`, `updater-cancellation.ts`, `DesktopUpdateDownloadTab.vue`, `useDesktopUpdate.ts`) and keep our test-build files. |
+| `3d2fe623f` | #3151 | ignore legacy session push opt-out | clean | done — `9221deac9` (already landed via the Live Activity chain) |
 
 Conflict files are listed in `docs/upstream-merge-ledger.md`; the notes below record
 *why* each one is risky against this fork's customisations.
