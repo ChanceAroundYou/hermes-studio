@@ -1,6 +1,6 @@
 import { normalizeRunUsage, type RunUsageSummary } from '@/utils/run-usage'
 import { mergeTaskPlanMessages, type TaskPlanSnapshot } from '@/utils/task-plan'
-import { connectChatRun, startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, onSessionSettingsUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport } from '@/api/studio/chat'
+import {connectChatRun, startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, onSessionSettingsUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport, onRunUsageUpdated} from '@/api/studio/chat'
 import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchWorkingSessions, fetchSessions, type RunState, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/studio/sessions'
 import { getActiveProfileName, getBaseUrlValue } from '@/api/client'
 import { onAuthInvalidated } from '@/api/auth-invalidation'
@@ -1760,6 +1760,7 @@ export const useChatStore = defineStore('chat', () => {
     runtimeGeneration += 1
     clearBackgroundObservers()
     sessions.value = []
+    pendingRunUsage.clear()
     completedUnreadSessions.value = new Set()
     queueLengths.value = new Map()
     queuedUserMessages.value = new Map()
@@ -2008,6 +2009,8 @@ export const useChatStore = defineStore('chat', () => {
     return alignedAssistantMessageId
   }
 
+  const pendingRunUsage = new Map<string, Map<string, NonNullable<ReturnType<typeof normalizeRunUsage>>>>()
+
   function handleTerminalWorkspaceRunChange(
     sessionId: string,
     evt: any,
@@ -2017,7 +2020,12 @@ export const useChatStore = defineStore('chat', () => {
     const target = sessions.value.find(session => session.id === sessionId)
     if (target) alignWorkspaceChangeAssistantMessage(target.messages, change, assistantMessageId)
     upsertWorkspaceRunChange(sessionId, change)
-    const summary = normalizeRunUsage(evt?.run_usage)
+    const originalSummary = normalizeRunUsage(evt?.run_usage)
+    const summary = originalSummary && (pendingRunUsage.get(sessionId)?.get(originalSummary.runId) || originalSummary)
+    if (summary) {
+      pendingRunUsage.get(sessionId)?.delete(summary.runId)
+      if (!pendingRunUsage.get(sessionId)?.size) pendingRunUsage.delete(sessionId)
+    }
     if (target && summary) {
       let message = target.messages.find(m => m.role === 'assistant' && m.id === summary.assistantMessageId)
         || target.messages.find(m => m.role === 'assistant' && m.id === assistantMessageId)
@@ -4762,6 +4770,10 @@ export const useChatStore = defineStore('chat', () => {
               setAbortState(sid, { aborting: false, synced: (evt as any).synced ?? false })
               settleInterruptedSubagents(sid)
               clearPendingInteractions(sid)
+              const abortedAssistant = getSessionMsgs(sid).find(message => message.id === activeAssistantMessageId)
+                || [...getSessionMsgs(sid)].reverse().find(message => message.role === 'assistant' && message.isStreaming)
+              handleTerminalWorkspaceRunChange(sid, evt, abortedAssistant?.id)
+              if (abortedAssistant) updateMessage(sid, abortedAssistant.id, { isStreaming: false })
               if ((evt as any).queue_length > 0) {
                 queueLengths.value.set(sid, (evt as any).queue_length)
                 setAbortState(sid, null)
@@ -5382,6 +5394,10 @@ export const useChatStore = defineStore('chat', () => {
           setAbortState(sid, { aborting: false, synced: (evt as any).synced ?? false })
           settleInterruptedSubagents(sid)
           clearPendingInteractions(sid)
+          const abortedAssistant = getSessionMsgs(sid).find(message => message.id === activeAssistantMessageId)
+            || [...getSessionMsgs(sid)].reverse().find(message => message.role === 'assistant' && message.isStreaming)
+          handleTerminalWorkspaceRunChange(sid, evt, abortedAssistant?.id)
+          if (abortedAssistant) updateMessage(sid, abortedAssistant.id, { isStreaming: false })
           if ((evt as any).queue_length > 0) {
             queueLengths.value.set(sid, (evt as any).queue_length)
             setAbortState(sid, null)
@@ -5861,6 +5877,24 @@ export const useChatStore = defineStore('chat', () => {
   onSessionTitleUpdated(applyGeneratedSessionTitle)
   onSessionWorkspaceUpdated(applySessionWorkspaceUpdate)
   onSessionSettingsUpdated(applySessionSettingsUpdate)
+  onRunUsageUpdated(evt => {
+    const sid = evt.session_id
+    const summary = normalizeRunUsage((evt as any).run_usage)
+    const session = sessions.value.find(item => item.id === sid)
+    if (!sid || !session || !summary?.assistantMessageId) return
+    applySessionTokenUsage(session, evt as any)
+    // Late native logs and prices belong to this exact run, even when another
+    // turn is already streaming. Never fall back to the newest assistant.
+    const message = session.messages.find(item => item.role === 'assistant'
+      && (item.id === summary.assistantMessageId || item.runUsage?.runId === summary.runId))
+    const terminalNotReceived = !message?.runUsage
+    if (message) message.runUsage = summary
+    if (terminalNotReceived) {
+      const updates = pendingRunUsage.get(sid) || new Map()
+      updates.set(summary.runId, summary)
+      pendingRunUsage.set(sid, updates)
+    }
+  })
 
   function stopStreaming() {
     const sid = activeSessionId.value

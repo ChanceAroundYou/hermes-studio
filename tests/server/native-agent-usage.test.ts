@@ -8,6 +8,14 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../packages/server/src/bootstrap/coding-agent-adapters'
 import { CodingAgentRunManager } from '../../packages/server/src/modules/coding-agents/services/runtime/run-manager'
+import { NativeTurnUsage } from '../../packages/server/src/modules/coding-agents/services/runtime/native-usage'
+import * as nativeModel from '../../packages/server/src/modules/coding-agents/services/runtime/native-model'
+import * as usageLedger from '../../packages/server/src/modules/studio/public/usage'
+import * as codexAccounting from '../../packages/server/src/modules/coding-agents/services/runtime/codex-usage'
+import { chatCodingAgentRunManager } from '../../packages/server/src/modules/studio/public/chat-agent-runtime'
+import * as chatRuntime from '../../packages/server/src/modules/studio/public/chat-agent-runtime'
+import { handleAbort } from '../../packages/server/src/modules/studio/services/chat-run/abort'
+import { onRunUsageUpdated } from '../../packages/server/src/modules/studio/repositories/run-usage-store'
 import { initAllHermesTables } from '../../packages/server/src/modules/studio/infrastructure/database/schemas'
 import { getRecordedUsageTotals, getUsage, getLocalUsageStats, updateUsage } from '../../packages/server/src/modules/studio/repositories/usage-store'
 import { withRunUsage } from '../../packages/server/src/modules/studio/repositories/run-usage-store'
@@ -16,6 +24,13 @@ import fixtures from '../fixtures/coding-agents/global-native-usage.json'
 
 vi.mock('child_process', async importOriginal => ({
   ...await importOriginal<typeof import('child_process')>(), spawn: vi.fn(),
+}))
+
+// Captured-event costs must not depend on a live catalog download or local cache.
+vi.mock('../../packages/server/src/modules/studio/public/model-catalog', () => ({
+  getModelCatalog: vi.fn(() => null),
+  getModelCatalogSnapshot: vi.fn(() => undefined),
+  refreshModelCatalog: vi.fn(async () => undefined),
 }))
 
 describe('global native usage accounting', () => {
@@ -44,6 +59,7 @@ describe('global native usage accounting', () => {
     rmSync(workspace, { recursive: true, force: true })
     vi.clearAllMocks()
     vi.restoreAllMocks()
+    vi.useRealTimers()
   })
   function start(agentId: string, mode: 'global' | 'scoped' = 'global') {
     manager.start({
@@ -60,6 +76,117 @@ describe('global native usage accounting', () => {
     child.emit('exit', code)
     child.emit('close', code)
   }
+
+  async function abortThroughSocket() {
+    vi.spyOn(chatRuntime, 'hasChatEkkoBackgroundTasks').mockReturnValue(false)
+    const run = (manager as any).getBySession(sessionId)
+    vi.spyOn(chatCodingAgentRunManager, 'hasSession').mockImplementation(id => manager.hasSession(id))
+    vi.spyOn(chatCodingAgentRunManager, 'stop').mockImplementation((id, options) => manager.stop(id, options))
+    const events = vi.fn()
+    await handleAbort({ to: () => ({ emit: events }), adapter: { rooms: new Map([[`session:${sessionId}`, new Set(['socket'])]]) } } as any,
+      { connected: true, emit: events } as any, sessionId, new Map([[sessionId, run.state]]), {}, vi.fn())
+    return events.mock.calls.find(([event]) => event === 'abort.completed')![1]
+  }
+
+  it.each(['codex', 'claude-code', 'pi', 'grok', 'cursor', 'opencode'])('persists a stopped %s card through the actual socket abort path', async agent => {
+    start(agent, 'scoped')
+    const state = (manager as any).getBySession(sessionId).state
+    manager.handleProxyUsageEvent(sessionId, { type: 'response.completed', data: { response: {
+      id: 'request-before-stop', usage: { input_tokens: 20, output_tokens: 4, input_tokens_details: { cached_tokens: 5 } },
+    } } } as any, 2)
+    const terminal = await abortThroughSocket()
+    expect(terminal.run_usage).toMatchObject({ inputTokens: 20, outputTokens: 4, cacheReadTokens: 5, tokensPerSecond: 2 })
+    expect(terminal.run_usage.assistantMessageId).toBeTruthy()
+    expect(withRunUsage(sessionId, getSessionDetail(sessionId)!.messages).find(message => String(message.id) === terminal.run_usage.assistantMessageId))
+      .toHaveProperty('run_usage', terminal.run_usage)
+    expect(withRunUsage(sessionId, state.messages).filter((message: any) => message.run_usage)).toHaveLength(1)
+    expect(manager.hasSession(sessionId)).toBe(false)
+  })
+
+  it.each(['queue', 'stop', 'stop-before-text'] as const)('reconciles delayed Codex usage on %s without losing the persisted card', async action => {
+    let finish!: (value: any) => void
+    vi.spyOn(codexAccounting, 'readCodexTurnAccounting').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const updates: any[] = []
+    const unsubscribe = onRunUsageUpdated((sid, summary) => { if (sid === sessionId) updates.push(summary) })
+    try {
+      start('codex')
+      emit({ type: 'thread.started', thread_id: 'native-thread' })
+      if (action !== 'stop-before-text') emit({ type: 'item.completed', item: { id: 'partial', type: 'agent_message', text: 'partial answer' } })
+      let terminal: any
+      const interrupted = action === 'queue' ? manager.interruptForQueueInsertion(sessionId) : undefined
+      if (!interrupted) terminal = await abortThroughSocket()
+      close()
+      expect(finish).toBeTypeOf('function')
+      if (interrupted) expect(emitted.mock.calls.filter(([, event]) => event === 'run.failed')).toHaveLength(0)
+      else expect(terminal.run_usage).toMatchObject({ inputTokens: null, outputTokens: null })
+      finish([{ model: 'actual', provider: 'openai' }, [{ id: 'request', scope: 'model_call', model: 'actual', provider: 'openai', apiCalls: 1,
+        usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 5, cacheWriteTokens: 0, reasoningTokens: 0 }, apiDuration: 2 }]])
+      if (interrupted) {
+        await interrupted
+        terminal = emitted.mock.calls.find(([, event]) => event === 'run.failed')![2]
+        expect(terminal.run_usage).toMatchObject({ inputTokens: 15, outputTokens: 4 })
+      }
+      await vi.waitFor(() => expect(updates.at(-1)).toMatchObject({ assistantMessageId: terminal.run_usage.assistantMessageId,
+        inputTokens: 15, outputTokens: 4, tokensPerSecond: 2 }))
+      const resumed = withRunUsage(sessionId, getSessionDetail(sessionId)!.messages).filter(message => (message as any).run_usage)
+      expect(resumed).toHaveLength(1)
+      expect(resumed![0]).toHaveProperty('run_usage', updates.at(-1))
+    } finally { unsubscribe() }
+  })
+
+  it.each(['codex', 'claude-code', 'grok', 'cursor'])('settles %s output once even when native accounting throws', async agent => {
+    start(agent)
+    vi.spyOn(NativeTurnUsage.prototype, 'rows').mockImplementation(() => { throw new Error('bad native usage') })
+    const usage = { input_tokens: 10, output_tokens: 2 }
+    const events: Record<string, unknown[]> = {
+      codex: [{ type: 'item.completed', item: { id: 'a', type: 'agent_message', text: 'done' } }, { type: 'turn.completed', usage }],
+      'claude-code': [{ type: 'assistant', message: { id: 'a', role: 'assistant', content: [{ type: 'text', text: 'done' }] } }, { type: 'result', subtype: 'success', result: 'done', usage }],
+      grok: [{ type: 'text', data: 'done' }, { type: 'end', usage }],
+      cursor: [{ type: 'assistant', timestamp_ms: 1, message: { content: [{ type: 'text', text: 'done' }] } }, { type: 'result', subtype: 'success', result: 'done', usage }],
+    }
+    for (const event of events[agent]) emit(event)
+    close()
+    await vi.waitFor(() => expect(emitted.mock.calls.filter(([, event]) => event === 'run.completed')).toHaveLength(1))
+    expect(emitted.mock.calls.filter(([, event]) => event === 'run.failed')).toHaveLength(0)
+    expect(getSessionDetail(sessionId)?.messages.filter(message => message.role === 'assistant').at(-1)?.content).toBe('done')
+  })
+
+  it('still stops and removes the run when cancellation accounting throws', () => {
+    start('claude-code')
+    vi.spyOn(NativeTurnUsage.prototype, 'rows').mockImplementation(() => { throw new Error('bad native usage') })
+    expect(manager.stop(sessionId)).toBe(true)
+    expect(manager.getRunInfo(sessionId)).toBeNull()
+    expect(emitted.mock.calls.filter(([, event]) => event === 'run.failed')).toHaveLength(1)
+  })
+
+  it('keeps scoped chat output intact when a provider returns malformed usage', async () => {
+    start('codex', 'scoped')
+    expect(() => manager.handleProxyUsageEvent(sessionId, { type: 'response.completed', data: { response: {
+      id: 'bad-usage', usage: { input_tokens: { valueOf: null, toString: null }, output_tokens: 2 },
+    } } } as any)).not.toThrow()
+    emit({ type: 'item.completed', item: { id: 'a', type: 'agent_message', text: 'done' } })
+    emit({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } })
+    close()
+    await vi.waitFor(() => expect(emitted.mock.calls.filter(([, event]) => event === 'run.completed')).toHaveLength(1))
+    expect(getSessionDetail(sessionId)?.messages.filter(message => message.role === 'assistant').at(-1)?.content).toBe('done')
+    expect(getRecordedUsageTotals(sessionId, 'coding_agent').apiCalls).toBe(0)
+  })
+
+  it('releases Codex completion and permits the next turn when usage discovery never resolves', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.spyOn(nativeModel, 'findRollout').mockImplementation(() => new Promise(() => {}))
+    start('codex')
+    emit({ type: 'thread.started', thread_id: 'native-thread' })
+    emit({ type: 'item.completed', item: { id: 'a', type: 'agent_message', text: 'done' } })
+    emit({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } })
+    close()
+    expect(() => manager.send(sessionId, 'too early')).toThrow('still completing')
+    await vi.advanceTimersByTimeAsync(2_500)
+    await vi.waitFor(() => expect(emitted.mock.calls.filter(([, event]) => event === 'run.completed')).toHaveLength(1))
+    expect(getSessionDetail(sessionId)?.messages.filter(message => message.role === 'assistant').at(-1)?.content).toBe('done')
+    child.exitCode = null
+    expect(() => manager.send(sessionId, 'next')).not.toThrow()
+  })
 
   it.each(['cursor', 'codex', 'pi', 'claude-code', 'claude', 'claude_code', 'grok', 'opencode', 'dsh'])('hydrates %s session summaries from cumulative native usage across turns and models', agent => {
     // Workflow sessions use the same native ledger, despite having a different source.
@@ -125,6 +252,58 @@ describe('global native usage accounting', () => {
     close()
     await new Promise(resolve => setImmediate(resolve))
     expect(getUsage(sessionId)).toBeUndefined()
+  })
+
+  it('keeps Cursor native explicit USD cost alongside measured tokens', async () => {
+    start('cursor')
+    emit({ type: 'result', subtype: 'success', session_id: 'cursor-cost', result: 'done',
+      actual_cost_usd: 0.12, usage: { inputTokens: 10, outputTokens: 5 } })
+    close()
+    await vi.waitFor(() => expect(getLocalUsageStats(sessionId).cost).toBeCloseTo(0.12))
+    expect(getLocalUsageStats(sessionId).cost_coverage).toEqual({ reported: 1, estimated: 0, unknown: 0 })
+  })
+
+  it('attributes Codex requests to each resumed run and includes compression without replaying cumulative totals', async () => {
+    start('codex')
+    const dir = join(workspace, 'sessions', '2026', '10', '01')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'rollout-native-thread.jsonl')
+    const events: any[] = [{ type: 'session_meta', payload: { id: 'native-thread', model_provider: 'openai' } }]
+    const turn = (id: string, counts: number[]) => {
+      const timestamp = new Date().toISOString()
+      events.push({ type: 'event_msg', timestamp, payload: { type: 'task_started', turn_id: id } },
+        { type: 'turn_context', timestamp, payload: { model: 'actual-model' } })
+      let total = 0
+      counts.forEach((input, index) => {
+        total += input
+        events.push({ type: 'token_usage_record', timestamp, payload: { thread_id: 'native-thread', turn_id: id,
+          response_id: `${id}-${index}`, usage: { input_tokens: input, output_tokens: 2, cached_input_tokens: 5 },
+          turn_token_usage: { input_tokens: total, output_tokens: (index + 1) * 2, cached_input_tokens: (index + 1) * 5 } } })
+      })
+      writeFileSync(file, events.map(row => JSON.stringify(row)).join('\n'))
+      emit({ type: 'thread.started', thread_id: 'native-thread' })
+      emit({ type: 'turn.completed', usage: { input_tokens: 999999, output_tokens: 999 } })
+      close()
+    }
+    turn('first', [10])
+    await vi.waitFor(() => expect(getRecordedUsageTotals(sessionId, 'coding_agent').apiCalls).toBe(1))
+    await new Promise(resolve => setTimeout(resolve, 2))
+    child.exitCode = null
+    manager.send(sessionId, 'next')
+    turn('second', [20, 30])
+    await vi.waitFor(() => expect(getRecordedUsageTotals(sessionId, 'coding_agent').apiCalls).toBe(3))
+    expect(getRecordedUsageTotals(sessionId, 'coding_agent')).toMatchObject({ inputTokens: 45, outputTokens: 6, cacheReadTokens: 15 })
+    expect(emitted).toHaveBeenCalledWith(sessionId, 'run.completed', expect.objectContaining({
+      run_usage: expect.objectContaining({ inputTokens: 50, outputTokens: 4 }),
+    }))
+  })
+
+  it.each(['response.failed', 'response.incomplete'] as const)('retains measured scoped usage on %s and deduplicates terminal events', type => {
+    start('codex', 'scoped')
+    const data = { response: { id: 'request-error', usage: { input_tokens: 20, output_tokens: 4, input_tokens_details: { cached_tokens: 10 } } } }
+    manager.handleProxyUsageEvent(sessionId, { type, data } as any)
+    manager.handleProxyUsageEvent(sessionId, { type: 'response.completed', data } as any)
+    expect(getRecordedUsageTotals(sessionId, 'coding_agent')).toMatchObject({ inputTokens: 10, outputTokens: 4, cacheReadTokens: 10, apiCalls: 1 })
   })
 
   it('identifies Cursor when its executable is missing', async () => {
@@ -221,6 +400,78 @@ describe('global native usage accounting', () => {
     expect(getUsage(sessionId)?.model).toBe('second-model')
   })
 
+  it.each(['global', 'scoped'] as const)('includes cumulative Pi %s usage in each terminal event before deferred refresh', mode => {
+    vi.spyOn(manager as any, 'refreshCodingAgentUsage').mockImplementation(() => new Promise(() => {}))
+    updateUsage(sessionId, { source: 'hermes', inputTokens: 9999, outputTokens: 9999 })
+    for (const index of [1, 2]) {
+      if (index === 2) {
+        child = Object.assign(new EventEmitter(), {
+          stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+          exitCode: null, signalCode: null, kill: vi.fn(),
+        })
+        vi.mocked(spawn).mockReturnValue(child)
+      }
+      start('pi', mode)
+      if (mode === 'scoped') manager.handleProxyUsageEvent(sessionId, { type: 'response.completed', data: { response: {
+        id: `proxy-${index}`, usage: { input_tokens: 15, output_tokens: 2, input_tokens_details: { cached_tokens: 5 } },
+      } } } as any)
+      const message = { type: 'message_end', message: {
+        id: `message-${index}`, role: 'assistant', model: 'pi-model', provider: 'test',
+        content: [{ type: 'text', text: 'done' }], usage: { input: 10, output: 2, cacheRead: 5 },
+      } }
+      emit(message)
+      emit(message)
+      emit({ type: 'agent_settled' })
+      close()
+      const completed = emitted.mock.calls.filter(([, event]) => event === 'run.completed')
+      expect(completed).toHaveLength(index)
+      expect(completed.at(-1)![2]).toMatchObject({
+        inputTokens: 10 * index, outputTokens: 2 * index, cacheReadTokens: 5 * index, cacheWriteTokens: 0,
+      })
+      expect(getRecordedUsageTotals(sessionId, 'coding_agent').apiCalls).toBe(index)
+      expect(manager.hasSession(sessionId)).toBe(false)
+    }
+  })
+
+  it.each(['error', 'stop', 'queue'] as const)('includes measured Pi usage when a turn ends with %s', async outcome => {
+    start('pi')
+    emit({ type: 'message_end', message: { role: 'assistant', model: 'pi-model',
+      content: [{ type: 'text', text: 'partial' }], usage: { input: 10, output: 2, cacheRead: 5, cacheWrite: 3 },
+      ...(outcome === 'error' ? { stopReason: 'error', errorMessage: 'provider failure' } : {}),
+    } })
+    if (outcome === 'error') { emit({ type: 'agent_settled' }); close() }
+    if (outcome === 'stop') manager.stop(sessionId)
+    if (outcome === 'queue') {
+      const interrupted = manager.interruptForQueueInsertion(sessionId)
+      close()
+      await interrupted
+    }
+    expect(emitted.mock.calls.filter(([, event]) => event === 'run.failed')).toHaveLength(1)
+    expect(emitted).toHaveBeenCalledWith(sessionId, 'run.failed', expect.objectContaining({
+      inputTokens: 10, outputTokens: 2, cacheReadTokens: 5, cacheWriteTokens: 3,
+    }))
+  })
+
+  it('leaves missing Pi usage unknown in the terminal event', () => {
+    start('pi')
+    emit({ type: 'agent_settled' })
+    close()
+    const completed = emitted.mock.calls.find(([, event]) => event === 'run.completed')![2]
+    expect(completed).not.toHaveProperty('inputTokens')
+  })
+
+  it('still completes Pi when the terminal cumulative usage read throws', () => {
+    start('pi')
+    emit(fixtures.pi[0])
+    vi.spyOn(usageLedger, 'getRecordedUsageTotals').mockImplementation(() => { throw new Error('ledger unavailable') })
+    emit({ type: 'agent_settled' })
+    close()
+    const completed = emitted.mock.calls.filter(([, event]) => event === 'run.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0][2]).not.toHaveProperty('inputTokens')
+    expect(manager.hasSession(sessionId)).toBe(false)
+  })
+
   it('retains all completed Grok response usage on error, without counting a final aggregate twice', () => {
     start('grok')
     emit({ type: 'usage', messageId: 'one', usage: { input_tokens: 10, output_tokens: 2 } })
@@ -229,6 +480,19 @@ describe('global native usage accounting', () => {
     emit({ type: 'error', message: 'upstream failed' })
     close(1)
     expect(getRecordedUsageTotals(sessionId, 'coding_agent')).toMatchObject({ inputTokens: 30, outputTokens: 5 })
+  })
+
+  it.each(['claude-code', 'grok'])('persists measured %s calls when cancelled before a final result', agent => {
+    start(agent)
+    if (agent === 'claude-code') {
+      emit({ type: 'stream_event', event: { type: 'message_start', message: {
+        id: 'finished-call', model: 'actual', usage: { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 20 },
+      } } })
+      emit({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 5 } } })
+    } else emit({ type: 'usage', messageId: 'finished-call', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 20 } })
+    manager.stop(sessionId)
+    close()
+    expect(getRecordedUsageTotals(sessionId, 'coding_agent')).toMatchObject({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 20, apiCalls: 1 })
   })
 
   it('waits for native Codex stdout to drain and retains measured usage on a failed exit', () => {
