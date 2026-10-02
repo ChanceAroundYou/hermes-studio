@@ -44,7 +44,7 @@ vi.mock('@/api/studio/chat', () => ({
   onSessionSettingsUpdated: vi.fn(() => vi.fn()),
 }))
 
-vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default' }))
+vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default' , getBaseUrlValue: () => ''}))
 vi.mock('@/api/studio/download', () => ({ getDownloadUrl: (_path: string, name: string) => `/download/${name}` }))
 vi.mock('@/utils/completion-sound', () => ({ primeCompletionSound: vi.fn(), playCompletionSound: vi.fn() }))
 vi.mock('@/utils/completion-notification', () => ({ showCompletionNotification: vi.fn() }))

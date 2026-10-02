@@ -17,7 +17,7 @@ vi.mock('@/api/studio/chat', () => ({
   onSessionSettingsUpdated: vi.fn(),
   onRunUsageUpdated: vi.fn(),
 }))
-vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default', hasApiKey: () => false }))
+vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default', hasApiKey: () => false, getBaseUrlValue: () => '' }))
 
 const sessionsApi = vi.hoisted(() => ({ fetchSessions: vi.fn(), fetchWorkingSessions: vi.fn() }))
 vi.mock('@/api/studio/sessions', () => ({

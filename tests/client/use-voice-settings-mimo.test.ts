@@ -20,6 +20,7 @@ vi.mock('@/api/studio/tts-settings', () => ({
 
 vi.mock('@/api/client', () => ({
   getActiveProfileName: getActiveProfileNameMock,
+getBaseUrlValue: () => '',
   getStoredUserId: getStoredUserIdMock,
   hasApiKey: hasApiKeyMock,
 }))

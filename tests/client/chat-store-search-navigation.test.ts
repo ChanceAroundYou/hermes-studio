@@ -23,7 +23,7 @@ vi.mock('@/api/studio/chat', () => ({
   onRunUsageUpdated: vi.fn(() => vi.fn()),
   onSessionWorkspaceUpdated: vi.fn(), onSessionSettingsUpdated: vi.fn(),
 }))
-vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default', hasApiKey: () => false }))
+vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default', hasApiKey: () => false, getBaseUrlValue: () => '' }))
 vi.mock('@/utils/completion-sound', () => ({ primeCompletionSound: vi.fn(), playCompletionSound: vi.fn() }))
 vi.mock('@/utils/session-sync', () => ({ subscribeSessionSync: vi.fn(), publishSessionSync: vi.fn() }))
 

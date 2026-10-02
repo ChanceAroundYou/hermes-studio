@@ -8,7 +8,8 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('@/api/studio/tts-settings', () => api)
 vi.mock('@/api/client', () => ({
-  hasApiKey: () => true,
+  getBaseUrlValue: () => '',
+hasApiKey: () => true,
   getStoredUserId: () => 7,
   getActiveProfileName: api.getActiveProfileName,
 }))

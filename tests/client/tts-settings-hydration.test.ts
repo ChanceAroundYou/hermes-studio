@@ -8,7 +8,8 @@ const { hasApiKeyMock, loadServerTtsSettingsMock } = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/client', () => ({
-  hasApiKey: hasApiKeyMock,
+  getBaseUrlValue: () => '',
+hasApiKey: hasApiKeyMock,
 }))
 
 vi.mock('@/composables/useVoiceSettings', () => ({

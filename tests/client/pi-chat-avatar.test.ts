@@ -16,13 +16,16 @@ describe('Pi chat identity', () => {
     expect(source).not.toMatch(/\.msg-avatar\s*\{[^}]*background:/s)
   })
 
-  it('uses the Pi logo in empty state and completion notifications', () => {
+  it('uses the Pi logo in empty state and completion notifications', async () => {
     const avatarHelper = readFileSync('packages/client/src/utils/chat-agent-avatar.ts', 'utf8')
     const chatStore = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
 
     expect(avatarHelper).toContain("pi: { label: 'Pi'")
     expect(avatarHelper).toContain('/coding-agents/pi.svg')
-    expect(chatStore).toContain("if (codingAgentId === 'pi')")
-    expect(chatStore).toContain('/coding-agents/pi.svg')
+    // The store resolves its notification icon through the shared avatar map
+    // rather than keeping a second copy of every path, which is how the
+    // subpath build lost the icons for the newer agents.
+    expect(chatStore).toContain('chatSessionAgentAvatar')
+    expect(chatStore).not.toMatch(/icon:\s*['"][.\/]*coding-agents\//)
   })
 })
