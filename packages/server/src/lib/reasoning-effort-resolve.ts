@@ -16,6 +16,11 @@ import {
   type ReasoningEffort,
 } from './reasoning-effort'
 import { staticCapability } from './reasoning-effort-capabilities'
+import {
+  loadEffortCapabilities,
+  registerEffortCapabilityHooks,
+  saveEffortCapability,
+} from '../modules/studio/repositories/reasoning-effort-capability-store'
 
 /** Observations expire so a provider upgrade can widen support again. */
 const OBSERVED_TTL_MS = 6 * 60 * 60 * 1000
@@ -29,6 +34,43 @@ interface Observation {
 const observed = new Map<string, Observation>()
 /** In-flight probes per key, so a burst of requests makes one attempt. */
 const probes = new Map<string, Promise<string>>()
+/** Pending writes, so a busy deployment does not hit SQLite on every turn. */
+const dirty = new Map<string, number>()
+const FLUSH_DEBOUNCE_MS = 60_000
+
+function scheduleFlush(provider: string, model: string): void {
+  const key = `${provider}::${model}`
+  if (dirty.has(key)) return
+  dirty.set(key, Date.now())
+  const timer = setTimeout(() => {
+    dirty.delete(key)
+    const entry = observed.get(key)
+    if (!entry) return
+    saveEffortCapability(provider, model, [...entry.supported], [...entry.rejected])
+  }, FLUSH_DEBOUNCE_MS)
+  // Never hold the process open for a cache write.
+  timer.unref?.()
+}
+
+function flushNow(provider: string, model: string): void {
+  const key = `${provider}::${model}`
+  dirty.delete(key)
+  const entry = observed.get(key)
+  if (!entry) return
+  saveEffortCapability(provider, model, [...entry.supported], [...entry.rejected])
+}
+
+/** Seed an in-memory entry from a durable row, without marking it dirty. */
+function hydrateEntry(provider: string, model: string, supported: string[], rejected: string[]): void {
+  if (!supported.length && !rejected.length) return
+  const key = `${provider.toLowerCase()}::${model.toLowerCase()}`
+  observed.set(key, {
+    supported: new Set(supported),
+    rejected: new Set(rejected),
+    seenAt: Date.now(),
+  })
+}
+
 
 function keyOf(provider: unknown, model: unknown): string {
   const p = typeof provider === 'string' ? provider.trim().toLowerCase() : ''
@@ -46,8 +88,22 @@ function live(key: string): Observation | undefined {
   return entry
 }
 
+let durableLoaded = false
+
+/**
+ * Pull the durable rows in on first use rather than at boot. The table is a
+ * cache, not a boot dependency, so a database that is not open yet simply means
+ * we learn again from live traffic.
+ */
+function ensureDurableLoaded(): void {
+  if (durableLoaded) return
+  durableLoaded = true
+  loadEffortCapabilities()
+}
+
 /** Layer 2 merged with 1 and 3: the intersection decides. */
 export function capabilityFor(provider: unknown, model: unknown): Capability {
+  ensureDurableLoaded()
   const base = staticCapability(provider, model)
   const entry = live(keyOf(provider, model))
   if (!entry) return base
@@ -77,6 +133,7 @@ export function noteSupported(provider: unknown, model: unknown, effort: unknown
   entry.rejected.delete(normalized)
   entry.seenAt = Date.now()
   observed.set(key, entry)
+  scheduleFlush(String(provider ?? '').toLowerCase(), String(model ?? '').toLowerCase())
 }
 
 export function noteUnsupported(provider: unknown, model: unknown, effort: unknown): void {
@@ -88,11 +145,24 @@ export function noteUnsupported(provider: unknown, model: unknown, effort: unkno
   entry.supported.delete(normalized)
   entry.seenAt = Date.now()
   observed.set(key, entry)
+  scheduleFlush(String(provider ?? '').toLowerCase(), String(model ?? '').toLowerCase())
 }
 
 export function resetEffortObservations(): void {
   observed.clear()
   probes.clear()
+  dirty.clear()
+  durableLoaded = false
+}
+
+/** Re-read the durable table. Call once during boot. */
+export function restoreEffortCapabilities(): number {
+  return loadEffortCapabilities()
+}
+
+/** Force a write for a deployment that just learned something. */
+export function persistEffortNow(provider: unknown, model: unknown): void {
+  flushNow(String(provider ?? '').toLowerCase(), String(model ?? '').toLowerCase())
 }
 
 export interface EffortDecision {
@@ -202,3 +272,5 @@ export async function withReasoningEffortFallback<T>(
 }
 
 export { REASONING_EFFORT_LADDER, ceilingIndex }
+
+registerEffortCapabilityHooks({ hydrate: hydrateEntry, persist: flushNow })
