@@ -45,16 +45,13 @@
 
 ## 已知既有失败（非本轮引入）
 
-server 25 条（2026-10-02 用例名重新核对过；此前记录的 21 条里
-`keeps Codex model selection on the CLI` 已变成下面 4 条 Codex/Claude 启动用例）：
+server 20 条。`coding-agents-launch`(4) 与 `group-chat-member-sync`(1) 已修复：
+那五条断言把本地端口写死成 6060，而本 fork 默认监听 8648，代码本身是对的。
 
-- `agent-bridge-python-concurrency`(2)
-- `coding-agents-launch`(4)：Claude scoped settings、Codex Chat Completions /
-  Responses / Anthropic Messages 三种 provider 指向本地 Responses 代理
-- `group-chat-member-sync`(1)
-- `hermes-web-ui-mcp`(2)
-- `profiles-routes`(2)
-- `sessions-routes`(14)
+剩余构成：
+
+- `agent-bridge-python-concurrency`(2)：Python bridge 并发，需真实 bridge 环境
+- `hermes-web-ui-mcp`(2)、`profiles-routes`(2)、`sessions-routes`(14)：模块级 mock 边界
 
 client 全绿（286 文件 / 1947 用例）。
 
