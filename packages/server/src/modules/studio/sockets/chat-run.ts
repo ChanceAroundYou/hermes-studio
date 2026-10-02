@@ -93,6 +93,8 @@ import {
   type MobileHealthResponse,
   type MobileHealthRequest,
 } from '../services/chat-run/mobile-health'
+import { decideReasoningEffort, noteUnsupported } from '../../../lib/reasoning-effort-resolve'
+import { isReasoningEffortUnsupported } from '../../../lib/reasoning-effort'
 
 type AgentBridgeBackgroundNotification = any
 type AgentBridgeBackgroundSession = any
@@ -1053,6 +1055,7 @@ export class ChatRunSocket {
           await recordSessionUploadAttachments(data.session_id, runProfile, data.input, { allowPendingSession: true })
         }
       } catch (err) {
+        rememberEffortRejection(data, err)
         const payload = {
           event: 'run.failed',
           session_id: data.session_id,
@@ -1153,7 +1156,9 @@ export class ChatRunSocket {
             mcpServers: data.mcpServers,
             mcp_servers: data.mcp_servers,
             commandPassthrough: data.allow_command_passthrough,
-            reasoningEffort: data.reasoning_effort,
+            // The Hermes Agent owns this provider call, so a level it rejects cannot be
+            // retried here. Resolve it down before handing it over instead.
+            reasoningEffort: resolveRunEffort(data, runProfile),
             originSocketId: socket.id,
             authorize: shared ? async () => { await refreshSessionShare(shared, 'input', data.session_id) } : undefined,
             pushTargetId,
@@ -1192,6 +1197,7 @@ export class ChatRunSocket {
       try {
         await this.handleRun(socket, data, runProfile, false, undefined, pushTargetId)
       } catch (err) {
+        rememberEffortRejection(data, err)
         const payload = {
           event: 'run.failed',
           session_id: data.session_id,
@@ -3451,4 +3457,36 @@ export class ChatRunSocket {
       logger.debug(err, '[chat-run-socket] failed to update pet state')
     }
   }
+}
+
+/**
+ * Resolve the requested reasoning_effort for a chat run. Returns undefined when
+ * the deployment takes no level we know works, so the field is simply absent
+ * rather than carrying a value that would fail the turn.
+ */
+function resolveRunEffort(data: { provider?: string; model?: string; reasoning_effort?: string }, profile: string): string | undefined {
+  const requested = typeof data.reasoning_effort === 'string' ? data.reasoning_effort.trim() : ''
+  if (!requested) return undefined
+  const decision = decideReasoningEffort(data.provider, data.model, requested)
+  if (decision.adjusted) {
+    console.warn(
+      `[reasoning-effort] ${decision.requested} -> ${decision.applied || '(none)'}`
+      + ` provider=${data.provider ?? ''} model=${data.model ?? ''} profile=${profile}`
+      + ` reason=${decision.reason ?? ''}`,
+    )
+  }
+  return decision.applied || undefined
+}
+
+/**
+ * A rejected level is the only signal this path gets, so remember it: the next
+ * run for the same provider/model starts below it instead of failing again.
+ */
+export function rememberEffortRejection(data: { provider?: string; model?: string; reasoning_effort?: string }, error: unknown): void {
+  const requested = typeof data.reasoning_effort === 'string' ? data.reasoning_effort.trim() : ''
+  if (!requested) return
+  // Reuse the shared matcher: it already walks the nested payloads providers
+  // use, which String(error) flattens to "[object Object]".
+  if (!isReasoningEffortUnsupported(error)) return
+  noteUnsupported(data.provider, data.model, requested)
 }

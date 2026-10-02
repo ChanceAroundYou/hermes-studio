@@ -376,10 +376,14 @@ print(json.dumps({
 
   it('preserves reasoning and api mode across the run queue', () => {
     const source = readFileSync('packages/server/src/modules/studio/sockets/chat-run.ts', 'utf8')
-    expect(source).toContain('reasoningEffort: data.reasoning_effort')
+    // The queued value still reaches the bridge, now routed through the
+    // capability resolver because the Hermes Agent owns the provider call and a
+    // rejected level cannot be retried from here.
+    expect(source).toContain('reasoningEffort: resolveRunEffort(data, runProfile)')
     expect(source).toContain('apiMode: data.apiMode')
     expect(source).toContain('reasoning_effort: next.reasoningEffort')
     expect(source).toContain('apiMode: next.apiMode')
+    expect(source).toContain('rememberEffortRejection(data, err)')
   })
 
 })
