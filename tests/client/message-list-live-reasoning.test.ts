@@ -116,7 +116,7 @@ describe('MessageList live reasoning', () => {
     wrapper.unmount()
   })
 
-  it('renders live reasoning between the thinking animation and tool area instead of flashing a message bubble', async () => {
+  it('renders live reasoning above the thinking animation instead of flashing a message bubble', async () => {
     const wrapper = mountMessageList([
       { id: 'user-1', role: 'user', content: 'Think about this', timestamp: 1 },
       {
@@ -134,9 +134,11 @@ describe('MessageList live reasoning', () => {
     expect(wrapper.get('.thinking-status').text()).toContain('chat.thinkingInProgress')
     expect(wrapper.get('.live-reasoning-detail').text()).toContain('Working through the answer')
 
+    // The reasoning panel reads above the avatar row so it can no longer push
+    // that row around; the whole run block sits at the end of the transcript.
     const status = wrapper.get('.thinking-status').element
     const reasoning = wrapper.get('.live-reasoning-detail').element
-    expect(status.compareDocumentPosition(reasoning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(reasoning.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('keeps the complete reasoning ticker text without inserting an ellipsis', async () => {

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const source = readFileSync('packages/client/src/components/hermes/chat/MessageList.vue', 'utf8')
+const liveReasoning = readFileSync('packages/client/src/components/hermes/chat/LiveReasoningStatus.vue', 'utf8')
 
 function rule(name: string): string {
   const start = source.indexOf(`\n.${name} {`)
@@ -51,5 +52,13 @@ describe('run indicator keeps no reserved gap', () => {
     const item = topLevelDeclarations(rule('tool-call-item'))
     expect(item).not.toMatch(/max-height:\s*26px/)
     expect(item).not.toMatch(/flex:\s*1 1 0/)
+  })
+
+  it('keeps the reasoning panel above the avatar row', () => {
+    const panel = liveReasoning.indexOf('class="live-reasoning-detail"')
+    const header = liveReasoning.indexOf('class="thinking-status"')
+    expect(panel).toBeGreaterThan(-1)
+    expect(header).toBeGreaterThan(-1)
+    expect(panel).toBeLessThan(header)
   })
 })

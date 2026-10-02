@@ -82,6 +82,18 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
 
 <template>
   <div class="live-reasoning-status">
+    <div
+      v-if="reasoningText"
+      class="live-reasoning-detail"
+      :class="{ collapsed: !expanded }"
+      :data-reasoning-id="reasoningId"
+    >
+      <div class="live-reasoning-label">
+        <span aria-hidden="true">💭</span>
+        <span>{{ t('chat.thinkingLabel') }}</span>
+      </div>
+      <div v-show="expanded" ref="reasoningBody" class="live-reasoning-body">{{ reasoningText }}</div>
+    </div>
     <div class="thinking-status">
       <img
         :src="isEkko ? thinkingImage : agent.src"
@@ -115,18 +127,6 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
         </svg>
         <span>{{ expanded ? t('common.collapse') : t('common.expand') }}</span>
       </button>
-    </div>
-    <div
-      v-if="reasoningText"
-      class="live-reasoning-detail"
-      :class="{ collapsed: !expanded }"
-      :data-reasoning-id="reasoningId"
-    >
-      <div class="live-reasoning-label">
-        <span aria-hidden="true">💭</span>
-        <span>{{ t('chat.thinkingLabel') }}</span>
-      </div>
-      <div v-show="expanded" ref="reasoningBody" class="live-reasoning-body">{{ reasoningText }}</div>
     </div>
   </div>
 </template>
