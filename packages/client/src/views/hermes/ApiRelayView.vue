@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { getBaseUrlValue } from '@/api/client'
+const relayLogoSrc = `${getBaseUrlValue()}/relay-logo.png`
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NButton } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -51,7 +53,7 @@ onBeforeUnmount(() => { requestController?.abort() })
           <div class="api-relay-brand">
             <img
               class="api-relay-logo"
-              src="/relay-logo.png"
+              :src="relayLogoSrc"
               width="54"
               height="54"
               alt=""

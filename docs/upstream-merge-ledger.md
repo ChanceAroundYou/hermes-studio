@@ -24,6 +24,10 @@
 | `3a2475438` #3247 抽屉与工作区选择器 | `e8d3e81d8` | 取上游 UI 重构，保留 ours 收藏快捷行与长按手势 |
 | `4b7220370` #3253 用量计价选择 | `e62e81864` | 零冲突 |
 | `f918e0fb4` #3244 Grok roles | `b596c63bb` | 零冲突 |
+| `2c27ee492` #3262 设备连接图标 | `54f029ecc` | 零冲突 |
+| `8564948c5` #3260 Claude stdout 排空 | `ed2aac251` | 零冲突 |
+| `354894f81` #3257 API relay 合作页 | `d74662e37` | `AppConnectionsPanel.vue` 冲突：保留 `${getBaseUrlValue()}/logo.png` |
+| 本轮图标路径补前缀 | （未提交） | #3257 又引入 5 处裸路径，同批修掉 |
 | （配套测试修复） | `25741c477` | #3246 新增 socket 订阅，6 个 vi.mock 需补 onRunUsageUpdated |
 
 ## fork 保留下来的定制（合并时逐项确认）
@@ -41,7 +45,16 @@
 
 ## 已知既有失败（非本轮引入）
 
-server 21 条：agent-bridge-python-concurrency(2)、coding-agents-launch（Codex 配置）、
-hermes-web-ui-mcp(2)、profiles-routes(2)、sessions-routes(14)。
+server 25 条（2026-10-02 用例名重新核对过；此前记录的 21 条里
+`keeps Codex model selection on the CLI` 已变成下面 4 条 Codex/Claude 启动用例）：
 
-client 全绿（284 文件 / 1942 用例）。
+- `agent-bridge-python-concurrency`(2)
+- `coding-agents-launch`(4)：Claude scoped settings、Codex Chat Completions /
+  Responses / Anthropic Messages 三种 provider 指向本地 Responses 代理
+- `group-chat-member-sync`(1)
+- `hermes-web-ui-mcp`(2)
+- `profiles-routes`(2)
+- `sessions-routes`(14)
+
+client 全绿（286 文件 / 1947 用例）。
+

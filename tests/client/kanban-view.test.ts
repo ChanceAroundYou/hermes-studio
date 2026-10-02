@@ -42,6 +42,20 @@ const profilesState = vi.hoisted(() => ({
 }))
 
 vi.mock('vue-router', () => ({
+    createRouter: () => ({
+      install: () => {},
+      beforeEach: () => {},
+      afterEach: () => {},
+      addRoute: () => {},
+      hasRoute: () => false,
+      getRoutes: () => [],
+      isReady: () => Promise.resolve(),
+      resolve: () => ({ href: '', fullPath: '', path: '', query: {}, params: {} }),
+      push: () => Promise.resolve(),
+      replace: () => Promise.resolve(),
+    }),
+    createWebHistory: () => ({}),
+    createWebHashHistory: () => ({}),
   useRoute: () => routeState,
   useRouter: () => ({ replace: routerReplace }),
 }))

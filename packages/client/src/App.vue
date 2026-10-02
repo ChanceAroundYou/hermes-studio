@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { getBaseUrlValue } from '@/api/client'
+const logoSrc = `${getBaseUrlValue()}/logo.png`
 import {
   computed,
   defineAsyncComponent,
@@ -369,7 +371,7 @@ useKeyboard();
                   @click="handleMobileMenuClick"
                 >
                   <img
-                    src="/logo.png"
+                    :src="logoSrc"
                     alt="Menu"
                     style="width: 24px; height: 24px"
                   />
