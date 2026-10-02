@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import thinkingImage from '@/assets/thinking.gif'
+import { getBaseUrlValue } from '@/api/client'
 import type { ChatAgentAvatar } from '@/utils/chat-agent-avatar'
 
 const settingsStore = useSettingsStore()
@@ -12,7 +13,7 @@ const props = withDefaults(defineProps<{
   elapsed: string
   agent?: ChatAgentAvatar
 }>(), {
-  agent: () => ({ label: 'Hermes', src: '/coding-agents/hermes.png' }),
+  agent: () => ({ label: 'Hermes', src: `${getBaseUrlValue()}/coding-agents/hermes.png` }),
 })
 const isEkko = computed(() => props.agent.label === 'Ekko')
 

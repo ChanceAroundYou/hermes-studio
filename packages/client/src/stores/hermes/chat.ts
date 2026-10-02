@@ -1,5 +1,6 @@
 import { normalizeRunUsage, type RunUsageSummary } from '@/utils/run-usage'
 import { mergeTaskPlanMessages, type TaskPlanSnapshot } from '@/utils/task-plan'
+import { chatSessionAgentAvatar } from '@/utils/chat-agent-avatar'
 import {connectChatRun, startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, onSessionSettingsUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport, onRunUsageUpdated} from '@/api/studio/chat'
 import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchWorkingSessions, fetchSessions, type RunState, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/studio/sessions'
 import { getActiveProfileName, getBaseUrlValue } from '@/api/client'
@@ -4152,30 +4153,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function completionNotificationAgent(session: Session): { icon: string } {
+    // Reuse the shared avatar map: a second copy of these paths is how the
+    // subpath build ended up with icon 404s for the newer agents.
     const codingAgentId = session.codingAgentId || agentToCodingAgentId(session.agent)
-    if (codingAgentId === 'codex') {
-      return { icon: './coding-agents/codex-openai.png' }
-    }
-    if (codingAgentId === 'claude-code') {
-      return { icon: './coding-agents/claude-code.svg' }
-    }
-    if (codingAgentId === 'pi') {
-      return { icon: './coding-agents/pi.svg' }
-    }
-    if (codingAgentId === 'grok') {
-      return { icon: '/coding-agents/grok.svg' }
-    }
-    if (codingAgentId === 'dsh') return { icon: '/coding-agents/deepseek.svg' }
-    if (codingAgentId === 'opencode') {
-      return { icon: '/coding-agents/opencode.png' }
-    }
-    if (codingAgentId === 'cursor') {
-      return { icon: '/coding-agents/cursor-logo.png' }
-    }
-    if (codingAgentId === 'ekko-agent') {
-      return { icon: './coding-agents/ekko-agent.png' }
-    }
-    return { icon: './coding-agents/hermes.png' }
+    return { icon: chatSessionAgentAvatar({ codingAgentId }).src }
   }
 
   function completionNotificationBody(session: Session, message?: Message): string {
