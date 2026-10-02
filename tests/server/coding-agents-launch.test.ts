@@ -32,6 +32,11 @@ import {
 import { codingAgentRunManager } from '../../packages/server/src/modules/coding-agents/services/runtime/run-manager'
 import { configureProfileConfig } from '../../packages/server/src/modules/studio/public/profile-config'
 import * as providerRuntime from '../../packages/server/src/modules/studio/public/provider-runtime'
+import { config } from '../../packages/server/src/modules/studio/public/config'
+
+// The proxy points Codex at this very process, so the expectation has to follow
+// whatever PORT the instance runs on rather than a hard-coded default.
+const LOCAL_PROXY = `http://127.0.0.1:${config.port}/api/codex-proxy/`
 import { upsertCodingAgentMcpServer } from '../../packages/server/src/modules/coding-agents/services/mcp-manager'
 import { getCodingAgentManagedMcpServerConfigs } from '../../packages/server/src/modules/coding-agents/services'
 
@@ -1800,7 +1805,7 @@ describe('coding agent launch preparation', () => {
       command: process.execPath,
       args: [join(process.cwd(), 'bin/ekko-studio-mcp.mjs'), 'api'],
       env: {
-        HERMES_WEB_UI_URL: 'http://127.0.0.1:6060',
+        HERMES_WEB_UI_URL: `http://127.0.0.1:${config.port}`,
         HERMES_WEB_UI_HOME: home,
         HERMES_WEBUI_STATE_DIR: home,
         HERMES_WEB_UI_PROFILE: 'default',
@@ -2477,7 +2482,7 @@ describe('coding agent launch preparation', () => {
     })
 
     const config = readFileSync(join(result.rootDir, 'config.toml'), 'utf-8')
-    expect(config).toContain(`base_url = "http://127.0.0.1:6060/api/codex-proxy/`)
+    expect(config).toContain(`base_url = "${LOCAL_PROXY}`)
     expect(config).toContain('wire_api = "responses"')
     expect(config).toContain('requires_openai_auth = false')
     expect(config).toMatch(/experimental_bearer_token = "hwui_[^"]+"/)
@@ -2564,7 +2569,7 @@ describe('coding agent launch preparation', () => {
     })
 
     const config = readFileSync(join(result.rootDir, 'config.toml'), 'utf-8')
-    expect(config).toContain(`base_url = "http://127.0.0.1:6060/api/codex-proxy/`)
+    expect(config).toContain(`base_url = "${LOCAL_PROXY}`)
     expect(config).toMatch(/experimental_bearer_token = "hwui_[^"]+"/)
     expect(config).not.toContain('base_url = "https://api.openai.com/v1"')
     expect(dirname(dirname(result.rootDir))).toBe(join(home, 'coding-agent', 'model', 'default', 'openai-api', 'codex'))
@@ -2583,7 +2588,7 @@ describe('coding agent launch preparation', () => {
     })
 
     const config = readFileSync(join(result.rootDir, 'config.toml'), 'utf-8')
-    expect(config).toContain(`base_url = "http://127.0.0.1:6060/api/codex-proxy/`)
+    expect(config).toContain(`base_url = "${LOCAL_PROXY}`)
     expect(config).toContain('wire_api = "responses"')
     expect(config).toContain('requires_openai_auth = false')
     expect(config).toMatch(/experimental_bearer_token = "hwui_[^"]+"/)

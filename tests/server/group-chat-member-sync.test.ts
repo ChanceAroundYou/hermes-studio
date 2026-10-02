@@ -37,6 +37,7 @@ import { GroupChatServer } from '../../packages/server/src/modules/studio/socket
 import type { GroupRoomSummaryService } from '../../packages/server/src/modules/studio/services/group-chat/room-summary'
 import { canManageGroupChatRoom, isGroupChatRoomOwner } from '../../packages/server/src/modules/studio/services/group-chat/access'
 import { groupChatRoutes, setGroupChatServer } from '../../packages/server/src/modules/studio/routes/group-chat'
+import { config } from '../../packages/server/src/modules/studio/public/config'
 
 function routeHandler(path: string, method: string) {
   const layer = (groupChatRoutes as any).stack.find((item: any) => item.path === path && item.methods.includes(method))
@@ -334,7 +335,7 @@ describe('Group Chat member/agent identity sync', () => {
 
     expect(client.agentId).toBe('agent-stable-1')
     expect(mockIo).toHaveBeenCalledWith(
-      'http://127.0.0.1:6060/group-chat',
+      `http://127.0.0.1:${config.port}/group-chat`,
       expect.objectContaining({
         auth: expect.objectContaining({
           token: 'test-token',
