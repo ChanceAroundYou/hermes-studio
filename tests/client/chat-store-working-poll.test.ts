@@ -15,6 +15,7 @@ vi.mock('@/api/studio/chat', () => ({
   onPeerUserMessage: vi.fn(), onSessionCommand: vi.fn(),
   onSessionTitleUpdated: vi.fn(), onSessionWorkspaceUpdated: vi.fn(),
   onSessionSettingsUpdated: vi.fn(),
+  onRunUsageUpdated: vi.fn(),
 }))
 vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default', hasApiKey: () => false }))
 
