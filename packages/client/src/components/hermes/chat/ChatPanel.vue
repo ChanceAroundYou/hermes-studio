@@ -4689,5 +4689,6 @@ async function handleSessionModelCustomSubmit() {
     padding: var(--app-menu-btn-top) 12px 16px
       calc(var(--app-menu-btn-inset) + var(--app-menu-btn-size) + 8px);
   }
+}
 
 </style>

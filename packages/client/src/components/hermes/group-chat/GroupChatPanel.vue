@@ -40,11 +40,12 @@ import GroupMessageList from './GroupMessageList.vue'
 import GroupChatInput from './GroupChatInput.vue'
 import GroupRoomAgentAvatar from './GroupRoomAgentAvatar.vue'
 import MessageQueueFloatPanel from '@/components/hermes/chat/MessageQueueFloatPanel.vue'
-import PendingInteractionCountdown from '@/components/hermes/chat/PendingInteractionCountdown.vue'
 import FolderPicker from '@/components/hermes/chat/FolderPicker.vue'
 import ProfileAvatar from '@/components/hermes/profiles/ProfileAvatar.vue'
 import PageSidebarNav from '@/components/layout/PageSidebarNav.vue'
 import PageSidebarFooter from "@/components/layout/PageSidebarFooter.vue";
+import PendingInteractionCard from '@/components/hermes/chat/PendingInteractionCard.vue'
+import type { PendingCardAction } from '@/utils/hermes/pending-card-action'
 import { copyToClipboard } from '@/utils/clipboard'
 import type { Attachment } from '@/stores/hermes/chat'
 import type {
@@ -2077,12 +2078,21 @@ async function handleInterruptAgent(agent: RoomAgent) {
     }
 }
 
-async function handleApproval(choice: 'once' | 'session' | 'always' | 'deny') {
+async function handleApproval(choice: string) {
     try {
-        await store.respondApproval(choice)
+        await store.respondApproval(choice as 'once' | 'session' | 'always' | 'deny')
     } catch (err: any) {
         message.error(err.message || t('common.saveFailed'))
     }
+}
+
+const agentPairingActions = computed<PendingCardAction[]>(() => [
+    { key: 'approve', label: t('groupChat.approveAgent'), variant: 'primary', loading: isDecidingAgentPairing.value },
+    { key: 'reject', label: t('groupChat.rejectAgent'), variant: 'error', disabled: isDecidingAgentPairing.value },
+])
+
+function handleAgentPairingAction(key: string) {
+    void handleAgentPairingDecision(key === 'approve')
 }
 
 async function handleClarify(response?: string) {
@@ -2101,11 +2111,6 @@ async function handleClarify(response?: string) {
     }
 }
 
-function handleClarifyKeydown(event: KeyboardEvent) {
-    if (visibleClarify.value?.responseMode === 'editor') return
-    event.preventDefault()
-    void handleClarify()
-}
 
 </script>
 
@@ -2474,111 +2479,47 @@ function handleClarifyKeydown(event: KeyboardEvent) {
                             @adjust-handoff-settings="handleOpenRoomSettings"
                         />
                         <Transition name="approval-float">
-                            <div v-if="visibleAgentPairing" class="approval-float-panel agent-pairing-float-panel">
-                                <div class="approval-float-header">
-                                    <span class="approval-float-icon" aria-hidden="true">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <circle cx="12" cy="8" r="4" />
-                                            <path d="M4 21a8 8 0 0 1 16 0M19 8v6M16 11h6" />
-                                        </svg>
-                                    </span>
-                                    <span>{{ t('groupChat.agentPairingRequestTitle') }}</span>
-                                </div>
-                                <div class="approval-float-title">
-                                    @{{ visibleAgentPairing.agent.name }}
-                                </div>
-                                <div class="approval-float-desc">
-                                    {{ t('groupChat.agentPairingRequestDescription', {
-                                        user: visibleAgentPairing.ownerName,
-                                        origin: visibleAgentPairing.targetOrigin,
-                                    }) }}
-                                </div>
-                                <div class="approval-float-actions">
-                                    <NButton
-                                        size="small"
-                                        type="primary"
-                                        :loading="isDecidingAgentPairing"
-                                        @click="handleAgentPairingDecision(true)"
-                                    >
-                                        {{ t('groupChat.approveAgent') }}
-                                    </NButton>
-                                    <NButton
-                                        size="small"
-                                        type="error"
-                                        secondary
-                                        :disabled="isDecidingAgentPairing"
-                                        @click="handleAgentPairingDecision(false)"
-                                    >
-                                        {{ t('groupChat.rejectAgent') }}
-                                    </NButton>
-                                </div>
-                            </div>
+                            <PendingInteractionCard
+                                v-if="visibleAgentPairing"
+                                class="agent-pairing-float-panel"
+                                kind="custom"
+                                icon="pairing"
+                                :kicker="t('groupChat.agentPairingRequestTitle')"
+                                :title="`@${visibleAgentPairing.agent.name}`"
+                                :description="t('groupChat.agentPairingRequestDescription', {
+                                    user: visibleAgentPairing.ownerName,
+                                    origin: visibleAgentPairing.targetOrigin,
+                                })"
+                                :actions="agentPairingActions"
+                                @select="handleAgentPairingAction"
+                            />
                         </Transition>
                         <Transition name="approval-float">
-                            <div v-if="visibleApproval" class="approval-float-panel">
-                                <div class="approval-float-header">
-                                    <span class="approval-float-icon" aria-hidden="true">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
-                                            <path d="m9 12 2 2 4-4" />
-                                        </svg>
-                                    </span>
-                                    <span>{{ t('chat.approvalKicker') }}</span>
-                                    <PendingInteractionCountdown :deadline="visibleApproval.countdownDeadline" />
-                                </div>
-                                <div class="approval-float-title">
-                                    <span v-if="visibleApproval.agentName">@{{ visibleApproval.agentName }} · </span>{{ t('chat.approvalTitle') }}
-                                </div>
-                                <div class="approval-float-desc">{{ visibleApproval.description }}</div>
-                                <code class="approval-float-command">{{ visibleApproval.command }}</code>
-                                <div class="approval-float-actions">
-                                    <NButton v-if="visibleApproval.isMemoryWrite" size="small" type="primary" @click="handleApproval('once')">
-                                        {{ t('chat.approvalAgree') }}
-                                    </NButton>
-                                    <NButton v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('once')" size="small" type="primary" @click="handleApproval('once')">
-                                        {{ t('chat.approvalAllowOnce') }}
-                                    </NButton>
-                                    <NButton v-if="!visibleApproval.isMemoryWrite && visibleApproval.choices.includes('always')" size="small" secondary @click="handleApproval('always')">
-                                        {{ t('chat.approvalAlways') }}
-                                    </NButton>
-                                    <NButton v-if="visibleApproval.isMemoryWrite || visibleApproval.choices.includes('deny')" size="small" type="error" secondary @click="handleApproval('deny')">
-                                        {{ t('chat.approvalDeny') }}
-                                    </NButton>
-                                </div>
-                            </div>
+                            <PendingInteractionCard
+                                v-if="visibleApproval"
+                                kind="approval"
+                                :title-prefix="visibleApproval.agentName"
+                                :approval-choices="visibleApproval.choices"
+                                :is-memory-write="visibleApproval.isMemoryWrite"
+                                :description="visibleApproval.description"
+                                :command="visibleApproval.command"
+                                :countdown-deadline="visibleApproval.countdownDeadline"
+                                @select="handleApproval"
+                            />
                         </Transition>
                         <Transition name="approval-float">
-                            <div v-if="!visibleApproval && visibleClarify" class="approval-float-panel">
-                                <div class="approval-float-header">
-                                    <span class="approval-float-icon" aria-hidden="true">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <circle cx="12" cy="12" r="10" />
-                                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                                            <line x1="12" y1="17" x2="12.01" y2="17" />
-                                        </svg>
-                                    </span>
-                                    <span>{{ t('chat.clarifyKicker') }}</span>
-                                    <PendingInteractionCountdown :deadline="visibleClarify.countdownDeadline" />
-                                </div>
-                                <div class="approval-float-title">
-                                    <span v-if="visibleClarify.agentName">@{{ visibleClarify.agentName }} · </span>{{ t('chat.clarifyTitle') }}
-                                </div>
-                                <div class="approval-float-desc">{{ visibleClarify.question }}</div>
-                                <div v-if="visibleClarify.choices?.length" class="approval-float-actions">
-                                    <NButton v-for="choice in visibleClarify.choices" :key="choice" size="small" type="primary" @click="handleClarify(choice)">
-                                        {{ choice }}
-                                    </NButton>
-                                    <NButton size="small" type="error" secondary @click="handleClarify('')">
-                                        {{ t('chat.clarifyDismiss') }}
-                                    </NButton>
-                                </div>
-                                <div class="clarify-float-input-row">
-                                    <NInput v-model:value="clarifyResponse" size="small" :type="visibleClarify.responseMode === 'editor' ? 'textarea' : 'text'" :placeholder="t('chat.clarifyPlaceholder')" @keydown.enter="handleClarifyKeydown" />
-                                    <NButton size="small" type="primary" :disabled="visibleClarify.responseMode !== 'editor' && !clarifyResponse.trim()" @click="handleClarify()">
-                                        {{ t('chat.clarifySubmit') }}
-                                    </NButton>
-                                </div>
-                            </div>
+                            <PendingInteractionCard
+                                v-if="!visibleApproval && visibleClarify"
+                                v-model="clarifyResponse"
+                                :question="visibleClarify.question"
+                                :choices="visibleClarify.choices"
+                                :response-mode="visibleClarify.responseMode"
+                                :countdown-deadline="visibleClarify.countdownDeadline"
+                                :agent-name="visibleClarify.agentName"
+                                @select="handleClarify"
+                                @submit="handleClarify"
+                                @dismiss="handleClarify('')"
+                            />
                         </Transition>
                     </div>
                     <Transition name="summary-inline">
