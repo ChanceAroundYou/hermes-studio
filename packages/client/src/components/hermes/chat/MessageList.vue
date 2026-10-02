@@ -729,12 +729,6 @@ defineExpose({
       <template #after>
         <Transition name="fade">
         <div v-if="isRunIndicatorActive" class="streaming-indicator">
-          <LiveReasoningStatus
-            :agent="assistantAgent"
-            :reasoning="liveReasoningDetail?.reasoning"
-            :reasoning-id="liveReasoningDetail?.messageId"
-            :elapsed="formattedThinkingElapsed"
-          />
           <div v-if="visibleToolCalls.length > 0 || chatStore.compressionState || chatStore.abortState" class="tool-calls-panel">
             <!-- Abort indicator -->
             <div v-if="chatStore.abortState" class="tool-call-item compression-item">
@@ -898,6 +892,12 @@ defineExpose({
               </svg>
             </div>
           </div>
+          <LiveReasoningStatus
+            :agent="assistantAgent"
+            :reasoning="liveReasoningDetail?.reasoning"
+            :reasoning-id="liveReasoningDetail?.messageId"
+            :elapsed="formattedThinkingElapsed"
+          />
         </div>
         </Transition>
       </template>
@@ -1586,36 +1586,42 @@ defineExpose({
 }
 
 .streaming-indicator {
+  /* Height follows the content. The fixed 120px reserved room for a reply that
+     had not arrived yet, so a finished turn left the thinking header stranded
+     above a large void. Restored from 79a7ae8a2, lost when #3232 replaced this
+     file wholesale. */
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  flex: 0 0 120px;
-  gap: 8px;
+  flex: 0 0 auto;
+  gap: 0;
   width: 100%;
   max-width: 100%;
-  height: 120px;
-  min-height: 120px;
-  max-height: 120px;
+  height: auto;
+  min-height: 0;
+  max-height: none;
   min-width: 0;
-  padding: 4px;
+  padding: 4px 4px 0 4px;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: visible;
 }
 
+/* Sits above the thinking header now, so it grows downward with the run instead
+   of clipping a tool trace that outgrows one row. */
 .tool-calls-panel {
   display: flex;
-  flex: 0 0 26px;
+  flex: 0 0 auto;
   flex-direction: row;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: stretch;
   gap: 4px;
-  width: 520px;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
-  height: 26px;
-  min-height: 26px;
-  max-height: 26px;
-  overflow: hidden;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
   scrollbar-width: none;
   -ms-overflow-style: none;
   &::-webkit-scrollbar {
@@ -1625,14 +1631,16 @@ defineExpose({
 
 .tool-call-item {
   display: flex;
-  flex: 1 1 0;
+  /* Chips wrap now, so each one keeps its own natural width instead of sharing
+     one 26px row that clipped the longer traces. */
+  flex: 0 1 auto;
   align-items: center;
   gap: 6px;
   width: auto;
   max-width: 100%;
-  height: 26px;
+  height: auto;
   min-height: 26px;
-  max-height: 26px;
+  max-height: none;
   min-width: 0;
   box-sizing: border-box;
   overflow: hidden;
