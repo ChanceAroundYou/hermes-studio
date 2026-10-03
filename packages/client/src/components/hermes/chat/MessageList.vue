@@ -737,9 +737,11 @@ defineExpose({
                     ? chatStore.abortState.timedOut
                       ? (chatStore.abortState.message || 'Still stopping... new messages will be queued')
                       : 'Pausing... waiting for the run to stop and sync'
-                    : chatStore.abortState.synced
-                      ? 'Paused and synced'
-                      : 'Paused'
+                    : chatStore.abortState.error
+                      ? chatStore.abortState.error
+                      : chatStore.abortState.synced
+                        ? 'Paused and synced'
+                        : 'Paused'
                 }}
               </span>
               <span
@@ -1439,8 +1441,11 @@ defineExpose({
   max-height: none;
   min-width: 0;
   /* No trailing padding: the row gap now stops at the last row, so a run block
-     would otherwise sit one gap further from the composer than a plain message. */
-  padding: 4px 4px 0 4px;
+     would otherwise sit one gap further from the composer than a plain message.
+     No horizontal padding either — a message row has none, so 4px per side is
+     what made the thinking row and its reasoning box 8px narrower than the
+     column they sit in. */
+  padding: 4px 0 0;
   box-sizing: border-box;
   overflow: visible;
 }

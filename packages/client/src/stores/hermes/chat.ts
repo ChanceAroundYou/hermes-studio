@@ -555,6 +555,12 @@ interface AbortState {
   error?: string
 }
 
+// How long to wait for abort.completed / abort.timeout before concluding the
+// stop request was lost. Generous enough for a slow agent, short enough that a
+// lost request does not leave the stop button dead for the rest of the run.
+const ABORT_WATCHDOG_MS = 8000
+const STOP_UNCONFIRMED_MESSAGE = 'Stop was not confirmed by the run. Press stop again.'
+
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
 }
@@ -1539,7 +1545,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<string | null>(null)
   const focusMessageId = ref<string | null>(null)
-  const streamStates = ref<Map<string, { abort: () => void }>>(new Map())
+  const streamStates = ref<Map<string, { abort: () => void | boolean }>>(new Map())
   /** sessionId → server-reported isWorking status */
   const serverWorking = ref<Set<string>>(new Set())
   /** Authoritative live delegation counts, never inferred from transcript history. */
@@ -1847,6 +1853,7 @@ export const useChatStore = defineStore('chat', () => {
     serverWorking.value = new Set()
     pendingForkCommands.value = new Set()
     workspaceRunChangesBySession.value = new Map()
+    abortWatchdogs.clear()
     abortStates.value = new Map()
     sessionsLoaded.value = false
     clearActiveSession()
@@ -2029,9 +2036,32 @@ export const useChatStore = defineStore('chat', () => {
   // Abort state is scoped per session because background sockets remain active
   // while another conversation is selected.
   const abortStates = ref<Map<string, AbortState>>(new Map())
+  const abortWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function clearAbortWatchdog(sessionId: string) {
+    const timer = abortWatchdogs.get(sessionId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    abortWatchdogs.delete(sessionId)
+  }
 
   function setAbortState(sessionId: string | null | undefined, state: AbortState | null) {
     if (!sessionId) return
+    clearAbortWatchdog(sessionId)
+    if (state?.aborting) {
+      abortWatchdogs.set(
+        sessionId,
+        setTimeout(() => {
+          abortWatchdogs.delete(sessionId)
+          if (!abortStates.value.get(sessionId)?.aborting) return
+          setAbortState(sessionId, {
+            aborting: false,
+            synced: false,
+            error: STOP_UNCONFIRMED_MESSAGE,
+          })
+        }, ABORT_WATCHDOG_MS),
+      )
+    }
     const next = new Map(abortStates.value)
     if (state) next.set(sessionId, state)
     else next.delete(sessionId)
@@ -5409,9 +5439,7 @@ export const useChatStore = defineStore('chat', () => {
     const ensureAbortHandle = () => {
       if (streamStates.value.has(sid)) return
       streamStates.value.set(sid, {
-        abort: () => {
-          getChatRunSocket(runtimeTransport())?.emit('abort', { session_id: sid })
-        },
+        abort: () => requestRunAbort(sid),
       })
     }
 
@@ -6063,30 +6091,38 @@ export const useChatStore = defineStore('chat', () => {
     }
   })
 
+  /**
+   * Ask the server to stop. Returns false only when the request provably could
+   * not leave this tab; a `void` from a legacy abort handle counts as sent, so a
+   * stubbed handle cannot fake a failure.
+   */
+  function requestRunAbort(sid: string): boolean {
+    const ctrl = streamStates.value.get(sid)
+    if (ctrl) return ctrl.abort() !== false
+    const socket = getChatRunSocket(runtimeTransport())
+    if (!socket || !socket.connected) return false
+    socket.emit('abort', { session_id: sid })
+    return true
+  }
+
   function stopStreaming() {
     const sid = activeSessionId.value
     if (!sid) return
     if (isAborting.value) return
     clearPendingInteractions(sid)
-    const ctrl = streamStates.value.get(sid)
-    if (ctrl) {
-      setAbortState(sid, { aborting: true, synced: null })
-      ctrl.abort()
-      const msgs = getSessionMsgs(sid)
-      const lastMsg = msgs[msgs.length - 1]
-      if (lastMsg?.isStreaming) {
-        updateMessage(sid, lastMsg.id, { isStreaming: false })
-      }
+    if (!streamStates.value.has(sid) && !serverWorking.value.has(sid)) return
+    // Set the flag only once the request can actually leave this tab. Painting
+    // "Pausing..." for a stop that was dropped on the floor is what made a dead
+    // socket indistinguishable from a slow agent.
+    setAbortState(sid, { aborting: true, synced: null })
+    if (!requestRunAbort(sid)) {
+      setAbortState(sid, { aborting: false, synced: false, error: STOP_UNCONFIRMED_MESSAGE })
       return
     }
-    if (serverWorking.value.has(sid)) {
-      setAbortState(sid, { aborting: true, synced: null })
-      getChatRunSocket(runtimeTransport())?.emit('abort', { session_id: sid })
-      const msgs = getSessionMsgs(sid)
-      const lastMsg = msgs[msgs.length - 1]
-      if (lastMsg?.isStreaming) {
-        updateMessage(sid, lastMsg.id, { isStreaming: false })
-      }
+    const msgs = getSessionMsgs(sid)
+    const lastMsg = msgs[msgs.length - 1]
+    if (lastMsg?.isStreaming) {
+      updateMessage(sid, lastMsg.id, { isStreaming: false })
     }
   }
 

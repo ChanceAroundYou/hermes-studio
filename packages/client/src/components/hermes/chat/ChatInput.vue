@@ -6,7 +6,7 @@ import { useProfilesStore } from '@/stores/hermes/profiles'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import { fetchContextLength } from '@/api/studio/sessions'
 import { setModelContext } from '@/api/hermes/model-context'
-import { fetchSkills, type SkillCategory, type SkillInfo } from '@/api/hermes/skills'
+import { fetchSkills, type SkillCategory } from '@/api/hermes/skills'
 import { deleteSkillBundleApi, fetchSkillBundles, type SkillBundleInfo } from '@/api/hermes/skill-bundles'
 import { NSpin, NButton, NTooltip, NModal, NInputNumber, NPopover, NSlider, NDropdown, useDialog, useMessage, type DropdownOption } from 'naive-ui'
 import { computed, ref, nextTick, onMounted, onUnmounted, watch, h } from 'vue'
@@ -18,7 +18,7 @@ import BundleCreateModal from './BundleCreateModal.vue'
 import { BRIDGE_SESSION_COMMAND_DEFINITIONS } from '@/utils/hermes/bridge-session-commands'
 import {
   mergeSkillSlashCommands,
-  skillCommandName,
+  toSkillPickerItems,
   skillToSlashCommand,
   slashCommandInsertText,
   type SlashCommandOption,
@@ -249,24 +249,7 @@ const showSessionUsage = computed(() => {
   return isCodingAgentSession.value && session?.codingAgentId !== 'ekko-agent' && session?.agent !== 'ekko-agent'
 })
 const isForkCommandSession = computed(() => !!chatStore.activeSession && chatStore.activeSession.source !== 'coding_agent')
-const skillPickerItems = computed(() => {
-  const byName = new Map<string, SkillInfo>()
-  for (const category of skillCategories.value) {
-    for (const skill of category.skills || []) {
-      if (skill.enabled === false) continue
-      if (!byName.has(skill.name)) byName.set(skill.name, skill)
-    }
-  }
-  return [...byName.values()].map(skill => {
-    const commandName = skillCommandName(skill.name)
-    return {
-      key: `skill:${commandName}`,
-      name: skill.name,
-      commandName,
-      description: skill.description || skill.name,
-    }
-  })
-})
+const skillPickerItems = computed(() => toSkillPickerItems(skillCategories.value))
 /**
  * Custom skills, flattened into the same shape as bridge commands so they can
  * live in one menu. A skill is invoked as `/skill <command-name>` -- that is the
@@ -334,7 +317,12 @@ async function loadSkills() {
       if (currentSkillsKey() !== key) return
       skillCategories.value = data.categories || []
       skillsLoadedKey = key
-    } catch {
+    } catch (err) {
+      // Swallowing this made the whole feature undiagnosable: a failed load is
+      // indistinguishable from "this profile has no custom skills", because the
+      // slash menu simply renders the built-ins. Logged rather than surfaced --
+      // the menu has no room for an error row, but at least it is now traceable.
+      console.warn('[slash] failed to load custom skills', key, err)
       if (currentSkillsKey() !== key) return
       skillCategories.value = []
       skillsLoadedKey = key
@@ -1434,18 +1422,26 @@ function openAttachmentPreview(attachment: Attachment) {
           ref="commandDropdownRef"
           class="slash-command-dropdown"
         >
-          <div
-            v-for="(command, i) in filteredBridgeCommands"
-            :key="command.key"
-            class="slash-command-item"
-            :class="{ active: i === slashActiveIndex }"
-            @mousedown.prevent="selectBridgeCommand(command)"
-            @mouseenter="handleCommandHover(i)"
-          >
+          <template v-for="(command, i) in filteredBridgeCommands" :key="command.key">
+            <!-- Built-ins come first, so without a divider the custom skills read
+                 as one continuous list and nobody scrolls far enough to find them. -->
+            <div
+              v-if="command.skill && !filteredBridgeCommands[i - 1]?.skill"
+              class="slash-command-divider"
+            >
+              <span>{{ t('skills.title') }}</span>
+            </div>
+            <div
+              class="slash-command-item"
+              :class="{ active: i === slashActiveIndex }"
+              @mousedown.prevent="selectBridgeCommand(command)"
+              @mouseenter="handleCommandHover(i)"
+            >
             <span class="slash-command-name">/{{ command.name }}</span>
             <span v-if="command.args" class="slash-command-args">{{ command.args }}</span>
-            <span class="slash-command-desc">{{ command.description }}</span>
-          </div>
+              <span class="slash-command-desc">{{ command.description }}</span>
+            </div>
+          </template>
         </div>
       </Transition>
     </div>
@@ -2398,7 +2394,11 @@ function openAttachmentPreview(attachment: Attachment) {
   left: 12px;
   right: 12px;
   bottom: calc(100% + 8px);
-  max-height: 240px;
+  /* 240px showed ~6 of the 22 built-in commands, which put every custom skill
+     roughly 880px down a scroll box -- reachable in principle, invisible in
+     practice. Height follows the viewport instead, and the section divider below
+     tells the user a second group exists. */
+  max-height: min(340px, 46vh);
   overflow-y: auto;
   background: $bg-primary;
   border: 1px solid $border-color;
@@ -2410,6 +2410,17 @@ function openAttachmentPreview(attachment: Attachment) {
   .dark & {
     background: #2a2a2a;
   }
+}
+
+.slash-command-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 4px;
+  color: $text-muted;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .slash-command-item {

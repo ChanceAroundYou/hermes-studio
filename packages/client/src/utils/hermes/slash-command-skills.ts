@@ -67,3 +67,54 @@ export function mergeSkillSlashCommands(
 export function slashCommandInsertText(command: SlashCommandOption): string {
   return `/${command.insertText || command.name} `
 }
+
+export interface SkillLike {
+  name: string
+  description?: string
+  enabled?: boolean
+}
+
+export interface SkillPickerEntry {
+  key: string
+  name: string
+  commandName: string
+  description: string
+}
+
+/**
+ * Flatten the skill categories into menu-ready entries.
+ *
+ * The payload is scanned off disk, so a malformed entry is possible, and this
+ * feeds a computed the slash menu renders from. One throw inside that computed
+ * fails the whole render, which takes the built-in commands down too and presents
+ * as "the slash menu is dead". Skipping a bad row costs one invisible skill;
+ * letting it through costs the entire menu, so every field is checked before use.
+ */
+export function toSkillPickerItems(categories: unknown): SkillPickerEntry[] {
+  const byName = new Map<string, SkillLike>()
+  for (const category of (Array.isArray(categories) ? categories : []) as any[]) {
+    if (!category || !Array.isArray(category.skills)) continue
+    for (const skill of category.skills as any[]) {
+      if (!skill || typeof skill.name !== 'string' || !skill.name.trim()) continue
+      if (skill.enabled === false) continue
+      if (!byName.has(skill.name)) byName.set(skill.name, skill)
+    }
+  }
+  const entries: SkillPickerEntry[] = []
+  const seen = new Set<string>()
+  for (const skill of byName.values()) {
+    const commandName = skillCommandName(skill.name)
+    // skillCommandName strips anything unusable, so a name like "???" normalizes
+    // to an empty token and would insert a bare "/skill " that resolves to
+    // nothing. Drop it here instead of listing a dead entry.
+    if (!commandName || seen.has(commandName)) continue
+    seen.add(commandName)
+    entries.push({
+      key: `skill:${commandName}`,
+      name: skill.name,
+      commandName,
+      description: skill.description || skill.name,
+    })
+  }
+  return entries
+}

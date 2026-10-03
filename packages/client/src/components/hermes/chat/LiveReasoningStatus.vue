@@ -280,7 +280,9 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
   align-items: stretch;
   flex: 0 0 auto;
   gap: 6px;
-  width: 520px;
+  /* Fill the run block so the box lines up with the messages above it. A hard
+     520px left it 411px short of the column on a desktop viewport. */
+  width: 100%;
   max-width: 100%;
   height: auto;
   min-height: 0;

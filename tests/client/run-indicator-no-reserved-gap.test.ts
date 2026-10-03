@@ -73,7 +73,18 @@ describe('run indicator keeps no reserved gap', () => {
     expect(virtual).not.toMatch(/\.virtual-row \{[^}]*padding-bottom/)
 
     // And the block must not add a trailing gap of its own on top of that.
-    expect(rule('streaming-indicator')).toContain('padding: 4px 4px 0 4px')
+    expect(rule('streaming-indicator')).toContain('padding: 4px 0 0')
+  })
+
+  it('spans the run block to the same width as a message row', () => {
+    // A 4px inset per side put the thinking avatar and its reasoning box 8px
+    // inside the column, and the reasoning box was additionally capped at 520px
+    // while the message column runs to ~931px on desktop.
+    expect(rule('streaming-indicator')).not.toContain('padding: 4px 4px')
+
+    const detail = liveReasoning.slice(liveReasoning.indexOf('.live-reasoning-detail {'))
+    expect(detail).toContain('width: 100%;')
+    expect(detail).not.toContain('width: 520px;')
   })
 
   it('folds a running tool into the transcript card instead of a second live box', () => {

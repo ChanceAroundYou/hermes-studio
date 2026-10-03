@@ -1023,9 +1023,12 @@ export function startRunViaSocket(
     socket.emit('run', body)
     return {
       abort: () => {
-        if (!closed) {
-          socket.emit('abort', { session_id: sid })
-        }
+        // `closed` is the only local record that this run is already over, and a
+        // disconnected socket silently drops the emit. Reporting it back lets the
+        // store surface a failed stop instead of waiting forever.
+        if (closed || !socket.connected) return false
+        socket.emit('abort', { session_id: sid })
+        return true
       },
     }
   }
@@ -1236,9 +1239,9 @@ export function startRunViaSocket(
 
   return {
     abort: () => {
-      if (!closed) {
-        socket.emit('abort', { session_id: sid })
-      }
+      if (closed || !socket.connected) return false
+      socket.emit('abort', { session_id: sid })
+      return true
     },
   }
 }
