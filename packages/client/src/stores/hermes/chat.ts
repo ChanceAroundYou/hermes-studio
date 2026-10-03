@@ -107,7 +107,19 @@ export interface Message {
   // 不含 <think> 包裹标签；内容自身可以为多段纯文本。
   reasoning?: string
   queued?: boolean
-  systemType?: 'command' | 'error' | 'fork-divider' | 'tool-run'
+  systemType?: 'command' | 'error' | 'fork-divider' | 'tool-run' | 'compression'
+  /**
+   * A completed context compression, as a transcript entry.
+   *
+   * This used to live only in `compressionState` and render inside the run
+   * indicator, which meant it disappeared the moment the run settled and never
+   * appeared in a re-fetched transcript. A compression is a fact about the
+   * conversation, so it belongs between the messages it happened between --
+   * ordered by `startedAt`, which is the time it actually occurred.
+   *
+   * Client-injected: the server does not replay it, so a refresh can lose it.
+   */
+  compression?: CompressionTranscriptEntry
   /** Client-injected row (e.g. a run error) with no server-side counterpart,
    *  so a transcript re-fetch has to preserve it explicitly. */
   commandAction?: string
@@ -520,6 +532,18 @@ interface CompressionState {
    * What the compression belongs to. A run-scoped compression cannot outlive
    * its run; an idle `/compress` command reports its own completion.
    */
+  source?: 'run' | 'command'
+}
+
+/** The compression facts a transcript entry renders. */
+export interface CompressionTranscriptEntry {
+  compressing: boolean
+  messageCount: number
+  beforeTokens: number
+  afterTokens: number
+  compressed: boolean | null
+  error?: string
+  startedAt?: number
   source?: 'run' | 'command'
 }
 
@@ -1793,6 +1817,60 @@ export const useChatStore = defineStore('chat', () => {
     if (state) next.set(sessionId, state)
     else next.delete(sessionId)
     compressionStates.value = next
+    // Mirrors the live banner into the transcript on every path (socket events,
+    // resume snapshot, stale settle). Recording here rather than at each call
+    // site is deliberate: the reconcile paths matter most, since they are the
+    // ones a client that missed the live event depends on.
+    //
+    // A cleared state deliberately leaves its transcript entry alone. Clearing
+    // means "stop tracking this", not "it never happened" -- a compression
+    // permanently drops context, so the record has to outlive the run indicator.
+    if (state) recordCompressionEntry(sessionId, state)
+  }
+
+  /**
+   * Writes a compression into the transcript as a real entry, positioned by the
+   * time it began rather than the time the event arrived.
+   *
+   * Compression used to render inside the run indicator only, which meant two
+   * losses: it vanished the moment the run settled (the indicator's condition is
+   * isRunActive || abortState), and it was absent from any re-fetched
+   * transcript. Both matter because a compression permanently discards context --
+   * a user scrolling back has to be able to see that it happened, and where.
+   *
+   * Not persisted: the server does not replay compression entries, so a refresh
+   * can lose them. That is deliberate -- the authoritative snapshot only carries
+   * the *latest* compression, which is enough to stop the UI claiming a finished
+   * compression is still running, but not enough to rebuild history.
+   *
+   * Keyed on `startedAt` so a re-delivered event updates its entry in place
+   * instead of stacking duplicates.
+   */
+  function recordCompressionEntry(sessionId: string | null | undefined, state: CompressionState) {
+    const sid = sessionId || ''
+    if (!sid) return
+    const startedAt = state.startedAt || Date.now()
+    const session = sessions.value.find(item => item.id === sid)
+    if (!session) return
+    const id = `compression:${sid}:${startedAt}`
+    const entry: Message = {
+      id,
+      role: 'system',
+      content: '',
+      timestamp: startedAt,
+      systemType: 'compression',
+      compression: { ...state, startedAt },
+    }
+    const existing = session.messages.findIndex(message => message.id === id)
+    if (existing !== -1) {
+      session.messages.splice(existing, 1, entry)
+      return
+    }
+    // Later messages already carry timestamps past the compression start, so the
+    // entry has to land between them rather than at the tail.
+    const insertAt = session.messages.findIndex(message => message.timestamp > startedAt)
+    if (insertAt === -1) session.messages.push(entry)
+    else session.messages.splice(insertAt, 0, entry)
   }
 
   /**

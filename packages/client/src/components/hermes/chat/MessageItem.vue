@@ -70,6 +70,25 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n();
 const toast = useMessage();
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  return String(n)
+}
+
+const compressionEntryText = computed(() => {
+  const entry = props.message.compression
+  if (!entry) return ''
+  if (entry.error) return entry.error
+  if (entry.compressing) {
+    return `Compressing... (${entry.messageCount} msgs, ~${formatTokens(entry.beforeTokens)} tokens)`
+  }
+  if (entry.compressed) {
+    return `Compressed ${entry.messageCount} msgs: ~${formatTokens(entry.beforeTokens)} → ~${formatTokens(entry.afterTokens)} tokens`
+  }
+  return 'Compression skipped'
+})
+
 const isSystem = computed(() => props.message.role === "system");
 const isCommandMessage = computed(() => props.message.role === "command" || props.message.systemType === "command");
 const isCommandError = computed(() => props.message.role === "command" && props.message.systemType === "error");
@@ -1257,6 +1276,28 @@ onBeforeUnmount(() => {
               @select="file => openAssistantWorkspaceChangeFile(file, change)"
             />
 
+            <!-- A compression is a fact about the conversation, so it renders as
+                 a transcript entry at the position it happened rather than inside
+                 the run indicator, which used to hide it the moment a run settled. -->
+            <div v-if="message.compression" class="compression-entry">
+              <svg
+                v-if="message.compression.compressing"
+                width="12" height="12" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.5" class="compression-entry-icon"
+              >
+                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <svg
+                v-else
+                width="12" height="12" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.5" class="compression-entry-icon"
+              >
+                <path d="M5 13l4 4L19 7" />
+              </svg>
+              <span class="compression-entry-name">{{ compressionEntryText }}</span>
+              <span v-if="message.compression.compressing" class="compression-entry-spinner"></span>
+            </div>
+
             <!-- Render system message content -->
             <MarkdownRenderer
               v-if="message.role === 'system' && message.content && !isCommandMessage"
@@ -1564,6 +1605,47 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(var(--text-primary-rgb), 0.18);
   -webkit-backdrop-filter: blur(8px) saturate(110%);
   backdrop-filter: blur(8px) saturate(110%);
+}
+
+
+/* A compression transcript entry. Sits inline in the flow, muted like the tool
+   strip it replaces, so a completed compression reads as a settled fact rather
+   than as part of the still-running turn. */
+.compression-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  color: $text-muted;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.compression-entry-icon {
+  flex-shrink: 0;
+}
+
+.compression-entry-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compression-entry-spinner {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  /* Logical inline-end, not a physical side: a physical border leaves the gap
+     on the wrong edge under RTL. The rtl-logical-css test guards this. */
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+  animation: compression-entry-spin 0.7s linear infinite;
+}
+
+@keyframes compression-entry-spin {
+  to { transform: rotate(360deg); }
 }
 
 .command-result {

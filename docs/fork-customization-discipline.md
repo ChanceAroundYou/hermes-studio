@@ -92,6 +92,31 @@ expect(source).not.toMatch(/activeSessionProfile\.value\?\.alias\?\.trim\(\) \|\
 注意本项目单双引号混用，import 断言要写成引号无关的正则
 （`["']@/utils/...["']`），否则会因为格式而非代码失败，被误读成 bug。
 
+### 6. 说明规则的注释，本身可能违反规则
+
+`tests/client/rtl-logical-css.test.ts` 扫描 CSS 里的物理方向属性（`border-right`、
+`margin-left` 等）。给压缩动画的 spinner 写注释时用了
+`/* Logical, not border-right-color: ... */` 来解释为什么用
+`border-inline-end-color` —— 注释里那个属性名被测试当成真实声明，测试失败。
+
+有意思的是**第一版声明本身就是错的**：我确实写了 `border-right-color`，
+是测试先抓到的，才改成逻辑属性。顺序是「声明违规 → 改声明 → 注释仍违规」，
+两次失败看起来是同一个。
+
+写这类注释时不要引用被禁用的字面量。用「physical side」「物理方向」描述，
+不要把属性名抄进来。
+
+### 7. 行为测试覆盖不到的规则，要明确说明并改用源码断言
+
+「清空追踪状态时不能删除信息流条目」这条规则，没有任何行为测试能覆盖：
+真实清空路径（空闲 resume、离开会话）都会同时重新拉取或丢弃整个消息数组，
+所以在 store 层面无法隔离这条规则。实测确认——写出来的行为测试是通过的，
+但把 `setCompressionState` 改成在 clear 时连带删除条目，这条测试依然通过。
+
+处理方式：保留行为测试证明它覆盖不到，再补一条源码断言，并把这个理由写进
+测试注释。**不要为了让 mutation 变红而给生产代码开测试专用 API**
+（试过 `setCompressionStateForTest`，已放弃）。
+
 ## 已知既有失败（与本纪律无关）
 
 server 20 条，构成见 `upstream-merge-ledger.md`。client 全绿。
