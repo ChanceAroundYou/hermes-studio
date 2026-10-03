@@ -27,10 +27,14 @@
 | `2c27ee492` #3262 设备连接图标 | `54f029ecc` | 零冲突 |
 | `8564948c5` #3260 Claude stdout 排空 | `ed2aac251` | 零冲突 |
 | `354894f81` #3257 API relay 合作页 | `d74662e37` | `AppConnectionsPanel.vue` 冲突：保留 `${getBaseUrlValue()}/logo.png` |
-| 本轮图标路径补前缀 | （未提交） | #3257 又引入 5 处裸路径，同批修掉 |
+| 本轮图标路径补前缀 | `8be2648ba` / `ae65a0215` | #3257 又引入 5 处裸路径，同批修掉 |
 | （配套测试修复） | `25741c477` | #3246 新增 socket 订阅，6 个 vi.mock 需补 onRunUsageUpdated |
 
 ## fork 保留下来的定制（合并时逐项确认）
+
+**权威清单是 `tests/client/fork-customizations.test.ts`（27 条断言 / 22 项定制），
+纪律与事故记录见 `docs/fork-customization-discipline.md`。**
+下表是人读的摘要；合并收尾时跑清单测试，不要只对这张表。
 
 | 定制 | 位置 | 合并策略 |
 |---|---|---|
@@ -41,7 +45,8 @@
 | /hermes/ 子路径资源 | index.html + 头像 getBaseUrlValue() | 全程保留 |
 | 并行多 profile | chat-run.ts | 不引入上游更弱的 requireSocketSessionReadAccess |
 | 移动端 Enter 换行 | ChatInput.vue | 上游删了分支，补回 |
-| error role -> system | HistoryView.vue | 保留 |
+| 历史视图 error 显示为 system | HistoryView.vue | 保留 |
+| 统一红泡 + 原地保留 + 不进上下文 | chat.ts + MessageItem.vue + session-store.ts | 保留 |
 
 ## 已知既有失败（非本轮引入）
 
@@ -53,5 +58,5 @@ server 20 条。`coding-agents-launch`(4) 与 `group-chat-member-sync`(1) 已修
 - `agent-bridge-python-concurrency`(2)：Python bridge 并发，需真实 bridge 环境
 - `hermes-web-ui-mcp`(2)、`profiles-routes`(2)、`sessions-routes`(14)：模块级 mock 边界
 
-client 全绿（286 文件 / 1947 用例）。
+client 全绿（289 文件 / 1983 用例）。
 
