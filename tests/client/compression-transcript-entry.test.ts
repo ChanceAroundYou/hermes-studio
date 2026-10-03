@@ -241,11 +241,13 @@ describe('compression becomes a transcript entry', () => {
     expect(store.activeSession!.messages.filter(m => m.compression)).toHaveLength(1)
   })
 
-  it('does not add an entry when /compact already persisted a command message', async () => {
+  it('records a /compact compression the same way as an automatic one', async () => {
     const store = await attach()
-    // The server persists "Compression completed: 229 -> 9 messages, ..." as a
-    // command message and replays it on every resume, so an injected entry would
-    // render the same fact a second time.
+    // Both sources converge on one entry. An earlier version skipped
+    // command-sourced compressions because /compact persisted its own text
+    // message; that produced two differently-shaped lines for one compression.
+    // The server now persists a structured record for both, so the client keys
+    // on startedAt and there is only ever one entry.
     handlers.onCompressionCompleted({
       event: 'compression.completed',
       session_id: 'session-1',
@@ -257,25 +259,82 @@ describe('compression becomes a transcript entry', () => {
       started_at: 1_700_000_000_000,
     })
 
-    expect(store.activeSession!.messages.filter(m => m.compression)).toHaveLength(0)
+    expect(store.activeSession!.messages.filter(m => m.compression)).toHaveLength(1)
   })
 
-  it('keeps the run-scoped entry, which has no command message to fall back on', async () => {
+  it('turns the compressing line into the result rather than adding one', async () => {
     const store = await attach()
-    // An automatic mid-run compression emits no command message at all, so the
-    // entry is the only record that it happened.
+    handlers.onCompressionStarted({
+      event: 'compression.started',
+      session_id: 'session-1',
+      message_count: 229,
+      token_count: 71834,
+      source: 'command',
+      started_at: 1_700_000_000_000,
+    })
+    expect(store.activeSession!.messages.filter(m => m.compression)).toHaveLength(1)
+    expect(store.activeSession!.messages.find(m => m.compression)?.compression?.compressing).toBe(true)
+
     handlers.onCompressionCompleted({
       event: 'compression.completed',
       session_id: 'session-1',
-      totalMessages: 880,
-      beforeTokens: 165280,
-      afterTokens: 14473,
+      totalMessages: 229,
+      beforeTokens: 71834,
+      afterTokens: 24042,
       compressed: true,
-      source: 'bridge',
+      source: 'command',
       started_at: 1_700_000_000_000,
     })
 
-    expect(store.activeSession!.messages.filter(m => m.compression)).toHaveLength(1)
+    // Still one line, and it now carries the settled numbers.
+    const entries = store.activeSession!.messages.filter(m => m.compression)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].compression).toMatchObject({ compressing: false, afterTokens: 24042 })
+  })
+
+  it('replaces the live entry with the persisted row for the same compression', async () => {
+    const store = await attach()
+    handlers.onCompressionCompleted({
+      event: 'compression.completed',
+      session_id: 'session-1',
+      totalMessages: 229,
+      beforeTokens: 71834,
+      afterTokens: 24042,
+      compressed: true,
+      source: 'command',
+      started_at: 1_700_000_000_000,
+    })
+    // A resume brings the server row, keyed on the same startedAt. It must take
+    // the live entry's place rather than joining it.
+    const session = store.activeSession!
+    session.messages.push({
+      id: 'server-row-1',
+      role: 'system',
+      content: '',
+      timestamp: 1_700_000_000_000,
+      systemType: 'compression',
+      compression: {
+        compressing: false,
+        messageCount: 229,
+        beforeTokens: 71834,
+        afterTokens: 24042,
+        compressed: true,
+        source: 'command',
+        startedAt: 1_700_000_000_000,
+      },
+    })
+    handlers.onCompressionCompleted({
+      event: 'compression.completed',
+      session_id: 'session-1',
+      totalMessages: 229,
+      beforeTokens: 71834,
+      afterTokens: 24042,
+      compressed: true,
+      source: 'command',
+      started_at: 1_700_000_000_000,
+    })
+
+    expect(session.messages.filter(m => m.compression)).toHaveLength(1)
   })
 
   it('is not duplicated when the compression starts and then completes', async () => {
@@ -326,6 +385,32 @@ describe('the run indicator no longer owns the compression notice', () => {
     expect(source).not.toContain('chatStore.compressionState')
   })
 
+  it('recognises a persisted compression row on the way back from the server', () => {
+    const source = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
+    // A row the server persisted has to come back as a transcript entry. Without
+    // this the record survives in the DB but vanishes from the UI on re-fetch,
+    // which is the exact failure the persistence was meant to fix.
+    expect(source).toContain("msg.display_role !== 'compression'")
+    const start = source.indexOf('const compressionRecord = readCompressionRecord(msg)')
+    expect(start).toBeGreaterThan(-1)
+    const block = source.slice(start, source.indexOf('continue', start))
+    expect(block).toContain("systemType: 'compression'")
+  })
+
+  it('collapses the live entry into the persisted row on both resume paths', () => {
+    const source = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
+    // The event path merges on its own, but a socket resume replaces the whole
+    // message list without firing an event, so those paths have to merge too.
+    // Both are identified by the resume payload's `data.messages`, which the
+    // deep-link direct fetch does not use.
+    expect(source).toContain('function mergePersistedCompressionEntries(')
+    const resumeSites = source.split('target.messages = mapHermesMessages(data.messages').length - 1
+    expect(resumeSites).toBe(2)
+    for (const site of source.split('target.messages = mapHermesMessages(data.messages').slice(1)) {
+      expect(site.slice(0, 220)).toContain('mergePersistedCompressionEntries(')
+    }
+  })
+
   it('keeps the compression entry out of the retired amber system bubble', () => {
     const source = readFileSync(
       'packages/client/src/components/hermes/chat/MessageItem.vue',
@@ -334,6 +419,21 @@ describe('the run indicator no longer owns the compression notice', () => {
     // role:'system' pulls in .message-bubble.system -- the amber left-striped
     // bubble this fork already retired when it unified the error bubble.
     expect(source).toContain('!props.message.compression')
+  })
+
+  it('gives every compression state the one rounded command card', () => {
+    const source = readFileSync(
+      'packages/client/src/components/hermes/chat/MessageItem.vue',
+      'utf8',
+    )
+    // One selector list, so compressing / settled / failed cannot drift apart.
+    expect(source).toMatch(/&\.command,\s*\/\/[^]*?&\.compression \{/)
+    const start = source.indexOf('&.command,')
+    const block = source.slice(start, source.indexOf('}', start))
+    expect(block).toContain('border: 1px solid rgba(var(--accent-primary-rgb), 0.12)')
+    expect(block).toContain('background-color: rgba(var(--accent-primary-rgb), 0.04)')
+    // And the bubble actually opts into it.
+    expect(source).toContain('compression: !!props.message.compression')
   })
 
   it('renders the compression as a transcript entry in MessageItem', () => {

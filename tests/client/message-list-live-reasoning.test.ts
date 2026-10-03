@@ -339,7 +339,7 @@ describe('MessageList live reasoning', () => {
     expect(wrapper.find('.thinking-status').exists()).toBe(false)
   })
 
-  it('keeps completed tools in the transcript for every session while only running tools stay live', async () => {
+  it('keeps a running tool in the transcript card and never opens a second live box', async () => {
     const wrapper = mountMessageList([
       { id: 'user-1', role: 'user', content: 'Inspect the repository', timestamp: 1 },
       {
@@ -363,14 +363,19 @@ describe('MessageList live reasoning', () => {
     ])
     await flushPromises()
 
-    // One card for the persisted run, plus the live strip for the running tool.
-    // Both use .tool-run-card on purpose: the running strip must not fall back
-    // to the borderless chip, otherwise it flashes before the run settles.
-    expect(wrapper.find('.tool-run-card').exists()).toBe(true)
-    expect(wrapper.findAll('.tool-run-card')).toHaveLength(2)
-    expect(wrapper.find('.live-tool-run').exists()).toBe(true)
-    expect(wrapper.find('[data-id="tool-running"]').exists()).toBe(false)
-    expect(wrapper.get('.tool-run-card').text()).toContain('Command')
+    // One card for the whole turn: the in-flight call does not open a second box,
+    // it is the next row of the same card and the header carries the spinner.
+    const cards = wrapper.findAll('.tool-run-card')
+    expect(cards).toHaveLength(1)
+    expect(wrapper.find('.live-tool-run').exists()).toBe(false)
+    expect(wrapper.find('.tool-run-spinner').exists()).toBe(true)
+    expect(cards[0].text()).toContain('Command')
+
+    // Opening the dropdown lists both calls, the in-flight one as the new entry.
+    await cards[0].get('.tool-run-header').trigger('click')
+    await flushPromises()
+    expect(cards[0].findAll('[data-id="tool-done"]')).toHaveLength(1)
+    expect(cards[0].findAll('[data-id="tool-running"]')).toHaveLength(1)
     expect(wrapper.get('.live-reasoning-body').text()).toBe('Run the focused tests.')
   })
 

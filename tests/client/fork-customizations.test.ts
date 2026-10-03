@@ -15,6 +15,9 @@ import { describe, expect, it } from 'vitest'
  *   - 79a7ae8a2: a fixed 120px gap below the thinking avatar, removed by #3232.
  *   - a440c83ac: the profile display name in the message header, dropped by
  *     #3232 the same way, leaving new chats labelled "default".
+ *   - the profile display name in the profile selector, which was never
+ *     wired at all: an empty new chat has no message header to hang the
+ *     name off, so the selector is the label the user actually sees.
  *
  * So this file asserts the *wiring* of each customization: that the hook,
  * index, route or component is still referenced where it has to be. Behaviour
@@ -35,6 +38,7 @@ const files = {
   chatInput: read('packages/client/src/components/hermes/chat/ChatInput.vue'),
   chatItem: read('packages/client/src/components/hermes/chat/MessageItem.vue'),
   sessionItem: read('packages/client/src/components/hermes/chat/SessionListItem.vue'),
+  profileSelector: read('packages/client/src/components/layout/ProfileSelector.vue'),
   folderPicker: read('packages/client/src/components/hermes/chat/FolderPicker.vue'),
   workspacePrefs: read('packages/client/src/composables/useWorkspacePreferences.ts'),
   avatarMap: read('packages/client/src/utils/chat-agent-avatar.ts'),
@@ -79,6 +83,21 @@ describe('fork customization: profile display name', () => {
 
   it('resolves the name in the sidebar session list', () => {
     expect(files.sessionItem).toContain('resolveProfileDisplayName')
+  })
+
+  it('resolves the name in the profile selector on an empty new chat', () => {
+    // This is the label a brand-new conversation actually shows: the
+    // message header only renders once there is a message to carry it.
+    expect(files.profileSelector).toContain(
+      'resolveProfileDisplayName(profilesStore.profiles, activeProfileName.value)',
+    )
+    expect(files.profileSelector).not.toContain(
+      "const displayName = computed(() => activeName.value || 'default')",
+    )
+    // Rows in the runtime list are labelled through the resolver too.
+    expect(files.profileSelector).toContain('profileLabel(profile.name)')
+    // Identity comparisons and API calls keep using the profile name.
+    expect(files.profileSelector).toContain('profile.name === activeProfileName')
   })
 })
 
@@ -216,7 +235,11 @@ describe('fork customization: run block layout', () => {
   })
 
   it('shows live tools in the bordered card rather than a raw chip', () => {
-    expect(files.messageList).toContain('ToolRunSummary')
+    // The run indicator owns no card of its own any more: an in-flight call is
+    // grouped into the trailing transcript card, which is the bordered box the
+    // finished calls already use.
+    expect(files.messageList).toContain('ToolRunCard')
+    expect(files.messageList).not.toContain('ToolRunSummary')
     expect(files.messageList).not.toContain('v-for="tc in visibleToolCalls"')
   })
 })

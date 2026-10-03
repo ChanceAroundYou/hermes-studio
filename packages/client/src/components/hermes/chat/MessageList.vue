@@ -20,7 +20,6 @@ import MessageItem from "./MessageItem.vue";
 import { positionTaskPlansAtTurnEnd } from "@/utils/task-plan";
 import LiveReasoningStatus from "./LiveReasoningStatus.vue";
 import ToolRunCard from "./ToolRunCard.vue";
-import ToolRunSummary from "./ToolRunSummary.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
 import PendingInteractionCard from "@/components/hermes/chat/PendingInteractionCard.vue";
 import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message } from "@/stores/hermes/chat";
@@ -88,8 +87,8 @@ const currentToolCalls = computed(() => {
       break;
     }
   }
-  // Keep only actively running tools in the live strip. Finalized tools move
-  // into the transcript immediately for every agent and launch mode.
+  // Actively running tools of the current turn. They render inside the trailing
+  // transcript card; this list only drives the follow-the-bottom scroll.
   const tools = msgs.filter((m, i) => (
     m.role === "tool" &&
     i > lastInputIdx &&
@@ -97,10 +96,6 @@ const currentToolCalls = computed(() => {
   ));
   return [...tools].reverse();
 });
-
-const visibleToolCalls = computed(() =>
-  currentToolCalls.value.filter((tool) => !!tool.toolName),
-);
 
 const liveReasoningDetail = computed<{
   messageId: Message["id"]
@@ -198,12 +193,14 @@ const displayMessages = computed(() => {
   // partial pages while the transcript is covered by the search loader.
   if (isSearchFetching.value) return [];
   const messages = chatStore.messages;
-  const currentToolIds = new Set(currentToolCalls.value.map((tool) => tool.id));
   const renderedMessages = messages
     .filter((m) => {
       if (m.id === chatStore.focusMessageId) return true;
       if (m.role === "tool") {
-        return toolTraceVisible.value && !!m.toolName && !(isRunIndicatorActive.value && currentToolIds.has(m.id));
+        // A running tool is grouped into the trailing card exactly like a
+        // finished one, so an in-flight call shows up as a new row inside
+        // the card above instead of a second box of its own.
+        return toolTraceVisible.value && !!m.toolName;
       }
       if (m.role === "assistant" && !hasRenderableAssistantContent(m)) return false;
       return true;
@@ -703,7 +700,7 @@ defineExpose({
       <template #after>
         <Transition name="fade">
         <div v-if="isRunIndicatorActive" class="streaming-indicator">
-          <div v-if="visibleToolCalls.length > 0 || chatStore.abortState" class="tool-calls-panel">
+          <div v-if="chatStore.abortState" class="tool-calls-panel">
             <!-- Abort indicator. The compression notice used to sit here too, but
                  this block is gated on the run being live, so a completed
                  compression vanished as soon as the run settled. It now renders
@@ -750,17 +747,6 @@ defineExpose({
                 class="tool-call-spinner"
               ></span>
             </div>
-            <!-- Tool calls
-              Runs in the same card the transcript uses once the turn is
-              persisted, so the strip does not flash a borderless chip first and
-              then swap to the bordered "n tool calls" block. -->
-            <ToolRunSummary
-              v-if="toolTraceVisible && visibleToolCalls.length > 0"
-              class="live-tool-run"
-              :run-id="`${assistantAgent.label}-live`"
-              :tools="visibleToolCalls"
-              :active="false"
-            />
           </div>
           <LiveReasoningStatus
             :agent="assistantAgent"
@@ -1240,16 +1226,7 @@ defineExpose({
     }
   }
 
-  .tool-calls-panel /* The live strip is a .tool-run-card, so it needs the shrink behaviour the
-   borderless chip used to provide on narrow screens. */
-.live-tool-run {
-  flex: 0 1 auto;
-  width: 520px;
-  max-width: 100%;
-  min-width: 0;
-}
-
-.tool-call-item {
+  .tool-call-item {
     width: 100%;
   }
 }

@@ -1077,11 +1077,12 @@ onBeforeUnmount(() => {
           <div
             class="message-bubble"
             :class="{
-              // A compression entry is a settled fact, not a notice. role:'system'
-              // pulls in .message-bubble.system, which is the amber left-striped
-              // bubble this fork already retired -- the same duplication the
-              // unified error bubble removed. Keep it out of that treatment.
+              // A compression is a settled fact, not a notice. role:'system' pulls
+              // in .message-bubble.system, the amber left-striped bubble this fork
+              // already retired, so it opts out and takes the rounded command
+              // treatment instead.
               system: isSystem && !isAgentError && !props.message.compression,
+              compression: !!props.message.compression,
               'agent-error': isAgentError,
               command: isCommandMessage,
               'command-error': isCommandError,
@@ -1283,21 +1284,33 @@ onBeforeUnmount(() => {
             <!-- A compression is a fact about the conversation, so it renders as
                  a transcript entry at the position it happened rather than inside
                  the run indicator, which used to hide it the moment a run settled. -->
+            <!-- One card for all three states: compressing, settled, failed. The
+                 same rounded treatment the /compact command uses, so a compression
+                 never changes shape between "working" and "done". -->
             <div v-if="message.compression" class="compression-entry">
-              <svg
-                v-if="message.compression.compressing"
-                width="12" height="12" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" stroke-width="1.5" class="compression-entry-icon"
-              >
-                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              <svg
-                v-else
-                width="12" height="12" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" stroke-width="1.5" class="compression-entry-icon"
-              >
-                <path d="M5 13l4 4L19 7" />
-              </svg>
+              <span class="command-result-icon">
+                <svg
+                  v-if="message.compression.compressing"
+                  width="12" height="12" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="1.5"
+                >
+                  <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <svg
+                  v-else-if="!message.compression.error && message.compression.compressed !== false"
+                  width="12" height="12" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="1.5"
+                >
+                  <path d="M5 13l4 4L19 7" />
+                </svg>
+                <svg
+                  v-else
+                  width="12" height="12" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="1.5"
+                >
+                  <path d="M10 9v6m4-6v6M5 5h14v14H5z" />
+                </svg>
+              </span>
               <span class="compression-entry-name">{{ compressionEntryText }}</span>
               <span v-if="message.compression.compressing" class="compression-entry-spinner"></span>
             </div>
@@ -1562,7 +1575,11 @@ onBeforeUnmount(() => {
     background-color: rgba(var(--warning-rgb), 0.06);
   }
 
-  &.command {
+  &.command,
+  // One style for every compression state. Sharing `.command` deliberately:
+  // this fork retired the amber system bubble, and a third treatment here would
+  // reintroduce exactly the drift that retirement was meant to end.
+  &.compression {
     border-inline-start: none;
     border: 1px solid rgba(var(--accent-primary-rgb), 0.12);
     background-color: rgba(var(--accent-primary-rgb), 0.04);
@@ -1615,25 +1632,18 @@ onBeforeUnmount(() => {
 /* A compression transcript entry. Sits inline in the flow, muted like the tool
    strip it replaces, so a completed compression reads as a settled fact rather
    than as part of the still-running turn. */
+/* The card itself is `.message-bubble.compression`, so a compression reads with
+   the same rounded border as the command that triggered it. */
 .compression-entry {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 4px 0;
-  color: $text-muted;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.compression-entry-icon {
-  flex-shrink: 0;
+  gap: 8px;
+  min-width: 0;
 }
 
 .compression-entry-name {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .compression-entry-spinner {

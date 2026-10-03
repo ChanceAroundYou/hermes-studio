@@ -12,6 +12,7 @@ import {
 } from '@/api/hermes/profiles'
 import ProfileAvatarView from '@/components/hermes/profiles/ProfileAvatar.vue'
 import { useI18n } from 'vue-i18n'
+import { hasCustomProfileDisplayName, resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 
 const emit = defineEmits<{
   'modal-show-change': [show: boolean]
@@ -22,8 +23,20 @@ const message = useMessage()
 const profilesStore = useProfilesStore()
 
 const activeName = computed(() => profilesStore.activeProfileName ?? '')
-const displayName = computed(() => activeName.value || 'default')
-const activeProfile = computed(() => profilesStore.profiles.find(profile => profile.name === displayName.value))
+// Identifier for comparisons and API calls; the label below is display only.
+const activeProfileName = computed(() => activeName.value || 'default')
+const displayName = computed(() =>
+  resolveProfileDisplayName(profilesStore.profiles, activeProfileName.value))
+const activeProfile = computed(() => profilesStore.profiles.find(profile => profile.name === activeProfileName.value))
+
+// Label for any profile row in the runtime list.
+function profileLabel(name: string): string {
+  return resolveProfileDisplayName(profilesStore.profiles, name)
+}
+
+function profileHasCustomName(name: string): boolean {
+  return hasCustomProfileDisplayName(profilesStore.profiles, name)
+}
 const runtimeStatuses = ref<ProfileRuntimeStatus[]>([])
 const runtimeLoading = ref(false)
 const showProfileModal = ref(false)
@@ -194,7 +207,7 @@ async function handleRestartProfile(name: string) {
 }
 
 async function handleSwitchProfile(name: string) {
-  if (name === displayName.value) return
+  if (name === activeProfileName.value) return
   profileSwitching.value = { ...profileSwitching.value, [name]: true }
   try {
     const ok = await profilesStore.switchProfile(name)
@@ -219,7 +232,7 @@ onMounted(() => {
   <div class="profile-selector">
     <div class="selector-label">{{ t('sidebar.profiles') }}</div>
     <button class="profile-display" type="button" :aria-label="t('sidebar.profiles')" data-testid="profile-selector-select" @click="openProfileModal">
-      <ProfileAvatarView class="profile-avatar" :name="displayName" :avatar="activeProfile?.avatar" :size="24" />
+      <ProfileAvatarView class="profile-avatar" :name="activeProfileName" :avatar="activeProfile?.avatar" :size="24" />
       <span class="profile-name">{{ displayName }}</span>
     </button>
 
@@ -246,14 +259,15 @@ onMounted(() => {
             v-for="profile in profilesStore.profiles"
             :key="profile.name"
             class="profile-runtime-item"
-            :class="{ active: profile.name === displayName }"
+            :class="{ active: profile.name === activeProfileName }"
           >
             <div class="profile-runtime-main">
               <ProfileAvatarView class="profile-runtime-avatar" :name="profile.name" :avatar="profile.avatar" :size="34" />
               <div class="profile-runtime-info">
                 <div class="profile-runtime-name-row">
-                  <span class="profile-runtime-name">{{ profile.name }}</span>
-                  <span v-if="profile.name === displayName" class="active-badge">{{ t('profiles.runtime.activeTag') }}</span>
+                  <span class="profile-runtime-name">{{ profileLabel(profile.name) }}</span>
+                  <span v-if="profileHasCustomName(profile.name)" class="profile-runtime-real-name">{{ profile.name }}</span>
+                  <span v-if="profile.name === activeProfileName" class="active-badge">{{ t('profiles.runtime.activeTag') }}</span>
                 </div>
                 <div class="runtime-status-grid">
                   <div class="runtime-row compact">
@@ -306,7 +320,7 @@ onMounted(() => {
               <NButton
                 size="small"
                 type="primary"
-                :disabled="profile.name === displayName"
+                :disabled="profile.name === activeProfileName"
                 :loading="profileSwitching[profile.name]"
                 @click="handleSwitchProfile(profile.name)"
               >
@@ -517,6 +531,16 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 700;
   color: $text-primary;
+}
+
+.profile-runtime-real-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 400;
+  color: $text-muted;
 }
 
 .active-badge {

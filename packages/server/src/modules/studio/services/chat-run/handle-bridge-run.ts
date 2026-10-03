@@ -19,6 +19,7 @@ import type {
 } from '../../public/chat-agent-runtime'
 import { contentBlocksToString, convertContentBlocksForAgent, extractTextForPreview, isContentBlockArray } from './content-blocks'
 import { buildCompressedHistory, buildDbSnapshotAwareHistory, forceCompressBridgeHistory, pushState, replaceState, setCompressionProgress } from './compression'
+import { persistCompressionRecord } from './compression-record'
 import {
   calcAndUpdateUsage,
   contextTokensWithCachedOverhead,
@@ -1713,6 +1714,17 @@ async function applyBridgeChunkAsync(
         startedAt: payload.started_at || payload.completed_at,
         finishedAt: payload.completed_at,
       })
+      // An automatic compression emitted no command message at all, so nothing
+      // recorded that context had been discarded here. Same row shape as
+      // /compact, so both read identically in the transcript.
+      persistCompressionRecord(sessionId, state, {
+        messageCount: payload.totalMessages || 0,
+        beforeTokens: payload.beforeTokens || 0,
+        afterTokens: payload.afterTokens || 0,
+        compressed: payload.compressed ?? null,
+        source: 'bridge',
+        startedAt: payload.started_at || payload.completed_at || Date.now(),
+      })
       const usage = await calcAndUpdateUsage(sessionId, state, emit)
       if (messageAfterTokensWithInput != null) {
         updateMessageContextTokenUsage(sessionId, state, emit, messageAfterTokensWithInput, usage)
@@ -1745,6 +1757,15 @@ async function applyBridgeChunkAsync(
         error: payload.error,
         startedAt: payload.started_at || payload.completed_at,
         finishedAt: payload.completed_at,
+      })
+      persistCompressionRecord(sessionId, state, {
+        messageCount: payload.totalMessages || 0,
+        beforeTokens: payload.beforeTokens || 0,
+        afterTokens: payload.beforeTokens || 0,
+        compressed: false,
+        error: payload.error,
+        source: 'bridge',
+        startedAt: payload.started_at || payload.completed_at || Date.now(),
       })
     } else if (evType === 'status') {
       const payload = {

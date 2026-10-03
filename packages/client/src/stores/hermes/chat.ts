@@ -946,6 +946,36 @@ function resolveResumedAssistantState(
   }
 }
 
+/**
+ * Reads a persisted compression row.
+ *
+ * The server stores these as `role: 'command'` with `display_role: 'compression'`
+ * and a JSON payload, so a compression survives a re-fetch the way an ordinary
+ * message does. Matching on the display_role rather than the prose is what lets
+ * one entry update in place from "Compressing..." to the final numbers.
+ */
+function readCompressionRecord(msg: HermesMessage): CompressionTranscriptEntry | null {
+  if (msg.display_role !== 'compression') return null
+  const raw = String(msg.content ?? '').trim()
+  if (!raw.startsWith('{')) return null
+  try {
+    const payload = JSON.parse(raw)?.__compression
+    if (!payload || typeof payload !== 'object' || typeof payload.startedAt !== 'number') return null
+    return {
+      compressing: false,
+      messageCount: Number(payload.messageCount) || 0,
+      beforeTokens: Number(payload.beforeTokens) || 0,
+      afterTokens: Number(payload.afterTokens) || 0,
+      compressed: payload.compressed ?? null,
+      error: typeof payload.error === 'string' ? payload.error : undefined,
+      source: payload.source === 'command' ? 'command' : 'run',
+      startedAt: payload.startedAt,
+    }
+  } catch {
+    return null
+  }
+}
+
 function mapHermesMessages(msgs: HermesMessage[], taskPlans: unknown[] = [], previous: Message[] = []): Message[] {
   // Filter out assistant messages with no display content unless they carry tool call metadata
   // needed to name later tool result rows when resuming persisted history.
@@ -1202,12 +1232,31 @@ function mapHermesMessages(msgs: HermesMessage[], taskPlans: unknown[] = [], pre
       continue
     }
 
+    // A persisted compression renders as its own transcript entry rather than a
+    // command bubble, so the same rounded card covers both the live notice and
+    // the settled record.
+    const compressionRecord = readCompressionRecord(msg)
+    if (compressionRecord) {
+      result.push({
+        id: String(msg.id),
+        role: 'system',
+        content: msg.display_content ?? '',
+        systemType: 'compression',
+        compression: compressionRecord,
+        timestamp: Math.round(msg.timestamp * 1000),
+        isStreaming: false,
+      })
+      continue
+    }
+
     // Normal user/assistant/command messages
     const displayRole = msg.display_role || msg.role
     const displayContent = msg.display_content ?? msg.content
     result.push({
       id: String(msg.id),
-      role: displayRole === 'moa' ? 'system' : displayRole,
+      // `compression` never reaches here -- readCompressionRecord consumes it
+      // above -- but the fallback keeps the union honest if that ever changes.
+      role: displayRole === 'moa' || displayRole === 'compression' ? 'system' : displayRole,
       content: displayContent || '',
       runUsage: normalizeRunUsage(msg.run_usage),
       timestamp: Math.round(msg.timestamp * 1000),
@@ -1826,13 +1875,7 @@ export const useChatStore = defineStore('chat', () => {
     // means "stop tracking this", not "it never happened" -- a compression
     // permanently drops context, so the record has to outlive the run indicator.
     //
-    // Command-sourced compressions are skipped: `/compact` already persists its
-    // own command message ("Compression completed: 229 -> 9 messages, ..."),
-    // and the server replays it on every resume. Injecting an entry here as well
-    // showed the same fact twice for one compression, which is worse than the
-    // original problem. A run-scoped (automatic) compression emits no command
-    // message, so that case still needs the entry -- it is the only record.
-    if (state && state.source !== 'command') recordCompressionEntry(sessionId, state)
+    if (state) recordCompressionEntry(sessionId, state)
   }
 
   /**
@@ -1868,9 +1911,25 @@ export const useChatStore = defineStore('chat', () => {
       systemType: 'compression',
       compression: { ...state, startedAt },
     }
-    const existing = session.messages.findIndex(message => message.id === id)
-    if (existing !== -1) {
-      session.messages.splice(existing, 1, entry)
+    // Keyed on startedAt, which is also how the server persists the row. So once
+    // the persisted row arrives on a resume it replaces this live entry in place
+    // instead of appearing beside it -- "Compressing..." becomes the settled
+    // record rather than turning into two lines.
+    //
+    // Every match is collapsed, not just the first: the live entry and the server
+    // row both carry this startedAt, and replacing only one of them would leave
+    // the duplicate this is meant to prevent.
+    const matches = session.messages
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => message.id === id || message.compression?.startedAt === startedAt)
+    if (matches.length) {
+      // Prefer a server row's identity so the transcript matches what the next
+      // re-fetch produces.
+      const persisted = matches.find(({ message }) => message.compression?.compressing === false)
+      const at = matches[0].index
+      const keepId = persisted?.message.id ?? matches[0].message.id
+      for (let i = matches.length - 1; i >= 1; i -= 1) session.messages.splice(matches[i].index, 1)
+      session.messages.splice(at, 1, { ...entry, id: keepId })
       return
     }
     // Later messages already carry timestamps past the compression start, so the
@@ -1897,6 +1956,46 @@ export const useChatStore = defineStore('chat', () => {
     // nothing about it; it reports completion on its own.
     if (current.source === 'command') return
     setCompressionState(sid, { ...current, compressing: false, compressed: null })
+  }
+
+  /**
+   * Collapses the live entry into the persisted row once a re-fetch brings it.
+   *
+   * `recordCompressionEntry` only merges when a compression *event* arrives, so a
+   * resume that replaces the message list could leave the client-injected live
+   * entry sitting beside the server row for the same compression. Both carry the
+   * same `startedAt`, which is the only reliable link between them: the live id
+   * is synthetic and the server row keeps its own.
+   */
+  function mergePersistedCompressionEntries(sessionId: string | null | undefined) {
+    const sid = sessionId || ''
+    if (!sid) return
+    const session = sessions.value.find(item => item.id === sid)
+    if (!session) return
+    const persisted = session.messages.filter(
+      message => message.compression && message.compression.compressing === false,
+    )
+    if (!persisted.length) return
+    for (const row of persisted) {
+      const startedAt = row.compression!.startedAt
+      if (startedAt == null) continue
+      const liveIndex = session.messages.findIndex(
+        message => message.id === `compression:${sid}:${startedAt}`,
+      )
+      if (liveIndex === -1) continue
+      // Keep the server row's identity so the transcript matches what the next
+      // re-fetch produces.
+      session.messages.splice(liveIndex, 1, row)
+    }
+    // A persisted row that already landed keeps its own place; make sure no
+    // second copy of the same compression is left behind anywhere in the list.
+    const seen = new Set<number>()
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      const startedAt = session.messages[index].compression?.startedAt
+      if (startedAt == null) continue
+      if (seen.has(startedAt)) session.messages.splice(index, 1)
+      else seen.add(startedAt)
+    }
   }
 
   /**
@@ -2754,6 +2853,7 @@ export const useChatStore = defineStore('chat', () => {
           if (Array.isArray(data.messages)) {
             if (!restLoadedMessages) {
               target.messages = mapHermesMessages(data.messages as any[], data.taskPlans, sessionId ? [] : [])
+              mergePersistedCompressionEntries(sessionId)
               restorePersistedSubagentStreams(sessionId)
               setWorkspaceRunChanges(sessionId, data.workspaceRunChanges || [])
               target.loadedMessageCount = data.messageLoadedCount ?? data.messages.length
@@ -4611,6 +4711,7 @@ export const useChatStore = defineStore('chat', () => {
           const previousReasoningAssistantMessageId = reasoningAssistantMessageId
           const replayRunMarker = getReplayRunMarker(data.events) ?? activeRunMarker
           target.messages = mapHermesMessages(data.messages as any[], data.taskPlans, sid ? [] : [])
+          mergePersistedCompressionEntries(sid)
           restorePersistedSubagentStreams(sid)
           setWorkspaceRunChanges(sid, data.workspaceRunChanges || [])
           target.loadedMessageCount = data.messageLoadedCount ?? data.messages.length

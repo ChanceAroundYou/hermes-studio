@@ -76,10 +76,14 @@ describe('run indicator keeps no reserved gap', () => {
     expect(rule('streaming-indicator')).toContain('padding: 4px 4px 0 4px')
   })
 
-  it('shows the running tool strip in the bordered card, not a borderless chip', () => {
-    expect(source).toContain('<ToolRunSummary')
-    expect(source).toContain('class="live-tool-run"')
+  it('folds a running tool into the transcript card instead of a second live box', () => {
+    // An in-flight call is grouped into the trailing card like a finished one, so
+    // the run indicator must not own a card of its own at any point.
+    expect(source).not.toContain('<ToolRunSummary')
+    expect(source).not.toContain('live-tool-run')
     // The chip markup that flashed borderless before the run settled.
     expect(source).not.toContain('v-for="tc in visibleToolCalls"')
+    // And the running tool must not be filtered back out of the transcript.
+    expect(source).not.toContain('currentToolIds')
   })
 })

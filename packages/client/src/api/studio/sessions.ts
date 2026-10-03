@@ -114,7 +114,9 @@ export interface HermesMessage {
   session_id: string
   role: 'user' | 'assistant' | 'system' | 'tool' | 'command' | 'moa' | 'error'
   content: string
-  display_role?: 'user' | 'assistant' | 'system' | 'tool' | 'command' | null
+  // `compression` is a `command` row that the client renders as a transcript
+  // entry rather than a command bubble, so it needs its own display role.
+  display_role?: 'user' | 'assistant' | 'system' | 'tool' | 'command' | 'compression' | null
   display_content?: string | null
   tool_call_id: string | null
   tool_calls: any[] | null

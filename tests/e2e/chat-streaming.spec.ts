@@ -146,8 +146,10 @@ test('freezes the current reasoning between the thinking animation and its tool 
   }, run.session_id)
 
   await expect(liveReasoning).toContainText('Inspecting the pending work.')
-  await expect(page.locator('.streaming-indicator > .live-reasoning-status + .tool-calls-panel')).toBeVisible()
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'read_file' })).toBeVisible()
+  // The in-flight call is a row of the transcript card above, not a second box.
+  await expect(page.locator('.tool-run-card[data-run-id="run-reasoning"]')).toContainText('read_file')
+  await expect(page.locator('.tool-run-card[data-run-id="run-reasoning"] .tool-run-spinner')).toBeVisible()
+  await expect(page.locator('.live-tool-run')).toHaveCount(0)
 
   await page.evaluate((sid) => {
     const socket = (window as any).__PW_CHAT_SOCKET__.latest
@@ -854,7 +856,8 @@ test('renders tool trace and sends explicit approval decisions over the chat-run
   await expect(page.getByText('write_file', { exact: true })).toBeVisible()
   await expect(page.getByText('Writing approved file')).toBeVisible()
   await expect(page.locator('.message.tool .tool-line')).toHaveCount(0)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'write_file' })).toBeVisible()
+  await expect(page.locator('.tool-run-card[data-run-id="run-approval"]')).toContainText('write_file')
+  await expect(page.locator('.tool-run-card[data-run-id="run-approval"] .tool-run-spinner')).toBeVisible()
   await expect(page.getByText('Allow write_file to create /tmp/approved.txt')).toBeVisible()
   await expect(page.getByText('write_file /tmp/approved.txt')).toBeVisible()
   await expect(page.locator('.pending-interaction-countdown')).toContainText(/01:(29|30) remaining/)
@@ -938,7 +941,7 @@ test('renders tool trace and sends explicit approval decisions over the chat-run
   await expect(toolDetails).toContainText('ok')
   await expect(page.getByText('Delta-only approved tool result.')).toBeVisible()
   await expect(page.getByText('Completion fallback should stay hidden.')).toHaveCount(0)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'write_file' })).toHaveCount(0)
+  await expect(page.locator('.live-tool-run')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Stop' })).toHaveCount(0)
   expect(api.unexpectedRequests).toEqual([])
 })
@@ -1182,7 +1185,7 @@ test('keeps prior tool trace visible while hiding only the active run tool trace
 
   const firstRunCard = page.locator('.tool-run-card[data-run-id="run-history-1"]')
   await expect(firstRunCard).toContainText('read_file')
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'read_file' })).toHaveCount(0)
+  await expect(page.locator('.live-tool-run')).toHaveCount(0)
 
   await sendChatMessage(page, 'Second tool trace')
   const second = await waitForRun(page, 1)
@@ -1201,9 +1204,11 @@ test('keeps prior tool trace visible while hiding only the active run tool trace
   }, second.run.session_id)
 
   await expect(firstRunCard).toContainText('read_file')
-  await expect(page.locator('.tool-run-card[data-run-id="run-history-2"]')).toHaveCount(0)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'read_file' })).toHaveCount(0)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'write_file' })).toHaveCount(1)
+  // The running write_file already belongs to its own trailing card: it is the
+  // next row of that card, so the card exists while the call is in flight.
+  await expect(page.locator('.tool-run-card[data-run-id="run-history-2"]')).toContainText('write_file')
+  await expect(page.locator('.tool-run-card[data-run-id="run-history-2"] .tool-run-spinner')).toBeVisible()
+  await expect(page.locator('.live-tool-run')).toHaveCount(0)
 
   await page.evaluate((sid) => {
     const socket = (window as any).__PW_CHAT_SOCKET__.latest
@@ -1277,8 +1282,9 @@ test('moves completed same-run tools into the transcript while the remaining too
 
   const transcriptTools = page.locator('.message.tool .tool-line')
   await expect(transcriptTools).toHaveCount(0)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'read_file' })).toHaveCount(1)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'shell_exec' })).toHaveCount(1)
+  await expect(page.locator('.tool-run-card[data-run-id="run-multi-tool"]')).toContainText('read_file')
+  await expect(page.locator('.tool-run-card[data-run-id="run-multi-tool"]')).toContainText('shell_exec')
+  await expect(page.locator('.live-tool-run')).toHaveCount(0)
 
   await page.evaluate((sid) => {
     const socket = (window as any).__PW_CHAT_SOCKET__.latest
@@ -1295,8 +1301,8 @@ test('moves completed same-run tools into the transcript while the remaining too
 
   const toolRunCard = page.locator('.tool-run-card[data-run-id="run-multi-tool"]')
   await expect(toolRunCard).toContainText('read_file')
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'read_file' })).toHaveCount(0)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'shell_exec' })).toHaveCount(1)
+  await expect(toolRunCard.locator('.tool-run-spinner')).toBeVisible()
+  await expect(page.locator('.live-tool-run')).toHaveCount(0)
 
   await page.evaluate((sid) => {
     const socket = (window as any).__PW_CHAT_SOCKET__.latest
@@ -1314,7 +1320,7 @@ test('moves completed same-run tools into the transcript while the remaining too
 
   await expect(toolRunCard).toContainText('read_file')
   await expect(toolRunCard).toContainText('shell_exec')
-  await expect(page.locator('.tool-calls-panel .tool-call-name')).toHaveCount(0)
+  await expect(page.locator('.live-tool-run')).toHaveCount(0)
   await toolRunCard.locator('.tool-run-header').click()
   await expect(transcriptTools).toHaveCount(2)
   await expect(transcriptTools.filter({ hasText: 'read_file' })).toHaveCount(1)
@@ -1342,8 +1348,7 @@ test('moves completed same-run tools into the transcript while the remaining too
   await expect(transcriptTools).toHaveCount(2)
   await expect(transcriptTools.filter({ hasText: 'read_file' })).toHaveCount(1)
   await expect(transcriptTools.filter({ hasText: 'shell_exec' })).toHaveCount(1)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'read_file' })).toHaveCount(0)
-  await expect(page.locator('.tool-calls-panel .tool-call-name').filter({ hasText: 'shell_exec' })).toHaveCount(0)
+  await expect(page.locator('.live-tool-run')).toHaveCount(0)
   await expect(toolRunCard.locator('.tool-error-badge')).toHaveCount(1)
   await expect(page.getByText('Multi-tool fallback should stay hidden.')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Stop' })).toHaveCount(0)

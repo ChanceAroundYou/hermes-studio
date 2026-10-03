@@ -180,8 +180,10 @@ function mapHistoryMessages(messages: HermesMessage[]): Session['messages'] {
       // `error` is a server-persisted outcome, not a conversation turn. This
       // history view has no red-bubble rendering, so surface it as a system
       // notice rather than widening the whole view's role union.
-      role: displayRole === 'moa' || displayRole === 'error' ? 'system' : displayRole,
-      content: m.content || '',
+      // `compression` is a command row the chat surfaces as its own transcript
+      // entry. This view has no such rendering, so it reads as a system notice.
+      role: displayRole === 'moa' || displayRole === 'error' || displayRole === 'compression' ? 'system' : displayRole,
+      content: m.display_content || m.content || '',
       timestamp: m.timestamp * 1000,
       reasoning: m.reasoning || undefined,
       systemType: displayRole === 'command' ? 'command' : undefined,

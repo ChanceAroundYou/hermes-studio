@@ -1,5 +1,6 @@
 import type { Server, Socket } from 'socket.io'
 import { addMessage, clearSessionMessages, createBranchedSession, createSession, getSession, getSessionDetail, renameSession, updateSessionStats } from '../../repositories/session-store'
+import { persistCompressionRecord } from './compression-record'
 import { logger } from '../../public/logging'
 import type { PrimaryAgentBridgeClient as AgentBridgeClient } from '../../public/chat-agent-runtime'
 import { readConfigYamlForProfile } from '../../public/profile-config'
@@ -216,9 +217,19 @@ if (state.isWorking) {
       finishedAt: Date.now(),
     })
     updateMessageContextTokenUsage(sessionId, state, emit, result.afterTokens, usage)
+    // The transcript record replaces the plain-text command message this used to
+    // emit. A second, differently-shaped line for the same compression was what
+    // made one /compact look like two events.
+    persistCompressionRecord(sessionId, state, {
+      messageCount: result.beforeMessages,
+      beforeTokens: beforeContextTokens,
+      afterTokens: afterContextTokens,
+      compressed: result.compressed ?? null,
+      source: 'command',
+      startedAt,
+    })
     emitCommand({
       action: 'compress',
-      message: `Compression completed: ${result.beforeMessages} -> ${result.resultMessages} messages, ${beforeContextTokens} -> ${afterContextTokens} tokens.`,
       beforeMessages: result.beforeMessages,
       resultMessages: result.resultMessages,
       beforeTokens: beforeContextTokens,
@@ -251,10 +262,20 @@ if (state.isWorking) {
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
+    // A failed compression is still a fact about this point in the transcript:
+    // the context was left as it was, and the user asked for a compaction.
+    persistCompressionRecord(sessionId, state, {
+      messageCount: 0,
+      beforeTokens: 0,
+      afterTokens: 0,
+      compressed: false,
+      error: failureMessage,
+      source: 'command',
+      startedAt: Date.now(),
+    })
     emitCommand({
       ok: false,
       action: 'compress',
-      message: `Compression failed: ${err instanceof Error ? err.message : String(err)}`,
     })
   }
 }

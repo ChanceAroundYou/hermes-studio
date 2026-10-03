@@ -11,6 +11,7 @@ describe('chat message mobile layout guards', () => {
     const messageList = readFileSync('packages/client/src/components/hermes/chat/MessageList.vue', 'utf8')
     const virtualList = readFileSync('packages/client/src/components/hermes/chat/VirtualMessageList.vue', 'utf8')
     const messageItem = readFileSync('packages/client/src/components/hermes/chat/MessageItem.vue', 'utf8')
+    const toolRunSummary = readFileSync('packages/client/src/components/hermes/chat/ToolRunSummary.vue', 'utf8')
     const markdownRenderer = readFileSync('packages/client/src/components/hermes/chat/MarkdownRenderer.vue', 'utf8')
     const groupChatPanel = readFileSync('packages/client/src/components/hermes/group-chat/GroupChatPanel.vue', 'utf8')
     const groupMessageList = readFileSync('packages/client/src/components/hermes/group-chat/GroupMessageList.vue', 'utf8')
@@ -23,11 +24,14 @@ describe('chat message mobile layout guards', () => {
 
     expect(messageList).toContain('.streaming-indicator')
     expect(messageList).toContain('.tool-calls-panel')
-    // The live strip renders in the same bordered card the transcript uses, so
-    // the shrink rules it needs live on the card rather than on a chip.
-    expect(messageList).toContain('ToolRunSummary')
-    expect(messageList).toContain('.live-tool-run')
+    // Running tools render in the transcript's own bordered card, so the shrink
+    // rules they need live on that card rather than on a chip in the run
+    // indicator, which no longer renders one.
     expect(messageList).toContain('ToolRunCard')
+    expect(messageList).not.toContain('.live-tool-run')
+    expect(toolRunSummary).toContain('.tool-run-card')
+    expect(toolRunSummary).toContain('min-width: 0;')
+    expect(toolRunSummary).toContain('max-width: 100%;')
     expect(messageList).toContain('max-width: 34%;')
     expect(messageList).toContain('flex: 1 1 0;')
     expect(messageList).toContain('width: 100%;')
