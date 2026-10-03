@@ -24,7 +24,15 @@ describe('error bubble styling is unified', () => {
     // Command failures are errors too, so they share the one red treatment.
     expect(item).toContain('if (message.role === "command") return isCommandError.value;')
     // The neutral warning-striped system bubble must not also render an error.
-    expect(item).toContain('system: isSystem && !isAgentError,')
+    // Expressed as a rule rather than the literal expression: the system class is
+    // now also excluded for compression entries, which are settled facts rather
+    // than notices, and pinning the exact string made that legitimate narrowing
+    // look like a regression.
+    const systemClassStart = item.indexOf('system: isSystem')
+    expect(systemClassStart).toBeGreaterThan(-1)
+    const systemClass = item.slice(systemClassStart, item.indexOf('\n', systemClassStart))
+    expect(systemClass).toContain('!isAgentError')
+    expect(systemClass).toContain('!props.message.compression')
   })
 
   it('routes a bridge failure carried as status text to the one error bubble', () => {

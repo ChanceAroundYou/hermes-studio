@@ -241,6 +241,43 @@ describe('compression becomes a transcript entry', () => {
     expect(store.activeSession!.messages.filter(m => m.compression)).toHaveLength(1)
   })
 
+  it('does not add an entry when /compact already persisted a command message', async () => {
+    const store = await attach()
+    // The server persists "Compression completed: 229 -> 9 messages, ..." as a
+    // command message and replays it on every resume, so an injected entry would
+    // render the same fact a second time.
+    handlers.onCompressionCompleted({
+      event: 'compression.completed',
+      session_id: 'session-1',
+      totalMessages: 229,
+      beforeTokens: 71834,
+      afterTokens: 24042,
+      compressed: true,
+      source: 'command',
+      started_at: 1_700_000_000_000,
+    })
+
+    expect(store.activeSession!.messages.filter(m => m.compression)).toHaveLength(0)
+  })
+
+  it('keeps the run-scoped entry, which has no command message to fall back on', async () => {
+    const store = await attach()
+    // An automatic mid-run compression emits no command message at all, so the
+    // entry is the only record that it happened.
+    handlers.onCompressionCompleted({
+      event: 'compression.completed',
+      session_id: 'session-1',
+      totalMessages: 880,
+      beforeTokens: 165280,
+      afterTokens: 14473,
+      compressed: true,
+      source: 'bridge',
+      started_at: 1_700_000_000_000,
+    })
+
+    expect(store.activeSession!.messages.filter(m => m.compression)).toHaveLength(1)
+  })
+
   it('is not duplicated when the compression starts and then completes', async () => {
     const store = await attach()
     handlers.onCompressionStarted({
@@ -275,7 +312,7 @@ describe('clearing the tracked state keeps the record', () => {
     const source = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
     const start = source.indexOf('function setCompressionState(')
     const body = source.slice(start, source.indexOf('\n  function ', start + 10))
-    expect(body).toContain('if (state) recordCompressionEntry(sessionId, state)')
+    expect(body).toContain("recordCompressionEntry(sessionId, state)")
     expect(body).not.toMatch(/else[\s\S]*messages\s*=\s*[^;]*filter\(/)
   })
 })
@@ -287,6 +324,16 @@ describe('the run indicator no longer owns the compression notice', () => {
       'utf8',
     )
     expect(source).not.toContain('chatStore.compressionState')
+  })
+
+  it('keeps the compression entry out of the retired amber system bubble', () => {
+    const source = readFileSync(
+      'packages/client/src/components/hermes/chat/MessageItem.vue',
+      'utf8',
+    )
+    // role:'system' pulls in .message-bubble.system -- the amber left-striped
+    // bubble this fork already retired when it unified the error bubble.
+    expect(source).toContain('!props.message.compression')
   })
 
   it('renders the compression as a transcript entry in MessageItem', () => {

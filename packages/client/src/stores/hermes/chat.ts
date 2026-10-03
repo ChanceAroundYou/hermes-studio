@@ -1825,7 +1825,14 @@ export const useChatStore = defineStore('chat', () => {
     // A cleared state deliberately leaves its transcript entry alone. Clearing
     // means "stop tracking this", not "it never happened" -- a compression
     // permanently drops context, so the record has to outlive the run indicator.
-    if (state) recordCompressionEntry(sessionId, state)
+    //
+    // Command-sourced compressions are skipped: `/compact` already persists its
+    // own command message ("Compression completed: 229 -> 9 messages, ..."),
+    // and the server replays it on every resume. Injecting an entry here as well
+    // showed the same fact twice for one compression, which is worse than the
+    // original problem. A run-scoped (automatic) compression emits no command
+    // message, so that case still needs the entry -- it is the only record.
+    if (state && state.source !== 'command') recordCompressionEntry(sessionId, state)
   }
 
   /**

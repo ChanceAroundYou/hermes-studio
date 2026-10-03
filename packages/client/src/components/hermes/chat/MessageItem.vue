@@ -1077,7 +1077,11 @@ onBeforeUnmount(() => {
           <div
             class="message-bubble"
             :class="{
-              system: isSystem && !isAgentError,
+              // A compression entry is a settled fact, not a notice. role:'system'
+              // pulls in .message-bubble.system, which is the amber left-striped
+              // bubble this fork already retired -- the same duplication the
+              // unified error bubble removed. Keep it out of that treatment.
+              system: isSystem && !isAgentError && !props.message.compression,
               'agent-error': isAgentError,
               command: isCommandMessage,
               'command-error': isCommandError,

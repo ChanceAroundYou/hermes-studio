@@ -92,6 +92,25 @@ expect(source).not.toMatch(/activeSessionProfile\.value\?\.alias\?\.trim\(\) \|\
 注意本项目单双引号混用，import 断言要写成引号无关的正则
 （`["']@/utils/...["']`），否则会因为格式而非代码失败，被误读成 bug。
 
+### 5b. 新增信息流条目前，先查是否已有来源
+
+把压缩结果写进信息流后，用户看到同一事实出现两遍：一条是我注入的
+`Compressed 229 msgs: ~71.8K → …`，一条是 `/compact` 服务端本来就
+persist 的 `Compression completed: 229 -> 9 messages, …`。
+
+`session-command.ts` 的 `emitCommand()` 会同时做两件事——`persistCommandMessage()`
+写库 + `state.messages.push()`，以及 `emitToSession()` 推 live 事件。命令类消息
+本来就已经是信息流里的一等公民。
+
+**新增任何信息流条目前，先确认服务端没有已经产出对应的持久消息。**
+自动压缩（run 内触发的）确实没有 command 消息，所以那条仍然需要注入；
+`/compact` 有，就不能重复。区分依据是 `state.source`。
+
+这个错误本可以更早发现：截图里 `/compact` 卡片和我的条目同时出现，
+只要看一眼就知道服务端早有产出。查数据库确认过一次——每次压缩在库里
+只有一条 `Compression completed`，所以客户端那条重复来自我的注入，
+不是既有的重投问题。
+
 ### 6. 说明规则的注释，本身可能违反规则
 
 `tests/client/rtl-logical-css.test.ts` 扫描 CSS 里的物理方向属性（`border-right`、
