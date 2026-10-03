@@ -363,8 +363,12 @@ describe('MessageList live reasoning', () => {
     ])
     await flushPromises()
 
+    // One card for the persisted run, plus the live strip for the running tool.
+    // Both use .tool-run-card on purpose: the running strip must not fall back
+    // to the borderless chip, otherwise it flashes before the run settles.
     expect(wrapper.find('.tool-run-card').exists()).toBe(true)
-    expect(wrapper.findAll('.tool-run-card')).toHaveLength(1)
+    expect(wrapper.findAll('.tool-run-card')).toHaveLength(2)
+    expect(wrapper.find('.live-tool-run').exists()).toBe(true)
     expect(wrapper.find('[data-id="tool-running"]').exists()).toBe(false)
     expect(wrapper.get('.tool-run-card').text()).toContain('Command')
     expect(wrapper.get('.live-reasoning-body').text()).toBe('Run the focused tests.')

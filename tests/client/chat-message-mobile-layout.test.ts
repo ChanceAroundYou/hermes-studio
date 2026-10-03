@@ -23,8 +23,10 @@ describe('chat message mobile layout guards', () => {
 
     expect(messageList).toContain('.streaming-indicator')
     expect(messageList).toContain('.tool-calls-panel')
-    expect(messageList).toContain('.tool-call-preview')
-    expect(messageList).toContain('function toolPreviewText')
+    // The live strip renders in the same bordered card the transcript uses, so
+    // the shrink rules it needs live on the card rather than on a chip.
+    expect(messageList).toContain('ToolRunSummary')
+    expect(messageList).toContain('.live-tool-run')
     expect(messageList).toContain('ToolRunCard')
     expect(messageList).toContain('max-width: 34%;')
     expect(messageList).toContain('flex: 1 1 0;')

@@ -20,12 +20,12 @@ import MessageItem from "./MessageItem.vue";
 import { positionTaskPlansAtTurnEnd } from "@/utils/task-plan";
 import LiveReasoningStatus from "./LiveReasoningStatus.vue";
 import ToolRunCard from "./ToolRunCard.vue";
+import ToolRunSummary from "./ToolRunSummary.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
 import PendingInteractionCard from "@/components/hermes/chat/PendingInteractionCard.vue";
 import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message } from "@/stores/hermes/chat";
 import { useProfilesStore } from "@/stores/hermes/profiles";
 import { useToolTraceVisibility } from "@/composables/useToolTraceVisibility";
-import { openSubagentStream, subagentIdFromToolCall } from "@/utils/hermes/subagent-stream";
 import { messageScrollPositionKey, rememberMessageScrollPosition } from "./message-scroll-position";
 import { chatSessionAgentAvatar } from "@/utils/chat-agent-avatar";
 import { parseThinking } from "@/utils/thinking-parser";
@@ -61,28 +61,6 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
   return String(n)
-}
-
-function formatToolDuration(seconds: number): string {
-  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`
-  if (seconds < 60) return `${Math.round(seconds * 10) / 10}s`
-  const mins = Math.floor(seconds / 60)
-  const secs = Math.round(seconds % 60)
-  return `${mins}m ${secs}s`
-}
-
-function toolPreviewText(preview?: string): string {
-  const text = String(preview || '')
-  return text.length > 160 ? `${text.slice(0, 157)}...` : text
-}
-
-function isSubagentToolCall(message: Message): boolean {
-  return subagentIdFromToolCall(message.toolCallId) !== null
-}
-
-function handleToolCallClick(message: Message) {
-  if (!isSubagentToolCall(message)) return
-  openSubagentStream(chatStore.activeSessionId, message.toolCallId)
 }
 
 function formatElapsed(ms: number): string {
@@ -812,85 +790,17 @@ defineExpose({
                 class="tool-call-spinner"
               ></span>
             </div>
-            <!-- Tool calls -->
-            <div
-              v-for="tc in visibleToolCalls"
-              :key="tc.id"
-              class="tool-call-item"
-              :class="{ 'subagent-entry': isSubagentToolCall(tc) }"
-              :role="isSubagentToolCall(tc) ? 'button' : undefined"
-              :tabindex="isSubagentToolCall(tc) ? 0 : undefined"
-              :title="isSubagentToolCall(tc) ? t('subagent.open') : undefined"
-              @click="handleToolCallClick(tc)"
-              @keydown.enter.prevent="handleToolCallClick(tc)"
-              @keydown.space.prevent="handleToolCallClick(tc)"
-            >
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                class="tool-call-icon"
-              >
-                <path
-                  d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
-                />
-              </svg>
-              <span class="tool-call-name">{{ tc.toolName }}</span>
-              <span
-                v-if="tc.toolPreview"
-                class="tool-call-preview"
-                :title="tc.toolPreview"
-              >{{ toolPreviewText(tc.toolPreview) }}</span>
-              <span
-                v-if="tc.toolDuration !== undefined && tc.toolStatus !== 'running'"
-                class="tool-call-duration"
-                :title="$t('chat.executionDuration')"
-              >{{ formatToolDuration(tc.toolDuration) }}</span
-              >
-              <svg
-                v-if="tc.toolStatus === 'done'"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                class="tool-call-success-icon"
-              >
-                <circle cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.15"/>
-                <path
-                  d="M8 12L11 15L16 9"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  fill="none"
-                />
-              </svg>
-              <span
-                v-if="tc.toolStatus === 'running'"
-                class="tool-call-spinner"
-              ></span>
-              <svg
-                v-if="tc.toolStatus === 'error'"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                class="tool-call-error-icon"
-              >
-                <circle cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.15"/>
-                <path
-                  d="M15 9L9 15M9 9L15 15"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  fill="none"
-                />
-              </svg>
-            </div>
+            <!-- Tool calls
+              Runs in the same card the transcript uses once the turn is
+              persisted, so the strip does not flash a borderless chip first and
+              then swap to the bordered "n tool calls" block. -->
+            <ToolRunSummary
+              v-if="toolTraceVisible && visibleToolCalls.length > 0"
+              class="live-tool-run"
+              :run-id="`${assistantAgent.label}-live`"
+              :tools="visibleToolCalls"
+              :active="false"
+            />
           </div>
           <LiveReasoningStatus
             :agent="assistantAgent"
@@ -1389,7 +1299,16 @@ defineExpose({
     }
   }
 
-  .tool-calls-panel .tool-call-item {
+  .tool-calls-panel /* The live strip is a .tool-run-card, so it needs the shrink behaviour the
+   borderless chip used to provide on narrow screens. */
+.live-tool-run {
+  flex: 0 1 auto;
+  width: 520px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.tool-call-item {
     width: 100%;
   }
 }
@@ -1601,7 +1520,9 @@ defineExpose({
   min-height: 0;
   max-height: none;
   min-width: 0;
-  padding: 4px 4px 0 4px;
+  /* Bottom padding matches MessageItem's 6px margin so the last run block sits
+     the same distance from the composer as any other message does. */
+  padding: 4px 4px 6px 4px;
   box-sizing: border-box;
   overflow: visible;
 }

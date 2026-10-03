@@ -61,4 +61,20 @@ describe('run indicator keeps no reserved gap', () => {
     expect(header).toBeGreaterThan(-1)
     expect(panel).toBeLessThan(header)
   })
+
+  it('keeps the run block the same distance from the composer as any message', () => {
+    // MessageItem separates messages with margin-bottom: 6px.
+    const item = readFileSync('packages/client/src/components/hermes/chat/MessageItem.vue', 'utf8')
+    expect(item).toContain('margin-bottom: 6px')
+
+    const css = rule('streaming-indicator')
+    expect(css).toContain('padding: 4px 4px 6px 4px')
+  })
+
+  it('shows the running tool strip in the bordered card, not a borderless chip', () => {
+    expect(source).toContain('<ToolRunSummary')
+    expect(source).toContain('class="live-tool-run"')
+    // The chip markup that flashed borderless before the run settled.
+    expect(source).not.toContain('v-for="tc in visibleToolCalls"')
+  })
 })
