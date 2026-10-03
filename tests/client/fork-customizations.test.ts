@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -218,5 +218,52 @@ describe('fork customization: run block layout', () => {
   it('shows live tools in the bordered card rather than a raw chip', () => {
     expect(files.messageList).toContain('ToolRunSummary')
     expect(files.messageList).not.toContain('v-for="tc in visibleToolCalls"')
+  })
+})
+
+/**
+ * Upstream features this fork deliberately does not ship.
+ *
+ * Every other entry here asserts that something is *present*. These assert the
+ * opposite, which is the harder direction: cherry-picking an upstream commit
+ * silently reinstates the whole feature, and nothing in the build complains --
+ * the page compiles, the route resolves, the nav entry renders. The only
+ * signal is that it came back.
+ */
+describe('fork customization: deliberately removed upstream features', () => {
+  const gone = [
+    'packages/client/src/views/hermes/ApiRelayView.vue',
+    'packages/client/src/components/hermes/ApiRelayUsageCard.vue',
+    'packages/client/src/api/hermes/api-relay.ts',
+    'packages/client/public/relay-logo.png',
+    'packages/server/src/modules/hermes/controllers/api-relay.ts',
+    'packages/server/src/modules/hermes/services/providers/api-relay-usage.ts',
+    'packages/server/src/modules/studio/contracts/api-relay.ts',
+    'tests/server/api-relay-usage.test.ts',
+    'tests/e2e/api-relay.spec.ts',
+  ]
+
+  it('has no API relay feature files', () => {
+    const resurrected = gone.filter(f => existsSync(f))
+    expect(resurrected).toEqual([])
+  })
+
+  it('exposes no API relay route, endpoint or navigation', () => {
+    // #3257 shipped the partner page; dropping the files alone would leave a
+    // dead route and a dead nav entry pointing at nothing.
+    expect(read('packages/client/src/router/index.ts')).not.toContain('hermes.apiRelay')
+    expect(read('packages/client/src/App.vue')).not.toContain('hermes.apiRelay')
+    expect(read('packages/client/src/components/layout/PageSidebarNav.vue')).not.toContain('apiRelay')
+    expect(read('packages/client/src/components/layout/StudioNavigationRail.vue')).not.toContain('apiRelay')
+    expect(read('packages/server/src/modules/hermes/routes/providers.ts')).not.toContain('api-relay')
+  })
+
+  it('keeps its i18n strings out of every locale', () => {
+    // "饲料" in the zh sidebar came from upstream #1374, not from this fork, so
+    // the removal has to sweep the locales or the string simply lingers.
+    const locales = readdirSync('packages/client/src/i18n/locales').filter(f => f.endsWith('.ts'))
+    expect(locales.length).toBeGreaterThan(0)
+    const stale = locales.filter(f => read(`packages/client/src/i18n/locales/${f}`).includes('apiRelay'))
+    expect(stale).toEqual([])
   })
 })

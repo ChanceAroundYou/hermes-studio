@@ -48,6 +48,19 @@
 | 历史视图 error 显示为 system | HistoryView.vue | 保留 |
 | 统一红泡 + 原地保留 + 不进上下文 | chat.ts + MessageItem.vue + session-store.ts | 保留 |
 
+## 有意移除的上游功能（cherry-pick 时勿带回）
+
+| 功能 | 上游来源 | 说明 |
+|---|---|---|
+| API 中转（侧边栏「饲料」入口、页面、用量卡片、`relay-logo.png`、`/api/hermes/api-relay/usage`） | #3257 / #1374 | 整条链路已删：前端 4 文件 + 路由 + 两个侧边栏入口，服务端 3 文件 + 端点，11 语言文案，server/e2e 测试 |
+
+zh侧边栏的「饲料」文案来自上游 #1374，不是本 fork 所加。清单里的
+`deliberately removed upstream features` 分组专门守这条：cherry-pick #3257 会把
+整个功能静默带回，而页面能编译、路由能解析、导航能渲染，build 不会报错。
+
+**注意**：`app-relay`、`agent-relay`、`outbound-relay-client` 是完全不同的功能
+（App 分发、组聊 Agent 中继、出站中继），不要一起删。
+
 ## 已知既有失败（非本轮引入）
 
 server 20 条。`coding-agents-launch`(4) 与 `group-chat-member-sync`(1) 已修复：

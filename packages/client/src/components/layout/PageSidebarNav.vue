@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { getBaseUrlValue } from '@/api/client'
-const relayLogoSrc = `${getBaseUrlValue()}/relay-logo.png`
 import { computed } from 'vue'
 import { NTooltip } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -10,7 +8,7 @@ import { useSessionSearch } from '@/composables/useSessionSearch'
 import DesktopUpdateDownloadTab from './DesktopUpdateDownloadTab.vue'
 import { useNavigationRail } from '@/composables/useNavigationRail'
 
-type ActiveSection = 'chat' | 'history' | 'connections' | 'agents' | 'models' | 'apiRelay' | 'group' | 'global' | 'workflow'
+type ActiveSection = 'chat' | 'history' | 'connections' | 'agents' | 'models' | 'group' | 'global' | 'workflow'
 
 const props = defineProps<{
   active: ActiveSection
@@ -62,11 +60,6 @@ function openGroupChat() {
 function openWorkflow() {
   if (props.active === 'workflow') return
   void router.push({ name: 'hermes.workflow' })
-}
-
-function openApiRelay() {
-  if (props.active === 'apiRelay') return
-  void router.push({ name: 'hermes.apiRelay' })
 }
 </script>
 
@@ -185,10 +178,6 @@ function openApiRelay() {
           <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" />
         </svg>
         <span>{{ t('sidebar.models') }}</span>
-      </button>
-      <button v-if="!hasNavigationRail" class="page-sidebar-tab" :class="{ active: active === 'apiRelay' }" type="button" :aria-current="active === 'apiRelay' ? 'page' : undefined" @click="openApiRelay">
-        <img class="api-relay-logo" :src="relayLogoSrc" width="18" height="18" alt="" aria-hidden="true" />
-        <span>{{ t('sidebar.apiRelay') }}</span>
       </button>
     </div>
     <div v-if="!hasNavigationRail" class="conversation-switch conversation-switch--four" role="tablist" aria-label="Conversation type">
@@ -316,8 +305,6 @@ function openApiRelay() {
   .page-sidebar-primary { order: 1; flex: 0 0 32px; width: 32px; padding: 0; justify-content: center; }
   .page-sidebar-primary span { display: none; }
 }
-
-.api-relay-logo { border-radius: 4px; }
 
 .page-sidebar-tab {
   width: 100%;
