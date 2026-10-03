@@ -16,6 +16,13 @@ import { extractClipboardFiles } from '@/utils/clipboard-files'
 import VoiceDialogueControls from './VoiceDialogueControls.vue'
 import BundleCreateModal from './BundleCreateModal.vue'
 import { BRIDGE_SESSION_COMMAND_DEFINITIONS } from '@/utils/hermes/bridge-session-commands'
+import {
+  mergeSkillSlashCommands,
+  skillCommandName,
+  skillToSlashCommand,
+  slashCommandInsertText,
+  type SlashCommandOption,
+} from '@/utils/hermes/slash-command-skills'
 import { clampChatInputHeight, isMobileChatInputViewport } from '@/utils/chat-input-height'
 import { normalizeComposerVoiceTranscript, useComposerVoiceInput } from '@/composables/useComposerVoiceInput'
 import { extractRepresentativeVideoFrames, isVideoFile } from '@/utils/video-frame-extraction'
@@ -137,16 +144,6 @@ const configuredTextareaHeight = computed(() =>
   isMobileViewport.value ? null : clampChatInputHeight(settingsStore.display.chat_input_height),
 )
 
-type SlashCommandOption = {
-  name: string
-  args: string
-  description: string
-  insertText?: string
-  key: string
-  opensSkillPicker?: boolean
-  opensBundlePicker?: boolean
-  opensBundleCreator?: boolean
-}
 
 function insertVoiceTranscriptIntoInput(text: string) {
   const normalizedTranscript = normalizeComposerVoiceTranscript(text)
@@ -270,10 +267,20 @@ const skillPickerItems = computed(() => {
     }
   })
 })
+/**
+ * Custom skills, flattened into the same shape as bridge commands so they can
+ * live in one menu. A skill is invoked as `/skill <command-name>` -- that is the
+ * only form the Agent resolves -- so `name` is what the user searches for while
+ * `insertText` carries the executable payload.
+ */
+const skillSlashCommands = computed<SlashCommandOption[]>(() =>
+  skillPickerItems.value.map(skillToSlashCommand)
+)
+
 const filteredBridgeCommands = computed(() => {
   const query = slashQuery.value.trim().toLowerCase()
   const commands = isBridgeSession.value
-    ? bridgeCommands.value
+    ? mergeSkillSlashCommands(bridgeCommands.value, skillSlashCommands.value)
     : isCodingAgentSession.value
       ? bridgeCommands.value.filter(command => CODING_AGENT_SLASH_COMMANDS.includes(command.name)
         && !(command.name === 'context' && isCursorSession.value)
@@ -312,17 +319,6 @@ const filteredBundles = computed(() => {
     || bundle.skills.some(skill => skill.toLowerCase().includes(query)),
   )
 })
-
-function skillCommandName(name: string) {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/_/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-}
 
 function currentSkillsKey() {
   return chatStore.activeSession?.profile || profilesStore.activeProfileName || 'default'
@@ -601,6 +597,12 @@ function updateSlashState() {
   slashQuery.value = beforeCursor.slice(1)
   slashActiveIndex.value = 0
   slashActive.value = filteredBridgeCommands.value.length > 0
+  // The menu shows custom skills, so they must be in hand before it is useful.
+  // loadSkills() is idempotent per profile, so this costs nothing after the
+  // first call and still refreshes when the profile changes.
+  if (isBridgeSession.value && skillCategories.value.length === 0) {
+    void loadSkills()
+  }
 }
 
 function selectBridgeCommand(command: SlashCommandOption) {
@@ -619,8 +621,11 @@ function selectBridgeCommand(command: SlashCommandOption) {
     openBundleCreator()
     return
   }
-  inputText.value = `/${command.insertText || command.name} `
+  inputText.value = slashCommandInsertText(command)
+  // Skills also arrive from the second /skill dialog, so close it here too.
+  if (command.skill) showSkillPicker.value = false
   slashActive.value = false
+  slashQuery.value = ''
   nextTick(() => {
     const el = textareaRef.value
     if (!el) return
