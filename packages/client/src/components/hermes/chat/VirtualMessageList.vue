@@ -683,6 +683,12 @@ defineExpose({
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
+}
+
+/* The gap belongs between rows, and the trailing one only after the last of
+   them. Spacing every row pushed the #after slot (the live run block) an extra
+   rowGap away from the composer. */
+.virtual-row:not(:last-child) {
   padding-bottom: var(--virtual-row-gap);
 }
 

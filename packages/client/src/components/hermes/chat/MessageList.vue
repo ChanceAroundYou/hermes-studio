@@ -1520,9 +1520,9 @@ defineExpose({
   min-height: 0;
   max-height: none;
   min-width: 0;
-  /* Bottom padding matches MessageItem's 6px margin so the last run block sits
-     the same distance from the composer as any other message does. */
-  padding: 4px 4px 6px 4px;
+  /* No trailing padding: the row gap now stops at the last row, so a run block
+     would otherwise sit one gap further from the composer than a plain message. */
+  padding: 4px 4px 0 4px;
   box-sizing: border-box;
   overflow: visible;
 }

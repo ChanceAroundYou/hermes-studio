@@ -63,12 +63,17 @@ describe('run indicator keeps no reserved gap', () => {
   })
 
   it('keeps the run block the same distance from the composer as any message', () => {
-    // MessageItem separates messages with margin-bottom: 6px.
-    const item = readFileSync('packages/client/src/components/hermes/chat/MessageItem.vue', 'utf8')
-    expect(item).toContain('margin-bottom: 6px')
+    const virtual = readFileSync(
+      'packages/client/src/components/hermes/chat/VirtualMessageList.vue',
+      'utf8',
+    )
+    // Spacing every row gave the #after slot an extra rowGap below the last
+    // message, which is what pushed the run block away from the composer.
+    expect(virtual).toContain('.virtual-row:not(:last-child)')
+    expect(virtual).not.toMatch(/\.virtual-row \{[^}]*padding-bottom/)
 
-    const css = rule('streaming-indicator')
-    expect(css).toContain('padding: 4px 4px 6px 4px')
+    // And the block must not add a trailing gap of its own on top of that.
+    expect(rule('streaming-indicator')).toContain('padding: 4px 4px 0 4px')
   })
 
   it('shows the running tool strip in the bordered card, not a borderless chip', () => {
