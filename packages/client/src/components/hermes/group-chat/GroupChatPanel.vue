@@ -3639,16 +3639,6 @@ export default defineComponent({ components: { CreateRoomForm } })
     }
 }
 
-.approval-float-actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    gap: 8px;
-    margin-top: 10px;
-    padding: 10px 4px 0;
-    border-top: 1px solid $border-color;
-}
-
 .clarify-float-input-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -3668,14 +3658,6 @@ export default defineComponent({ components: { CreateRoomForm } })
         border-radius: 14px;
     }
 
-    .approval-float-actions {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .approval-float-actions :deep(.n-button) {
-        width: 100%;
-    }
 }
 
 .approval-float-enter-active,

@@ -1051,16 +1051,6 @@ defineExpose({
   }
 }
 
-.approval-float-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px 4px 0;
-  border-top: 1px solid $border-color;
-}
-
 .clarify-float-input-row {
   display: flex;
   gap: 8px;
@@ -1282,15 +1272,6 @@ defineExpose({
   .queue-remove {
     width: 22px;
     height: 22px;
-  }
-
-  .approval-float-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-
-    :deep(.n-button) {
-      width: 100%;
-    }
   }
 
   .clarify-float-input-row {

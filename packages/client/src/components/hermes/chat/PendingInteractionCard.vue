@@ -434,6 +434,22 @@ const rootClass = computed(() => {
   margin-top: 10px;
   padding: 10px 4px 0;
   border-top: 1px solid $border-color;
+
+  // Buttons size to their own label and wrap instead of being pinned into
+  // fixed columns. Two copies of this rule used to live in the hosts
+  // (MessageList, GroupChatPanel) and re-imposed a 2-column grid that clipped
+  // long clarification choices; this block is the only owner now.
+  :deep(.n-button) {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+  }
+
+  :deep(.n-button__content) {
+    white-space: normal;
+    text-align: start;
+    overflow-wrap: anywhere;
+  }
 }
 
 .clarify-float-input-row {
@@ -465,20 +481,6 @@ const rootClass = computed(() => {
     right: 8px;
     bottom: max(8px, env(safe-area-inset-bottom));
     width: auto;
-  }
-
-  .approval-float-actions {
-    // Buttons must size themselves to their label; fixed-width columns drop
-    // long clarification choices.
-    :deep(.n-button) {
-      width: auto;
-      max-width: 100%;
-    }
-
-    :deep(.n-button__content) {
-      white-space: normal;
-      text-align: start;
-    }
   }
 
   .clarify-float-input-row {
