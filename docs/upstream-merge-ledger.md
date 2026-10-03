@@ -32,7 +32,7 @@
 
 ## fork 保留下来的定制（合并时逐项确认）
 
-**权威清单是 `tests/client/fork-customizations.test.ts`（27 条断言 / 22 项定制），
+**权威清单是 `tests/client/fork-customizations.test.ts`（断言数会随定制增减，故意不写死），
 纪律与事故记录见 `docs/fork-customization-discipline.md`。**
 下表是人读的摘要；合并收尾时跑清单测试，不要只对这张表。
 

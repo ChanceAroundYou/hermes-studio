@@ -28,6 +28,7 @@ const read = (path: string) => readFileSync(path, 'utf8')
 
 const files = {
   messageList: read('packages/client/src/components/hermes/chat/MessageList.vue'),
+  pendingCard: read('packages/client/src/components/hermes/chat/PendingInteractionCard.vue'),
   groupChat: read('packages/client/src/components/hermes/group-chat/GroupChatPanel.vue'),
   chatPanel: read('packages/client/src/components/hermes/chat/ChatPanel.vue'),
   chatStore: read('packages/client/src/stores/hermes/chat.ts'),
@@ -154,6 +155,18 @@ describe('fork customization: shared interaction card', () => {
   it('routes group chat through the same card', () => {
     expect(files.groupChat).toContain('PendingInteractionCard')
     expect(files.groupChat).toContain('agentPairingActions')
+  })
+
+  it('leaves the option row layout to the card alone', () => {
+    // Long options must size themselves. Three copies of
+    // `.approval-float-actions` used to exist and the host copies re-imposed a
+    // 2-column grid that clipped long choices, so whichever stylesheet loaded
+    // last won. Ownership is the invariant: a host copy can only bring the
+    // fixed grid back. The sizing declarations themselves are asserted in
+    // clarify-option-sizing.test.ts.
+    expect(files.pendingCard).toContain('.approval-float-actions')
+    expect(files.messageList).not.toContain('.approval-float-actions')
+    expect(files.groupChat).not.toContain('.approval-float-actions')
   })
 })
 
