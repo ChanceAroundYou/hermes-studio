@@ -284,13 +284,18 @@ describe('the slash menu is reachable and the skill group is visible', () => {
 })
 
 /**
- * An Ekko session is `source: 'coding_agent'` with `agent: 'ekko-agent'`. The
- * skill merge used to be gated on `source === 'cli'`, so Ekko fell through to the
- * coding-agent branch, which offers four Studio-handled verbs and never calls
- * mergeSkillSlashCommands. The menu still worked, which is why this read as
- * "skills are broken" instead of "skills were never wired to this session type".
+ * An Ekko session is `source: 'coding_agent'` with `agent: 'ekko-agent'`.
+ *
+ * It must NOT be offered the custom skills. `isBridgeSlashCommand` is
+ * `!isCodingAgentSession && ...`, so in a coding-agent session a `/skill <name>`
+ * line is inert text that reaches the agent as prose. Verified against a real
+ * run: `/skill plan-only` sent from an Ekko session arrived as an ordinary
+ * message and the agent's available-skill list did not contain the skill.
+ *
+ * An earlier revision allowed it, reasoning that Ekko reads the same profile
+ * skill set. The config matched; the behaviour did not.
  */
-describe('an Ekko session gets the custom skills too', () => {
+describe('an Ekko session is not offered skills it cannot run', () => {
   beforeEach(() => {
     localStorage.clear()
     setViewportWidth(1024)
@@ -306,13 +311,13 @@ describe('an Ekko session gets the custom skills too', () => {
 
   const ekko = { source: 'coding_agent', agent: 'ekko-agent', codingAgentId: 'ekko-agent' }
 
-  it('lists skills for an ekko session', async () => {
+  it('does not list a skill for an ekko session', async () => {
     const wrapper = mountForSession('session-ekko', [
       { name: 'plan only', description: 'Plan and stop', enabled: true },
     ], undefined, ekko)
     await typeSlash(wrapper, '/plan')
     const names = wrapper.findAll('.slash-command-name').map(n => n.text())
-    expect(names).toContain('/plan-only')
+    expect(names).not.toContain('/plan-only')
   })
 
   it('keeps the four coding-agent verbs for an ekko session', async () => {
@@ -324,20 +329,11 @@ describe('an Ekko session gets the custom skills too', () => {
     }
   })
 
-  it('recognises an ekko session identified only by codingAgentId', async () => {
-    const wrapper = mountForSession('session-ekko-id-only', [
-      { name: 'plan only', description: 'Plan and stop', enabled: true },
-    ], undefined, { source: 'coding_agent', codingAgentId: 'ekko-agent' })
+  it('does not even fetch skills for an ekko session', async () => {
+    const wrapper = mountForSession('session-ekko-nofetch', [], undefined, ekko)
     await typeSlash(wrapper, '/plan')
-    expect(wrapper.findAll('.slash-command-name').map(n => n.text())).toContain('/plan-only')
-  })
-
-  it('still does not offer skills to a non-ekko coding agent', async () => {
-    const wrapper = mountForSession('session-codex', [
-      { name: 'plan only', description: 'Plan and stop', enabled: true },
-    ], undefined, { source: 'coding_agent', agent: 'codex', codingAgentId: 'codex' })
-    await typeSlash(wrapper, '/plan')
-    const names = wrapper.findAll('.slash-command-name').map(n => n.text())
-    expect(names).not.toContain('/plan-only')
+    // Prefetching a list this session cannot execute is wasted work on every
+    // first slash.
+    expect(fetchSkillsMock).not.toHaveBeenCalled()
   })
 })

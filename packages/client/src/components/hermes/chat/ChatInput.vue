@@ -232,22 +232,21 @@ const isBridgeSession = computed(() => {
 /**
  * Sessions whose agent can actually run `/skill <name>`.
  *
- * The skill merge used to be gated on `isBridgeSession` alone, which is
- * `source === 'cli'`. An Ekko session is `source: 'coding_agent'` with
- * `agent: 'ekko-agent'`, so it fell through to the coding-agent branch, which
- * offers exactly four Studio-handled verbs (context / compact / usage /
- * status). `mergeSkillSlashCommands` was never called and not one custom skill
- * reached the menu -- which looked like the feature was broken rather than
- * unwired, because the menu itself still worked.
+ * Bridge (Hermes) sessions only. An earlier version also allowed Ekko, on the
+ * reasoning that Ekko reads the same profile skill set -- `target=ekko-agent`
+ * does resolve to those skills, so the argument held up under inspection.
  *
- * Ekko runs on the same profile skill set (`target=ekko-agent` resolves to the
- * hermes skills), so the same list applies.
+ * It was still wrong, and a real message proved it: `/skill plan-only` sent
+ * from an Ekko session arrives at the agent as ordinary prose, and the agent's
+ * available-skill list does not contain the skill. `isBridgeSlashCommand` is
+ * `!isCodingAgentSession && ...`, so in a coding-agent session the `/skill`
+ * prefix is inert text. Listing 105 skills there would have been 105 entries
+ * that look selectable and load nothing.
+ *
+ * Enabling this for a session type therefore needs the run to demonstrably load
+ * the skill first, not a matching profile config.
  */
-const supportsSkillSlashCommands = computed(() => {
-  const session = chatStore.activeSession
-  if (!session) return isBridgeSession.value
-  return session.source === 'cli' || session.agent === 'ekko-agent' || session.codingAgentId === 'ekko-agent'
-})
+const supportsSkillSlashCommands = computed(() => isBridgeSession.value)
 const isCodingAgentSession = computed(() => {
   const session = chatStore.activeSession
   return !!session && (
