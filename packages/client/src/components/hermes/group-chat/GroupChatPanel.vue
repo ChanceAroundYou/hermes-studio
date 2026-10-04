@@ -4,6 +4,7 @@ import { usePageSidebarState } from "@/composables/usePageSidebar"
 import { usePageLoadingState } from '@/composables/usePageLoading'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import HeaderSidebarToggle from '@/components/layout/HeaderSidebarToggle.vue'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { GROUP_AGENT_OPTIONS } from "@/utils/agent-options"
 import DshSessionPresetSelect from "@/components/coding-agents/dsh/DshSessionPresetSelect.vue"
 import { ref, computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, watch } from 'vue'
@@ -248,7 +249,10 @@ const workspacePanelStyle = computed(() => ({
 }))
 
 const profileOptions = computed(() =>
-    profilesStore.profiles.map(p => ({ label: p.name, value: p.name }))
+    profilesStore.profiles.map(p => ({
+      label: resolveProfileDisplayName(profilesStore.profiles, p.name),
+      value: p.name,
+    }))
 )
 
 type GroupAgentType = 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor'

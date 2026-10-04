@@ -4,6 +4,7 @@ import { usePageSidebarState } from "@/composables/usePageSidebar"
 import PageLoading from '@/components/common/PageLoading.vue'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import HeaderSidebarToggle from '@/components/layout/HeaderSidebarToggle.vue'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { AGENT_OPTIONS } from "@/utils/agent-options"
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { NSpin, NButton, NCheckbox, NDrawer, NDrawerContent, NDropdown, NInput, NInputNumber, NModal, NPopconfirm, NSelect, NSpace, NTooltip, useMessage, type DropdownOption } from 'naive-ui'
@@ -481,7 +482,10 @@ const defaultWorkflowProfile = computed(() =>
 
 const workflowProfileOptions = computed(() => {
   const profiles = profilesStore.profiles.length > 0
-    ? profilesStore.profiles.map(profile => ({ label: profile.name, value: profile.name }))
+    ? profilesStore.profiles.map(profile => ({
+        label: resolveProfileDisplayName(profilesStore.profiles, profile.name),
+        value: profile.name,
+      }))
     : [{ label: 'default', value: 'default' }]
   return profiles
 })

@@ -4,6 +4,7 @@ import { usePageSidebarState } from "@/composables/usePageSidebar"
 import { usePageLoadingTask } from '@/composables/usePageLoading'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import HeaderSidebarToggle from '@/components/layout/HeaderSidebarToggle.vue'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { AGENT_OPTIONS } from "@/utils/agent-options"
 import { setSessionPinned } from "@/api/studio/sessions";
 import DshSessionPresetSelect from "@/components/coding-agents/dsh/DshSessionPresetSelect.vue";
@@ -1052,7 +1053,10 @@ function getDefaultModelForProfile(profile: string) {
 
 const newChatProfileOptions = computed(() =>
   (profilesStore.profiles.length > 0 ? profilesStore.profiles : [{ name: "default" }]).map((profile) => ({
-    label: profile.name,
+    // A new chat said "bianchengmao" where the profile is called
+    // "编程毛"; the resolver keeps every select in step with the one the
+    // header already uses.
+    label: resolveProfileDisplayName(profilesStore.profiles, profile.name),
     value: profile.name,
   })),
 );

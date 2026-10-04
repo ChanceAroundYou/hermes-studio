@@ -11,6 +11,7 @@ import JevSettingsPanel from '@/components/hermes/models/JevSettingsPanel.vue'
 import ProvidersPanel from '@/components/hermes/models/ProvidersPanel.vue'
 import ProviderFormModal from '@/components/hermes/models/ProviderFormModal.vue'
 import VoiceSettings from '@/components/hermes/settings/VoiceSettings.vue'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { useModelsStore } from '@/stores/hermes/models'
 import { useAppStore } from '@/stores/hermes/app'
 import { useProfilesStore } from '@/stores/hermes/profiles'
@@ -27,7 +28,10 @@ const router = useRouter()
 const showModal = ref(false)
 const profiles = ref<HermesProfile[]>([])
 const selectedProfile = ref(typeof route.query.modelProfile === 'string' ? route.query.modelProfile : profilesStore.activeProfileName || 'default')
-const profileOptions = computed(() => profiles.value.map(profile => ({ label: profile.name, value: profile.name })))
+const profileOptions = computed(() => profiles.value.map(profile => ({
+  label: resolveProfileDisplayName(profiles.value, profile.name),
+  value: profile.name,
+})))
 const profileLoading = ref(true)
 let profilesReady = false
 let loadId = 0

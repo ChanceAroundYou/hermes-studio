@@ -32,6 +32,7 @@ import {
   type ChatWebhookEventType,
   type LocalChatWebhookTestEvent,
 } from '@/api/studio/chat-webhooks'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 
 const { t } = useI18n()
@@ -134,7 +135,7 @@ function eventLabel(event: ChatWebhookEventType): string {
 }
 
 const profileOptions = computed(() => profilesStore.profiles.map(profile => ({
-  label: profile.displayName || profile.alias || profile.name,
+  label: resolveProfileDisplayName(profilesStore.profiles, profile.name),
   value: profile.name,
 })))
 

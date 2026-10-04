@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { NSelect, NSwitch, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import { useProfilesStore } from '@/stores/hermes/profiles'
 import SettingRow from './SettingRow.vue'
@@ -22,7 +23,7 @@ const excludeProfiles = computed(() => settingsStore.gatewayAutoStart.exclude ||
 const isDefaultProfile = computed(() => (profilesStore.activeProfileName || profilesStore.activeProfile?.name || 'default') === 'default')
 const profileOptions = computed(() =>
   profilesStore.profiles.map(profile => ({
-    label: profile.name,
+    label: resolveProfileDisplayName(profilesStore.profiles, profile.name),
     value: profile.name,
   })),
 )
