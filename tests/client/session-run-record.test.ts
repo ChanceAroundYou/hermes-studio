@@ -74,6 +74,62 @@ describe('the whole record moves together', () => {
     expect(store.runStartedAt.get(SID)).toBeUndefined()
   })
 
+  it('stays lit however far the clock moves past the run start', async () => {
+    // The reported failure, reproduced. A session on the running server was
+    // reported as `run_state: "running"` with a live run id, and its ring was
+    // dark -- because the client aged the run against `run_started_at`, which is
+    // when the run *began*. Fourteen minutes in, it read exactly like a leaked
+    // flag. The clock is advanced by a month on purpose: a test that moved it by
+    // an hour would still pass with a one-day window in place, and the point is
+    // that no window may exist at all -- see the structural guard in
+    // sidebar-live-settle.test.ts for the same invariant stated directly.
+    const started = Date.now()
+    await store.refreshSessionListOnly()
+    sessionsApi.fetchWorkingSessions.mockResolvedValue([{
+      session_id: SID, run_started_at: started - 30_000,
+      source: 'coding_agent', compression: null, background_pending: 0,
+      run_state: 'running', run_id: 'run-live',
+    }])
+    await store.refreshSessionListOnly()
+    expect(store.isSessionLive(SID)).toBe(true)
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(started + 30 * 24 * 60 * 60_000)
+      await store.refreshSessionListOnly()
+      expect(store.isSessionLive(SID)).toBe(true)
+      expect(store.isSessionWorking(SID)).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still goes dark on the poll after the server stops reporting it', async () => {
+    // The other half: no window is not the same as no end. What ends the run is
+    // the snapshot, on the same poll that started it.
+    const started = Date.now()
+    await store.refreshSessionListOnly()
+    sessionsApi.fetchWorkingSessions.mockResolvedValue([{
+      session_id: SID, run_started_at: started - 30_000,
+      source: 'coding_agent', compression: null, background_pending: 0,
+      run_state: 'running', run_id: 'run-live',
+    }])
+    await store.refreshSessionListOnly()
+    expect(store.isSessionLive(SID)).toBe(true)
+
+    vi.useFakeTimers()
+    try {
+      // An hour later the server finishes the run and stops listing it.
+      vi.setSystemTime(started + 30 * 24 * 60 * 60_000)
+      sessionsApi.fetchWorkingSessions.mockResolvedValue([])
+      await store.refreshSessionListOnly()
+      expect(store.isSessionLive(SID)).toBe(false)
+      expect(store.sessionRuns.get(SID)).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps a run live however long it has been going', async () => {
     // The reported regression. `run_started_at` is when the run *began*, not when
     // it was last heard from, so an age bound on it unlit every run that outlived
