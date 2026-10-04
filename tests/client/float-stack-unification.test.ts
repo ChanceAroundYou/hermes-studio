@@ -279,7 +279,7 @@ describe('the stop button and the ring agree on what busy means', () => {
   it('still refuses when there is nothing to stop', () => {
     // The gate is what prevents a pointless abort on an idle session; it must be
     // a real predicate, not a deleted check.
-    expect(chat).toMatch(/function isSessionWorking\(sessionId: string, now = Date\.now\(\)\)/)
-    expect(chat).toMatch(/isSessionLive\(sessionId, now\) \|\| \(sessionRuns\.value\.get\(sessionId\)\?\.delegations \|\| 0\) > 0/)
+    expect(chat).toMatch(/function isSessionWorking\(sessionId: string\): boolean/)
+    expect(chat).toMatch(/isSessionLive\(sessionId\) \|\| \(sessionRuns\.value\.get\(sessionId\)\?\.delegations \|\| 0\) > 0/)
   })
 })

@@ -204,27 +204,36 @@ describe('every locally-kept light has a bound at its use site', () => {
     expect(block).toMatch(/if \(pending === known\) continue/)
   })
 
-  it('bounds the stream flag and the snapshot flag where they are read', () => {
+  it('puts no clock of its own on whether a run is live', () => {
+    // There was one, and it was wrong in both directions. `run_started_at` is
+    // when the run *began*, so a window unlit every run that outlived it: a
+    // session running for fourteen minutes read identically to a leaked flag and
+    // lost its ring while it was still working, next to a three-minute session
+    // that lit normally. The reported symptom was exactly that pair.
     const live = chat.slice(chat.indexOf('function isSessionLive'))
     const body = live.slice(0, live.indexOf('\n  }'))
-    // One record now: the stream flag and the server phase are fields of it
-    // rather than two maps consulted in sequence. The bound stays at the read,
-    // which is what stops a leak outliving the run it describes.
-    expect(body).toMatch(/if \(!run\.stream && run\.phase !== 'running'\) return false/)
-    expect(body).toMatch(/return hasRecentRunStart\(sessionId, now\)/)
+    expect(body).toMatch(/return run\.phase === 'running' \|\| Boolean\(run\.stream\)/)
+    // No age arithmetic anywhere in the predicate.
+    expect(body).not.toMatch(/Date\.now\(\)/)
+    expect(body).not.toMatch(/now - /)
+    expect(body).not.toMatch(/STALE_MS/)
+  })
 
+  it('keeps the one window that is still meaningful at the veto', () => {
+    // The snapshot may only overrule a local flag that is young enough to be a
+    // race. That question is about the *snapshot's* freshness, not the run's
+    // length, so it survives -- and it must stay short.
     const veto = chat.slice(chat.indexOf('function hasLocalRunEvidence'))
     const vetoBody = veto.slice(0, veto.indexOf('\n  }'))
-    // A short window, unlike the display bound: this decides whether the
-    // server's silence may overrule a local flag.
     expect(vetoBody).toMatch(/now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS/)
   })
 
-  it('keeps the display bound generous so a long tool call is not cut short', () => {
-    // Two different questions need two different windows. Collapsing them into
-    // one either lets the snapshot overrule a live run, or fails to end a leak.
-    expect(chat).toMatch(/const LOCAL_RUN_STALE_MS = \d+_?\d*/)
-    const marker = chat.match(/const LOCAL_RUN_STALE_MS = ([\d_]+)/)
-    expect(Number((marker?.[1] || '').replace(/_/g, ''))).toBeGreaterThanOrEqual(120_000)
+  it('polls while a stream is attached even with no phase', () => {
+    // A leftover stream with no phase has nothing else to clear it, so a guard
+    // that skipped the poll for it is how a leak becomes permanent.
+    // Anchored on the interval that drives the poll, not on the constant, which
+    // appears in its own declaration first.
+    const guard = chat.slice(chat.indexOf('window.setInterval(() => {', chat.indexOf('const WORKING_SNAPSHOT_POLL_MS')))
+    expect(guard.slice(0, 900)).toMatch(/streamStates\.value\.size === 0/)
   })
 })

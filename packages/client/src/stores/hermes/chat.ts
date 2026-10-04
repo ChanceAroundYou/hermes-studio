@@ -1558,7 +1558,7 @@ export const useChatStore = defineStore('chat', () => {
    *
    * The reported symptoms were all this shape. A ring stayed lit because
    * `reconcileSessionIdle` cleared three of the six and left `runStates` holding
-   * `running`, which `hasRecentRunStart` then trusted. A stop named a run that
+   * `running`, which no reader ever withdrew. A stop named a run that
    * had already been replaced because the id was only recorded where the flag was
    * first set. A snapshot entry that said `idle` lit the ring because membership
    * of the snapshot was read as "busy".
@@ -1798,8 +1798,8 @@ export const useChatStore = defineStore('chat', () => {
     const sid = sessionId || ''
     if (!sid) return
     // Every field, not the three this used to reach: leaving `runStates` holding
-    // `running` meant the phase outlived the run, and `hasRecentRunStart` trusts
-    // a run with no recorded start -- so the ring stayed lit after reconciling.
+    // `running` meant the phase outlived the run entirely, so the ring stayed
+    // lit after reconciling with nothing behind it.
     markSessionIdle(sid)
     setAbortState(sid, null)
     // Clear per-message spinner state even when the payload carried no messages
@@ -2249,41 +2249,29 @@ export const useChatStore = defineStore('chat', () => {
    * queueing it. Showing a spinner there would contradict what the server is
    * actually willing to do.
    */
-  function isSessionLive(sessionId: string, now = Date.now()): boolean {
+  function isSessionLive(sessionId: string): boolean {
     const run = sessionRuns.value.get(sessionId)
     if (!run) return false
-    // A stream this client attached, or a phase the server called running. These
-    // were three separate maps consulted in sequence -- `streamStates`,
-    // `runStates`, `serverWorking` -- and they are always written together, so a
-    // single record cannot disagree with itself the way three could.
-    if (!run.stream && run.phase !== 'running') return false
-    // Bounded. The stream is normally cleared by its own cleanup and the phase by
-    // the snapshot, but a lost terminal event left a session the user never opens
-    // with no path back to idle. The bound is generous because a long tool call is
-    // legitimately silent; it exists to end a leak, not to second-guess a run.
-    return hasRecentRunStart(sessionId, now)
-  }
-
-  /**
-   * Whether this client has seen a run start for `sessionId` recently enough to
-   * treat the record as live.
-   *
-   * A run with no recorded start is trusted, not rejected. The server writes
-   * `run_started_at` as `startedAt || now`, so a snapshot-sourced run always
-   * carries a timestamp; the ones that do not are local residue, and
-   * `reconcileSessionIdle` is what clears those. Judging them stale here instead
-   * would make the ring vanish on its own and quietly remove the reason that
-   * routine exists.
-   */
-  function hasRecentRunStart(sessionId: string, now: number): boolean {
-    const startedAt = sessionRuns.value.get(sessionId)?.startedAt || 0
-    if (startedAt <= 0) return true
-    return now - startedAt < LOCAL_RUN_STALE_MS
+    // Deliberately no clock of its own.
+    //
+    // There used to be one, and it was wrong in both directions. `run_started_at`
+    // is when the run *began*, not when it was last heard from, so any window
+    // unlit every run that outlived it: a session running for fourteen minutes
+    // read exactly like a leaked flag and sat dark while a three-minute session
+    // lit up beside it. Widening the window only moves which long run goes dark.
+    //
+    // What ends a run is the snapshot. It is the only writer of the phase, and it
+    // withdraws one both when the server stops reporting the session and when the
+    // server reports a phase that is not `running`. The poll runs whenever any
+    // session holds a phase or a stream, so there is always something to correct
+    // and the correction always arrives. A second clock on top could only
+    // disagree with it.
+    return run.phase === 'running' || Boolean(run.stream)
   }
 
   // Display activity is broader than foreground execution (send/queue/voice).
-  function isSessionWorking(sessionId: string, now = Date.now()): boolean {
-    return isSessionLive(sessionId, now) || (sessionRuns.value.get(sessionId)?.delegations || 0) > 0
+  function isSessionWorking(sessionId: string): boolean {
+    return isSessionLive(sessionId) || (sessionRuns.value.get(sessionId)?.delegations || 0) > 0
   }
 
   function isSessionCompletedUnread(sessionId: string): boolean {
@@ -2683,30 +2671,6 @@ export const useChatStore = defineStore('chat', () => {
    */
   const WORKING_SNAPSHOT_FRESHNESS_MS = 15_000
 
-  /**
-   * How long a locally-recorded run may keep the ring lit with no other signal.
-   *
-   * Much longer than the snapshot-veto window, because this guards the flags the
-   * snapshot can no longer contradict on its own: `streamStates` is normally
-   * cleared by the socket's own cleanup, and only the session the user actually
-   * opens gets `resumeServerWorkingRun` -- the one path that could repair it. A
-   * background session had no self-healing path, so one lost `run.completed` left
-   * its ring on forever.
-   *
-   * Generous on purpose. A long tool call is legitimately silent for minutes, and
-   * this bound exists to end a leak rather than to second-guess a real run; the
-   * server's own watchdog (RUN_RECONCILE_STALE_MS) is what decides a run is
-   * really dead, and it emits `run.completed` when it does.
-   */
-  const LOCAL_RUN_STALE_MS = 180_000
-
-  /**
-   * How often the working-sessions snapshot is re-read while anything is live.
-   *
-   * Bounds how long the sidebar can show a finished run as busy, and how long a
-   * completion notice for an unattached session can be delayed. Cheap endpoint,
-   * no database.
-   */
   const WORKING_SNAPSHOT_POLL_MS = 3_000
 
   /**
@@ -2734,8 +2698,8 @@ export const useChatStore = defineStore('chat', () => {
     // The snapshot-veto window, not the display window: this answer decides
     // whether the server's silence may override a local flag, so it has to be
     // short -- a snapshot that raced a real run must not be overruled.
-    // `isSessionLive` uses the longer LOCAL_RUN_STALE_MS for the separate
-    // question of whether the ring may stay lit.
+    // This is the only window left: it decides whether the server's silence may
+    // overrule a local flag, and nothing bounds how long a run may last.
     if (streamStates.value.has(sessionId)) {
       const startedAt = runStartedAt.value.get(sessionId) || 0
       return startedAt > 0 && now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS
@@ -6573,7 +6537,10 @@ export const useChatStore = defineStore('chat', () => {
       // Skip rather than queue: a colliding poll is redundant and the next tick
       // is 3s away.
       if (workingSnapshotPollInFlight) return
-      if (serverWorking.value.size === 0 && subagentStreams.value.size === 0) return
+      // Streams count as much as phases. A leftover stream with no phase has
+      // nothing else to clear it, and skipping the poll for it is exactly how a
+      // leak used to become permanent.
+      if (serverWorking.value.size === 0 && streamStates.value.size === 0 && subagentStreams.value.size === 0) return
       workingSnapshotPollInFlight = true
       void applyWorkingSessionsSnapshot()
         .catch(() => { /* a failed poll must not surface as an error toast */ })

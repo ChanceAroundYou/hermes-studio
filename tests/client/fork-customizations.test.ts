@@ -208,8 +208,10 @@ describe('fork customization: run completion has one exit', () => {
     // the assertion goes empty.
     const streamBranch = vetoBody.slice(vetoBody.indexOf('if (streamStates.value.has(sessionId))'))
     expect(streamBranch.slice(0, 300)).toMatch(/now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS/)
-    // And the display window stays separate, or the two questions collapse.
-    expect(files.chatStore).toMatch(/const LOCAL_RUN_STALE_MS = \d[\d_]*/)
+    // And there is no second, longer window on how long a run may stay live:
+    // that one aged out every long run instead of ending a leak.
+    expect(files.chatStore).not.toMatch(/LOCAL_RUN_STALE_MS/)
+    expect(files.chatStore).not.toMatch(/hasRecentRunStart/)
   })
 
   it('keeps the server reporting background delegations', () => {

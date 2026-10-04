@@ -235,12 +235,20 @@ describe('a leaked local run flag cannot outlive the run it describes', () => {
     expect(store.isSessionWorking('painting')).toBe(true)
   })
 
-  it('releases a flag whose run started long ago and reported nothing', async () => {
-    // The reported symptom for a background session: one lost run.completed and
-    // the ring never went out, with no path to repair it.
+  it('releases a local flag once the snapshot stops reporting the run', async () => {
+    // What ends an optimistic mark is the snapshot no longer listing the session.
+    // It used to be an age check on the mark itself, which unlit real long runs
+    // as readily as it ended leaks.
     listSessions('painting')
     const store = useChatStore()
-    store.markSessionRunning('painting', Date.now() - 600_000)
+    // Old enough that the race veto does not protect it, which is the condition
+    // the snapshot is allowed to overrule.
+    store.markSessionRunning('painting', Date.now() - 30_000)
+    expect(store.isSessionWorking('painting')).toBe(true)
+
+    workingSnapshot([])
+    await store.refreshSessionListOnly()
+
     expect(store.isSessionWorking('painting')).toBe(false)
   })
 
@@ -280,16 +288,29 @@ describe('a leaked local run flag cannot outlive the run it describes', () => {
     expect(store.isSessionWorking('orphan')).toBe(false)
   })
 
-  it('does not trust a snapshot run_state with no run behind it', async () => {
-    // `runStates` came from the snapshot and used to be believed forever. The
-    // server wrote `runState` when a run started and never wrote it back, so a
-    // coding-agent session -- whose `isWorking` is assigned
-    // `!isCodingAgentExecution(...)` and is therefore false from the start --
-    // kept reporting 'running' on every poll. That is the root cause of a ring
-    // that would not go out and a notice that never arrived.
+  it('believes a running phase however long the run has been going', async () => {
+    // The inverse of what this case used to assert, and the reported regression.
+    // `run_started_at` is when the run *began*, so an age bound on it unlit every
+    // run that outlived the window: a fourteen-minute session sat dark while a
+    // three-minute one lit normally next to it.
     listSessions('painting')
     const store = useChatStore()
-    workingSnapshot([['painting', Date.now() - 600_000]])
+    workingSnapshot([['painting', Date.now() - 14 * 60_000]])
+    await store.refreshSessionListOnly()
+
+    expect(store.isSessionWorking('painting')).toBe(true)
+  })
+
+  it('goes dark the moment the snapshot stops reporting the run', async () => {
+    // The other half, and the part that keeps a long run from becoming a leak:
+    // the snapshot is what withdraws the phase, on the same poll that set it.
+    listSessions('painting')
+    const store = useChatStore()
+    workingSnapshot([['painting', Date.now() - 14 * 60_000]])
+    await store.refreshSessionListOnly()
+    expect(store.isSessionWorking('painting')).toBe(true)
+
+    workingSnapshot([])
     await store.refreshSessionListOnly()
 
     expect(store.isSessionWorking('painting')).toBe(false)

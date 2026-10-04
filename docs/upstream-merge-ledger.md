@@ -68,6 +68,8 @@
 | 单一 SessionRun 记录 | chat.ts | 保留；重新拆回并行 map 会再次出现「读者各持一份」的粘滞环 |
 | 派生视图只读 + 唯一写入函数 | chat.ts | 保留；对 computed 投影 `.set()` 不会报错，会静默失效 |
 | markSessionIdle 清全部字段 | chat.ts | 保留；漏掉 phase 会让 reconcile 之后环仍亮 |
+| 存活判定不设客户端时钟 | chat.ts | 保留；`run_started_at` 是开始时间，任何年龄界限都会误杀更长的 run |
+| 轮询守卫含已附加的流 | chat.ts | 保留；漏掉流会让无 phase 的残留流永不清理 |
 
 ## 有意移除的上游功能（cherry-pick 时勿带回）
 

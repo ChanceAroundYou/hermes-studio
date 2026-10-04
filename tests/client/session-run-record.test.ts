@@ -57,7 +57,7 @@ beforeEach(() => {
 })
 
 describe('the whole record moves together', () => {
-  it('adopts, ages out and releases as one', () => {
+  it('adopts and releases as one, with every reader agreeing', () => {
     // Three readers used to consult three different maps. They answer from one
     // record now, so they cannot disagree.
     expect(store.isSessionWorking(SID)).toBe(false)
@@ -67,15 +67,31 @@ describe('the whole record moves together', () => {
     expect(store.serverWorking.has(SID)).toBe(true)
     expect(store.runStartedAt.get(SID)).toBeGreaterThan(0)
 
-    // Past the display bound: one read answers for all of them.
-    store.markSessionRunning(SID, Date.now() - 600_000)
-    expect(store.isSessionLive(SID)).toBe(false)
-    expect(store.isSessionWorking(SID)).toBe(false)
-
     store.markSessionIdle(SID)
+    expect(store.isSessionWorking(SID)).toBe(false)
     expect(store.sessionRuns.get(SID)).toBeUndefined()
     expect(store.serverWorking.has(SID)).toBe(false)
     expect(store.runStartedAt.get(SID)).toBeUndefined()
+  })
+
+  it('keeps a run live however long it has been going', async () => {
+    // The reported regression. `run_started_at` is when the run *began*, not when
+    // it was last heard from, so an age bound on it unlit every run that outlived
+    // the window: a fourteen-minute session sat dark while a three-minute one lit
+    // normally beside it.
+    await store.refreshSessionListOnly()
+    sessionsApi.fetchWorkingSessions.mockResolvedValue([{
+      session_id: SID, run_started_at: Date.now() - 14 * 60_000,
+      source: 'cli', compression: null, background_pending: 0,
+      run_state: 'running', run_id: 'run-long',
+    }])
+    await store.refreshSessionListOnly()
+
+    expect(store.isSessionLive(SID)).toBe(true)
+    expect(store.isSessionWorking(SID)).toBe(true)
+    // The clock still reports when the run began, which is what the elapsed timer
+    // reads -- it just no longer decides whether the run exists.
+    expect(store.runStartedAt.get(SID)).toBeLessThan(Date.now() - 13 * 60_000)
   })
 
   it('keeps the run identity when a later patch mentions only the phase', async () => {
@@ -147,11 +163,16 @@ describe('the whole record moves together', () => {
     expect(store.streamStates.has(SID)).toBe(true)
   })
 
-  it('still refuses to treat a long-dead attached stream as live', () => {
-    // The bound applies to the stream field too, or a lost terminal event leaves
-    // a session nobody opens lit forever.
+  it('holds an attached stream live until something clears it', () => {
+    // No clock here either, for the same reason: a long stream would expire with
+    // the run still going. What clears a leftover stream is the session's own
+    // cleanup, reconciliation, or the snapshot dropping the session -- and the
+    // poll now runs while a stream is attached, so that last one always happens.
     store.attachSessionStream(SID, { abort: vi.fn() })
     store.markSessionRunning(SID, Date.now() - 600_000)
+    expect(store.isSessionLive(SID)).toBe(true)
+
+    store.markSessionIdle(SID)
     expect(store.isSessionLive(SID)).toBe(false)
   })
 })
