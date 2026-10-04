@@ -28,7 +28,10 @@ export interface EkkoSkillListResponse {
  *  `invalid` skill would be a dead menu entry, which is exactly the failure
  *  mode this path exists to avoid. */
 export function isDispatchableEkkoSkill(skill: EkkoSkillInfo): boolean {
-  return skill.validationStatus === 'valid' && skill.enabled
+  // A null row is possible in this payload and throws here, which would fail the
+  // whole filter and take every skill down with it. One bad row costs one skill.
+  if (!skill || typeof skill !== 'object') return false
+  return skill.validationStatus === 'valid' && skill.enabled === true
 }
 
 export async function fetchEkkoSkills(profile: string): Promise<EkkoSkillInfo[]> {
