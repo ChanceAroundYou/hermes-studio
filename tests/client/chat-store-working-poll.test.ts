@@ -79,8 +79,8 @@ describe('sidebar working flags from the working-sessions snapshot', () => {
     const store = useChatStore()
     // Make `me` the current session and put it in the state a live run leaves.
     store.activeSessionId = 'me'
-    store.serverWorking.add('me')
-    store.streamStates.set('me', { abort: vi.fn() })
+    store.markSessionRunning('me')
+    store.attachSessionStream('me', { abort: vi.fn() })
     expect(store.isStreaming).toBe(true)
 
     workingSnapshot([['me', Date.now()], ['painting', Date.now()]])
@@ -154,8 +154,8 @@ describe('the delegation light is switched off by the snapshot', () => {
 
     // And with the foreground flags cleared, the delegation count alone still
     // keeps the ring lit -- that is the state a pure background run is in.
-    store.serverWorking.delete('painting')
-    store.runStartedAt.delete('painting')
+    store.markSessionIdle('painting')
+    store.markSessionIdle('painting')
     expect(store.isSessionWorking('painting')).toBe(true)
   })
 
@@ -221,8 +221,7 @@ describe('a leaked local run flag cannot outlive the run it describes', () => {
   it('keeps a genuinely fresh run lit', async () => {
     listSessions('painting')
     const store = useChatStore()
-    store.streamStates.set('painting', { abort: vi.fn() })
-    store.runStartedAt.set('painting', Date.now())
+    store.markSessionRunning('painting', Date.now())
     expect(store.isSessionWorking('painting')).toBe(true)
   })
 
@@ -232,8 +231,7 @@ describe('a leaked local run flag cannot outlive the run it describes', () => {
     // watchdog decides a run is really dead and emits run.completed.
     listSessions('painting')
     const store = useChatStore()
-    store.streamStates.set('painting', { abort: vi.fn() })
-    store.runStartedAt.set('painting', Date.now() - 120_000)
+    store.markSessionRunning('painting', Date.now() - 120_000)
     expect(store.isSessionWorking('painting')).toBe(true)
   })
 
@@ -242,8 +240,7 @@ describe('a leaked local run flag cannot outlive the run it describes', () => {
     // the ring never went out, with no path to repair it.
     listSessions('painting')
     const store = useChatStore()
-    store.streamStates.set('painting', { abort: vi.fn() })
-    store.runStartedAt.set('painting', Date.now() - 600_000)
+    store.markSessionRunning('painting', Date.now() - 600_000)
     expect(store.isSessionWorking('painting')).toBe(false)
   })
 
@@ -256,8 +253,7 @@ describe('a leaked local run flag cannot outlive the run it describes', () => {
     const store = useChatStore()
     workingSnapshot([['painting', Date.now() - 30_000]])
     await store.refreshSessionListOnly()
-    store.streamStates.set('painting', { abort: vi.fn() })
-    store.runStartedAt.set('painting', Date.now() - 30_000)
+    store.markSessionRunning('painting', Date.now() - 30_000)
     expect(store.isSessionWorking('painting')).toBe(true)
 
     workingSnapshot([])
@@ -277,7 +273,7 @@ describe('a leaked local run flag cannot outlive the run it describes', () => {
     // local residue, and reconciliation is what clears those.
     listSessions('orphan')
     const store = useChatStore()
-    store.serverWorking.add('orphan')
+    store.markSessionRunning('orphan')
     expect(store.isSessionWorking('orphan')).toBe(true)
 
     store.reconcileSessionIdle('orphan')

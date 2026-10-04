@@ -65,6 +65,9 @@
 | abort 不因断线判失败 | chat.ts | 保留；socket.io 自带缓冲，提前 return 把可恢复的停止变成报错 |
 | serverWorking 只由 run_state==='running' 写入 | chat.ts | 保留；finishing/idle 入快照不代表在跑 |
 | run_id 每次轮询都刷新 | chat.ts | 保留；排队 run 替换时若不刷新会一直发过期 id，服务端当陈旧丢弃 |
+| 单一 SessionRun 记录 | chat.ts | 保留；重新拆回并行 map 会再次出现「读者各持一份」的粘滞环 |
+| 派生视图只读 + 唯一写入函数 | chat.ts | 保留；对 computed 投影 `.set()` 不会报错，会静默失效 |
+| markSessionIdle 清全部字段 | chat.ts | 保留；漏掉 phase 会让 reconcile 之后环仍亮 |
 
 ## 有意移除的上游功能（cherry-pick 时勿带回）
 

@@ -1546,34 +1546,163 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<string | null>(null)
   const focusMessageId = ref<string | null>(null)
-  const streamStates = ref<Map<string, { abort: () => void | boolean }>>(new Map())
   /**
-   * sessionId -> the id of the run the server says is live.
+   * Everything this client knows about one session's run, in one record.
    *
-   * Used to label an abort so a retry after a reconnect cannot kill a run that
-   * started in the meantime. Derived from the same snapshot as every other
-   * activity flag; the consolidation of those flags into one map is the next
-   * step, and this becomes a field of it rather than a separate ref.
+   * This replaces five parallel maps keyed by session id -- `streamStates`,
+   * `serverWorking`, `runStates`, `backgroundPendingBySession`, `runStartedAt` --
+   * plus the run id. They all described one thing, which is why every
+   * disagreement between them was invisible: a reader that consulted three of
+   * the five answered differently from one that consulted two, and which fields
+   * had to be cleared on a terminal event depended on which had been written.
+   *
+   * The reported symptoms were all this shape. A ring stayed lit because
+   * `reconcileSessionIdle` cleared three of the six and left `runStates` holding
+   * `running`, which `hasRecentRunStart` then trusted. A stop named a run that
+   * had already been replaced because the id was only recorded where the flag was
+   * first set. A snapshot entry that said `idle` lit the ring because membership
+   * of the snapshot was read as "busy".
+   *
+   * One record per session, one writer, one reader.
    */
-  const liveRunIds = ref<Map<string, string>>(new Map())
-  /** sessionId → server-reported isWorking status */
-  const serverWorking = ref<Set<string>>(new Set())
+  interface SessionRun {
+    /** As the server reported it. `idle` means the server says nothing runs. */
+    phase: RunState
+    /** The run this describes, when the server named one. */
+    runId?: string
+    /** When the run began, as the server reported it. Drives the elapsed clock. */
+    startedAt?: number
+    /** Live delegations. Not part of `phase`: a delegation outlives its run. */
+    delegations: number
+    /** A stream this client attached, with the abort handle that detaches it. */
+    stream?: { abort: () => void | boolean }
+  }
+
+  const sessionRuns = ref<Map<string, SessionRun>>(new Map())
+
+  const EMPTY_SESSION_RUN: SessionRun = { phase: 'idle', delegations: 0 }
+
+  function sessionRunFor(sessionId: string | null | undefined): SessionRun {
+    const sid = sessionId || ''
+    return (sid ? sessionRuns.value.get(sid) : undefined) || EMPTY_SESSION_RUN
+  }
+
+  function sameSessionRun(a: SessionRun | undefined, b: SessionRun): boolean {
+    return Boolean(a)
+      && a!.phase === b.phase
+      && a!.runId === b.runId
+      && a!.startedAt === b.startedAt
+      && a!.delegations === b.delegations
+      && a!.stream === b.stream
+  }
+
+  /**
+   * The only writer of run state.
+   *
+   * Fields absent from `patch` keep their current value, so a caller that knows
+   * about only one of them cannot erase the others by omission -- which is how
+   * `reconcileSessionIdle` used to leave the phase behind and hold the ring lit
+   * with nothing under it.
+   */
+  function patchSessionRun(sessionId: string | null | undefined, patch: Partial<SessionRun>): void {
+    const sid = sessionId || ''
+    if (!sid) return
+    const current = sessionRuns.value.get(sid)
+    const next: SessionRun = {
+      phase: patch.phase ?? current?.phase ?? 'idle',
+      runId: 'runId' in patch ? patch.runId : current?.runId,
+      startedAt: 'startedAt' in patch ? patch.startedAt : current?.startedAt,
+      delegations: patch.delegations ?? current?.delegations ?? 0,
+      stream: 'stream' in patch ? patch.stream : current?.stream,
+    }
+    // An entry that says nothing is removed, so `has` reads as "this session has
+    // something to report" rather than "this session was mentioned once".
+    const empty = next.phase === 'idle' && !next.stream && next.delegations <= 0 && !next.startedAt
+    if (empty) {
+      if (!current) return
+      const copy = new Map(sessionRuns.value)
+      copy.delete(sid)
+      sessionRuns.value = copy
+      return
+    }
+    if (sameSessionRun(current, next)) return
+    sessionRuns.value = new Map(sessionRuns.value).set(sid, next)
+  }
+
+  /** Adopt a run: the server reports it as running, or this client just started one. */
+  function markSessionRunning(sessionId: string, startedAt?: number): void {
+    patchSessionRun(sessionId, {
+      phase: 'running',
+      ...(startedAt && startedAt > 0 ? { startedAt } : {}),
+    })
+  }
+
+  /**
+   * Record that this client is following the run, with the handle that stops it.
+   *
+   * Attaching a stream is not the same as learning the run is live: the bridge
+   * path attaches one for a run it already knows about, and `ensureAbortHandle`
+   * attaches one to a session the resume already reported as working. It only
+   * records the handle.
+   */
+  function attachSessionStream(sessionId: string, stream: { abort: () => void | boolean }): void {
+    patchSessionRun(sessionId, { stream })
+  }
+
+  /**
+   * Converge a session to idle, clearing every field a reader could hold.
+   *
+   * `delegations` deliberately survives: a delegation is not part of the run and
+   * can outlive it, and the snapshot is what settles that count.
+   */
+  function markSessionIdle(sessionId: string | null | undefined): void {
+    patchSessionRun(sessionId, {
+      phase: 'idle',
+      runId: undefined,
+      startedAt: undefined,
+      stream: undefined,
+    })
+  }
+
+  /**
+   * Read-only views of `sessionRuns`, for the callers that only look.
+   *
+   * Nothing writes through these any more. They are derived, so they cannot
+   * drift from the record they describe.
+   */
+  const serverWorking = computed<Set<string>>(() => new Set(
+    [...sessionRuns.value].filter(([, run]) => run.phase === 'running').map(([sid]) => sid),
+  ))
+
+  const streamStates = computed<Map<string, { abort: () => void | boolean }>>(() => {
+    const out = new Map<string, { abort: () => void | boolean }>()
+    for (const [sid, run] of sessionRuns.value) if (run.stream) out.set(sid, run.stream)
+    return out
+  })
+
   /** Authoritative live delegation counts, never inferred from transcript history. */
-  const backgroundPendingBySession = ref<Map<string, number>>(new Map())
+  const backgroundPendingBySession = computed<Map<string, number>>(() => {
+    const out = new Map<string, number>()
+    for (const [sid, run] of sessionRuns.value) if (run.delegations > 0) out.set(sid, run.delegations)
+    return out
+  })
   let runtimeGeneration = 0
   const backgroundObservers = new Map<string, () => void>()
 
   function clearBackgroundObservers() {
     for (const dispose of backgroundObservers.values()) dispose()
     backgroundObservers.clear()
-    backgroundPendingBySession.value.clear()
+    for (const sid of [...sessionRuns.value.keys()]) {
+      if ((sessionRuns.value.get(sid)?.delegations || 0) > 0) patchSessionRun(sid, { delegations: 0 })
+    }
   }
 
   const unsubscribeAuthInvalidation = onAuthInvalidated(() => {
     runtimeGeneration += 1
     clearBackgroundObservers()
-    streamStates.value.clear()
-    serverWorking.value.clear()
+    // A new generation starts from nothing: keeping any part of the previous one
+    // is what let a stale flag outlive the profile or mode it belonged to.
+    sessionRuns.value = new Map()
   })
 
   onScopeDispose(() => {
@@ -1587,7 +1716,7 @@ export const useChatStore = defineStore('chat', () => {
     if (Number.isFinite(count) && count > 0) {
       const session = sessions.value.find(s => s.id === sessionId)
       if (!session) return
-      backgroundPendingBySession.value.set(sessionId, count)
+      patchSessionRun(sessionId, { delegations: count })
       if (!backgroundObservers.has(sessionId)) {
         const generation = runtimeGeneration
         backgroundObservers.set(sessionId, observeBackgroundStatus(
@@ -1598,7 +1727,7 @@ export const useChatStore = defineStore('chat', () => {
         ))
       }
     } else {
-      backgroundPendingBySession.value.delete(sessionId)
+      patchSessionRun(sessionId, { delegations: 0 })
       backgroundObservers.get(sessionId)?.()
       backgroundObservers.delete(sessionId)
     }
@@ -1630,19 +1759,27 @@ export const useChatStore = defineStore('chat', () => {
    * A client that opens the page mid-run needs this: without it the thinking
    * timer counts from its own first render and restarts on every navigation.
    */
-  const runStartedAt = ref<Map<string, number>>(new Map())
+  const runStartedAt = computed<Map<string, number>>(() => {
+    const out = new Map<string, number>()
+    for (const [sid, run] of sessionRuns.value) if (run.startedAt) out.set(sid, run.startedAt)
+    return out
+  })
 
+  /**
+   * Recording when a run began is the same act as learning it is running, so
+   * this sets the phase too. Callers used to pair it with a separate
+   * `serverWorking.add`, which is the duplication this record removes: a start
+   * time without a running phase is a run the ring would never light for.
+   */
   function setRunStartedAt(sessionId: string, startedAt: number) {
     if (!sessionId || !(startedAt > 0)) return
-    if (runStartedAt.value.get(sessionId) === startedAt) return
-    runStartedAt.value = new Map(runStartedAt.value).set(sessionId, startedAt)
+    markSessionRunning(sessionId, startedAt)
   }
 
+  /** Forget the run clock without changing what is known about the run. */
   function clearRunStartedAt(sessionId: string) {
-    if (!sessionId || !runStartedAt.value.has(sessionId)) return
-    const next = new Map(runStartedAt.value)
-    next.delete(sessionId)
-    runStartedAt.value = next
+    if (!sessionId || !sessionRuns.value.get(sessionId)?.startedAt) return
+    patchSessionRun(sessionId, { startedAt: undefined })
   }
 
   /**
@@ -1660,9 +1797,10 @@ export const useChatStore = defineStore('chat', () => {
   function reconcileSessionIdle(sessionId: string | null | undefined) {
     const sid = sessionId || ''
     if (!sid) return
-    serverWorking.value.delete(sid)
-    streamStates.value.delete(sid)
-    clearRunStartedAt(sid)
+    // Every field, not the three this used to reach: leaving `runStates` holding
+    // `running` meant the phase outlived the run, and `hasRecentRunStart` trusts
+    // a run with no recorded start -- so the ring stayed lit after reconciling.
+    markSessionIdle(sid)
     setAbortState(sid, null)
     // Clear per-message spinner state even when the payload carried no messages
     // (short runs), and settle any tool row left mid-flight.
@@ -1859,8 +1997,7 @@ export const useChatStore = defineStore('chat', () => {
     pendingClarifies.value = new Map()
     pendingApprovalResponseIds.clear()
     pendingClarifyResponseIds.clear()
-    streamStates.value = new Map()
-    serverWorking.value = new Set()
+    sessionRuns.value = new Map()
     pendingForkCommands.value = new Set()
     workspaceRunChangesBySession.value = new Map()
     abortWatchdogs.clear()
@@ -2112,55 +2249,41 @@ export const useChatStore = defineStore('chat', () => {
    * queueing it. Showing a spinner there would contradict what the server is
    * actually willing to do.
    */
-  const runStates = ref<Map<string, RunState>>(new Map())
-
   function isSessionLive(sessionId: string, now = Date.now()): boolean {
-    // `serverWorking` stays in the OR: the snapshot is a plain HTTP read that can
-    // be taken before the run it would report, and clearing on absence makes the
-    // sidebar blink out for a whole poll interval. It is the client's own record
-    // that the server said "busy", so it must not be dropped in favour of the
-    // newer state map.
-    //
-    // The two flags are bounded. `streamStates` is normally cleared by the
-    // socket's own cleanup, and `serverWorking` by the snapshot, but both leak
-    // when the terminal event never arrives -- and only the session the user
-    // actually opens gets `resumeServerWorkingRun`, which is the one path that
-    // could repair them. A background session had no self-healing path at all,
-    // so a single lost `run.completed` left its ring on permanently. The bound
-    // is generous because a long tool call is legitimately silent; it exists to
-    // end a leak, not to second-guess a real run.
-    if (streamStates.value.has(sessionId)) return hasRecentRunStart(sessionId, now)
-    // Bounded for the same reason as the two flags above: `runStates` comes from
-    // the snapshot, and a value that is never withdrawn would keep the ring lit
-    // with nothing behind it. The server now reports 'idle' when the run is over,
-    // so this is the client's own backstop rather than the primary mechanism.
-    if (runStates.value.get(sessionId) === 'running' && hasRecentRunStart(sessionId, now)) return true
-    // Last resort for the raced snapshot: the server told us it was working and
-    // the local run has not aged out yet.
-    if (!serverWorking.value.has(sessionId)) return false
+    const run = sessionRuns.value.get(sessionId)
+    if (!run) return false
+    // A stream this client attached, or a phase the server called running. These
+    // were three separate maps consulted in sequence -- `streamStates`,
+    // `runStates`, `serverWorking` -- and they are always written together, so a
+    // single record cannot disagree with itself the way three could.
+    if (!run.stream && run.phase !== 'running') return false
+    // Bounded. The stream is normally cleared by its own cleanup and the phase by
+    // the snapshot, but a lost terminal event left a session the user never opens
+    // with no path back to idle. The bound is generous because a long tool call is
+    // legitimately silent; it exists to end a leak, not to second-guess a run.
     return hasRecentRunStart(sessionId, now)
   }
 
   /**
    * Whether this client has seen a run start for `sessionId` recently enough to
-   * treat the local flags as live.
+   * treat the record as live.
    *
-   * A flag with no recorded start is trusted, not rejected. The server writes
-   * `run_started_at` as `startedAt || now`, so a snapshot-sourced flag always
-   * carries a timestamp; the ones that do not are local residue from a run this
-   * client started and then lost track of, and `reconcileSessionIdle` is the
-   * routine that clears those. Judging them stale here instead would make the
-   * ring vanish on its own and quietly remove the reason that routine exists.
+   * A run with no recorded start is trusted, not rejected. The server writes
+   * `run_started_at` as `startedAt || now`, so a snapshot-sourced run always
+   * carries a timestamp; the ones that do not are local residue, and
+   * `reconcileSessionIdle` is what clears those. Judging them stale here instead
+   * would make the ring vanish on its own and quietly remove the reason that
+   * routine exists.
    */
   function hasRecentRunStart(sessionId: string, now: number): boolean {
-    const startedAt = runStartedAt.value.get(sessionId) || 0
+    const startedAt = sessionRuns.value.get(sessionId)?.startedAt || 0
     if (startedAt <= 0) return true
     return now - startedAt < LOCAL_RUN_STALE_MS
   }
 
   // Display activity is broader than foreground execution (send/queue/voice).
   function isSessionWorking(sessionId: string, now = Date.now()): boolean {
-    return isSessionLive(sessionId, now) || (backgroundPendingBySession.value.get(sessionId) || 0) > 0
+    return isSessionLive(sessionId, now) || (sessionRuns.value.get(sessionId)?.delegations || 0) > 0
   }
 
   function isSessionCompletedUnread(sessionId: string): boolean {
@@ -2691,58 +2814,44 @@ export const useChatStore = defineStore('chat', () => {
         finishedBySnapshot.add(stream.sessionId)
       }
 
-      const nextRunStates = new Map<string, RunState>()
-      for (const entry of snapshot) {
-        const state = entry.run_state ?? 'running'
-        if (state === 'idle') continue
-        nextRunStates.set(String(entry.session_id), state)
-      }
-      runStates.value = nextRunStates
-
-      // `finishing` is reported by the server but is deliberately not treated as
-      // busy, so it must not be cleared as "unknown" either — it is a known
-      // state that simply does not light the indicator.
-      const authoritativeRemove = [...serverWorking.value]
-        .filter(id => !live.has(id)
-          && !hasLocalRunEvidence(id, now)
-          && runStates.value.get(id) !== 'finishing')
-      // Only relax flags for sessions this client has not observed a terminal
-      // event for since the snapshot may lag behind a just-finished run.
-      for (const id of authoritativeRemove) serverWorking.value.delete(id)
-      // The terminal event for a session this client is not attached to never
-      // arrives, so the poll is the only place that can learn it finished. It
-      // used to be silent about it, which is why a finished run looked identical
-      // to a stuck one. Report it once per session.
-      for (const id of new Set([...authoritativeRemove, ...finishedBySnapshot])) {
-        settleSessionFinished(id)
-      }
+      // The snapshot is the authority on phase, run identity and delegation
+      // count, and the only writer that can withdraw them. Applied field by field
+      // through `patchSessionRun`, so a poll that knows nothing about a stream
+      // this client attached does not erase it.
+      const seenInSnapshot = new Set<string>()
       for (const entry of snapshot) {
         const sid = String(entry.session_id)
+        seenInSnapshot.add(sid)
         // Live again, so the next finished run is allowed to report itself.
         snapshotFinishNotified.delete(sid)
-        // Membership of the snapshot is not the same as "running". An entry that
-        // says `finishing` is deliberately not busy, and an `idle` one is a live
-        // agent between turns -- a coding agent keeps its process, so `hasSession`
-        // stays true long after the turn ended. Adding either to `serverWorking`
-        // lit the ring for a session the server had just described as not
-        // running, which is what made the ring look arbitrary.
-        if ((entry.run_state ?? 'running') !== 'running') {
-          serverWorking.value.delete(sid)
-          liveRunIds.value.delete(sid)
-          continue
-        }
-        // Refreshed on every poll, before the `continue` below. A queued run
-        // replaces a finished one without the session ever leaving this list, so
-        // updating the identity only when the flag is first set left the client
-        // naming the previous run -- and an abort that names a run the server is
-        // no longer on is dropped as stale, which turns a stop into a silent
-        // no-op rather than a visible failure.
-        const entryRunId = String(entry.run_id || '')
-        if (entryRunId) liveRunIds.value.set(sid, entryRunId)
-        else liveRunIds.value.delete(sid)
-        if (Number(entry.run_started_at) > 0) setRunStartedAt(sid, Number(entry.run_started_at))
-        if (serverWorking.value.has(sid)) continue
-        serverWorking.value.add(sid)
+        const phase = entry.run_state ?? 'running'
+        const reportedStart = Number(entry.run_started_at) || 0
+        // The run identity is refreshed on every poll, not only when the phase is
+        // first seen. A queued run replaces a finished one without the session
+        // ever leaving this list, so recording it once left the client naming the
+        // previous run -- and a stop that names a dead run is dropped as stale,
+        // which turns it into a silent no-op rather than a visible failure.
+        patchSessionRun(sid, {
+          phase,
+          runId: String(entry.run_id || '') || undefined,
+          // A phase the server has withdrawn carries no clock with it: the
+          // elapsed timer reads this and would otherwise keep counting.
+          startedAt: phase === 'running' && reportedStart > 0 ? reportedStart : undefined,
+        })
+      }
+
+      // Sessions the snapshot no longer lists. Only withdrawn when this client has
+      // no local evidence to the contrary, because the read can be in flight while
+      // a run starts, and clearing then makes the sidebar blink out for a poll.
+      const dropped = [...sessionRuns.value.keys()]
+        .filter(id => !seenInSnapshot.has(id) && !hasLocalRunEvidence(id, now))
+      for (const id of dropped) markSessionIdle(id)
+      // The terminal event for a session this client is not attached to never
+      // arrives, so the poll is the only place that can learn it finished. It used
+      // to be silent about that, which is why a finished run looked identical to a
+      // stuck one. Reported once per session.
+      for (const id of new Set([...dropped, ...finishedBySnapshot])) {
+        settleSessionFinished(id)
       }
       // The same snapshot is the authoritative word on compression: a run-scoped
       // compression cannot outlive its run, so this heals a banner whose
@@ -3020,7 +3129,7 @@ export const useChatStore = defineStore('chat', () => {
             return
           }
           if (data.isWorking) {
-            serverWorking.value.add(sessionId)
+            markSessionRunning(sessionId)
           } else {
             // Clearing only serverWorking left streamStartedAt/streamStates and
             // per-message isStreaming set, so the session stayed "thinking" and
@@ -3129,7 +3238,7 @@ export const useChatStore = defineStore('chat', () => {
               } else if (e.event === 'run.failed') {
                 handleTerminalWorkspaceRunChange(sessionId, e)
                 addAgentErrorMessage(sessionId, e.error)
-                serverWorking.value.delete(sessionId)
+                markSessionIdle(sessionId)
                 queueLengths.value.delete(sessionId)
               } else if (e.event === 'plan.updated' || e.event === 'agent.event' || e.event === 'run.reattach_failed') {
                 handleAgentEvent(e)
@@ -3902,12 +4011,11 @@ export const useChatStore = defineStore('chat', () => {
     const action = (evt as any).action as string | undefined
     const command = String((evt as any).command || '').toLowerCase()
     if ((evt as any).started === true && (evt as any).terminal === false) {
-      serverWorking.value.add(sid)
+      markSessionRunning(sid)
       setRunStartedAt(sid, Date.now())
     }
     if ((evt as any).terminal === true) {
-      streamStates.value.delete(sid)
-      serverWorking.value.delete(sid)
+      markSessionIdle(sid)
       clearRunStartedAt(sid)
       pendingForkCommands.value.delete(sid)
       const msgs = getSessionMsgs(sid)
@@ -3951,8 +4059,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (action === 'destroy') {
-      streamStates.value.delete(sid)
-      serverWorking.value.delete(sid)
+      markSessionIdle(sid)
       clearRunStartedAt(sid)
       queueLengths.value.delete(sid)
       queuedUserMessages.value.delete(sid)
@@ -4776,7 +4883,7 @@ export const useChatStore = defineStore('chat', () => {
       updateSessionTitle(sid)
       if (shouldOptimisticallyShowRunStatus) {
         setRunStartedAt(sid, Date.now())
-        serverWorking.value.add(sid)
+        markSessionRunning(sid)
       }
     }
     clearMessageReference(sid)
@@ -4907,8 +5014,7 @@ export const useChatStore = defineStore('chat', () => {
 
       // Helper to clean up this session's stream state
       const cleanup = () => {
-        streamStates.value.delete(sid)
-        serverWorking.value.delete(sid)
+        markSessionIdle(sid)
         // The run is over: its start must not leak into the next one.
         clearRunStartedAt(sid)
       }
@@ -4943,8 +5049,8 @@ export const useChatStore = defineStore('chat', () => {
         const target = sessions.value.find(s => s.id === sid)
         if (!target) return
 
-        if (data.isWorking) serverWorking.value.add(sid)
-        else serverWorking.value.delete(sid)
+        if (data.isWorking) markSessionRunning(sid)
+        else markSessionIdle(sid)
         applyResumedRunActivity(sid, data as any)
         reconcileCompressionState(sid, data.compression, !!data.isWorking)
 
@@ -5102,7 +5208,7 @@ export const useChatStore = defineStore('chat', () => {
           switch (evt.event) {
             case 'run.started':
               clearSessionCompletedUnread(sid)
-              serverWorking.value.add(sid)
+              markSessionRunning(sid)
               setRunStartedAt(sid, Date.now())
               clearAgentEventMessages(sid)
               setAbortState(sid, null)
@@ -5603,10 +5709,10 @@ export const useChatStore = defineStore('chat', () => {
       runSubmitted = true
 
       if (isCodingAgentSession) {
-        serverWorking.value.add(sid)
-        streamStates.value.set(sid, ctrl)
+        markSessionRunning(sid)
+        attachSessionStream(sid, ctrl)
       } else if (!isBridgeSlashCommand || isBridgeCompressCommand || isBridgePlanCommand || isBridgeGoalCommand) {
-        streamStates.value.set(sid, ctrl)
+        attachSessionStream(sid, ctrl)
       }
     } catch (err: any) {
       if (generation !== runtimeGeneration) return
@@ -5619,7 +5725,7 @@ export const useChatStore = defineStore('chat', () => {
         dropQueuedUserMessage(sid, userMsg.id)
       }
       if (!shouldQueue && !runSubmitted) {
-        serverWorking.value.delete(sid)
+        markSessionIdle(sid)
       }
       addSystemErrorMessage(sid, `Error: ${err?.message || String(err)}`)
     }
@@ -5657,16 +5763,14 @@ export const useChatStore = defineStore('chat', () => {
     const cleanup = () => {
       if (closed) return
       closed = true
-      streamStates.value.delete(sid)
-      serverWorking.value.delete(sid)
+      markSessionIdle(sid)
       clearRunStartedAt(sid)
       // Unregister from global session handlers
       unregisterSessionHandlers(sid)
     }
 
     const markIdleKeepingBackgroundListener = () => {
-      streamStates.value.delete(sid)
-      serverWorking.value.delete(sid)
+      markSessionIdle(sid)
       closeStreamingAssistant()
       clearRunStartedAt(sid)
     }
@@ -5675,7 +5779,7 @@ export const useChatStore = defineStore('chat', () => {
       if (streamStates.value.has(sid)) return
       // Deliberately not requestRunAbort(): that prefers the stored handle, so
       // delegating to it here made this closure call itself forever.
-      streamStates.value.set(sid, {
+      attachSessionStream(sid, {
         abort: () => emitAbortOnSessionSocket(sid),
       })
     }
@@ -5761,7 +5865,7 @@ export const useChatStore = defineStore('chat', () => {
 
         case 'run.started':
           clearSessionCompletedUnread(sid)
-          serverWorking.value.add(sid)
+          markSessionRunning(sid)
           setRunStartedAt(sid, Date.now())
           ensureAbortHandle()
           clearAgentEventMessages(sid)
@@ -6249,7 +6353,7 @@ export const useChatStore = defineStore('chat', () => {
     const isPeerCommand = peer?.role === 'command'
     const msgs = getSessionMsgs(sid)
     if (messageId && msgs.some(msg => msg.id === messageId)) {
-      serverWorking.value.add(sid)
+      markSessionRunning(sid)
       resumeServerWorkingRun(sid, true)
       return
     }
@@ -6257,7 +6361,7 @@ export const useChatStore = defineStore('chat', () => {
       if (isPeerCommand && !peer?.queued) {
         dropQueuedUserMessage(sid, messageId)
       } else {
-        serverWorking.value.add(sid)
+        markSessionRunning(sid)
         resumeServerWorkingRun(sid, true)
         return
       }
@@ -6287,7 +6391,7 @@ export const useChatStore = defineStore('chat', () => {
       addMessage(sid, message)
       updateSessionTitle(sid)
     }
-    serverWorking.value.add(sid)
+    markSessionRunning(sid)
     resumeServerWorkingRun(sid, true)
   }
 
@@ -6299,7 +6403,7 @@ export const useChatStore = defineStore('chat', () => {
     const shouldAttachToStartedRun = (evt as any).started === true && (evt as any).terminal === false
     handleSessionCommandEvent(evt)
     if (shouldAttachToStartedRun) {
-      serverWorking.value.add(sid)
+      markSessionRunning(sid)
       resumeServerWorkingRun(sid, true)
     }
   }
@@ -6343,7 +6447,7 @@ export const useChatStore = defineStore('chat', () => {
     // No socket object at all is different from a socket that is reconnecting:
     // without one there is nothing to buffer into, so that is still a failure.
     if (!socket) return false
-    const runId = liveRunIds.value.get(sid)
+    const runId = sessionRunFor(sid).runId
     socket.emit('abort', { session_id: sid, run_id: runId || undefined })
     return true
   }
@@ -6411,7 +6515,7 @@ export const useChatStore = defineStore('chat', () => {
           resumeSession(sid, (data) => {
             if (generation !== runtimeGeneration || data.session_id !== sid || activeSessionId.value !== sid) return
             if (data.isWorking) {
-              serverWorking.value.add(sid)
+              markSessionRunning(sid)
             } else {
               // Shared with the switchSession path so the two can never drift.
               // (This block used to be the only correct one.)
@@ -6710,6 +6814,17 @@ export const useChatStore = defineStore('chat', () => {
     // feed `isStreaming` can be inspected and asserted on directly.
     serverWorking,
     streamStates,
+    // The run record and the three primitives that write it. Exported so a test
+    // can put a session in a state that otherwise needs a live socket to reach,
+    // while still going through the same single writer production uses -- a test
+    // that set the fields directly would be testing a shape the app never
+    // produces, which is how the previous parallel maps stayed green while
+    // disagreeing with each other.
+    sessionRuns,
+    markSessionRunning,
+    markSessionIdle,
+    attachSessionStream,
+    setBackgroundPending,
     // Same reason as the two above: the delegation count is the third independent
     // source behind isSessionWorking, and a test cannot tell which one lit the
     // ring without reading it.

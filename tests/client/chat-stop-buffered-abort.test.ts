@@ -151,8 +151,7 @@ describe('a stop is delivered even when the socket is down', () => {
     // nothing to hold the request, so it remains a failure.
     const store = useChatStore()
     store.activeSessionId = SID
-    store.serverWorking.add(SID)
-    store.runStartedAt.set(SID, Date.now())
+    store.markSessionRunning(SID, Date.now())
     expect(store.isSessionWorking(SID)).toBe(true)
 
     socketAvailable = false
@@ -182,8 +181,7 @@ describe('an abort names the run it means', () => {
     // every stop into a no-op. No id means "stop whatever is running".
     const store = useChatStore()
     store.activeSessionId = SID
-    store.serverWorking.add(SID)
-    store.runStartedAt.set(SID, Date.now())
+    store.markSessionRunning(SID, Date.now())
 
     store.stopStreaming()
 

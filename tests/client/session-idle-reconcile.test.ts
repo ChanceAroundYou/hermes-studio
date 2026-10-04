@@ -78,7 +78,7 @@ describe('session idle reconciliation', () => {
 
   it('clears every source that feeds isStreaming', () => {
     const store = useChatStore()
-    store.serverWorking.add(SID)
+    store.markSessionRunning(SID)
 
     store.reconcileSessionIdle(SID)
 
@@ -99,7 +99,7 @@ describe('session idle reconciliation', () => {
         { id: 'm2', role: 'user', content: 'hi', timestamp: 2 },
       ],
     } as any)
-    store.serverWorking.add(SID)
+    store.markSessionRunning(SID)
 
     store.reconcileSessionIdle(SID)
 
@@ -117,7 +117,7 @@ describe('session idle reconciliation', () => {
         { id: 't1', role: 'tool', content: '', timestamp: 1, toolStatus: 'running', toolCallId: 'call-1' },
       ],
     } as any)
-    store.serverWorking.add(SID)
+    store.markSessionRunning(SID)
 
     store.reconcileSessionIdle(SID)
 
@@ -136,7 +136,7 @@ describe('session idle reconciliation', () => {
 
   it('does not treat a session as live after reconciling (send must dispatch, not queue)', () => {
     const store = useChatStore()
-    store.serverWorking.add(SID)
+    store.markSessionRunning(SID)
 
     // This is exactly the predicate `sendMessage` uses to decide whether to
     // enqueue the user's message instead of dispatching it.

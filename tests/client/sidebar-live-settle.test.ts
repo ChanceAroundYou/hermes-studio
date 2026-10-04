@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs'
  *
  *   - `hasLocalRunEvidence` said "this session is still running" forever,
  *     because a `running` subagent stream vetoed the snapshot without any bound;
- *   - `authoritativeRemove` therefore never dropped `serverWorking`.
+ *   - `dropped` therefore never dropped `serverWorking`.
  *
  * The only thing that broke the deadlock was opening the conversation, because
  * resume calls `settleInterruptedSubagents`. Hence "it spins until I click it".
@@ -64,7 +64,7 @@ describe('a leaked delegation cannot veto the snapshot forever', () => {
 describe('the client settles delegations from the authoritative snapshot', () => {
   it('settles before the snapshot consults the same streams', () => {
     const settleAt = chat.indexOf('settleInterruptedSubagents(stream.sessionId)')
-    const evidenceAt = chat.indexOf('const authoritativeRemove')
+    const evidenceAt = chat.indexOf('const dropped')
     expect(settleAt).toBeGreaterThan(-1)
     // Ordering is the fix. Reconciling after the filter would deadlock against
     // itself, which is the bug being fixed here.
@@ -96,7 +96,7 @@ describe('a finished run is reported', () => {
     // Asserting only the function body let a mutation that removed the call site
     // pass: the helper still existed, it was just never invoked. The symptom is
     // precisely "the end is never reported".
-    const pollAt = chat.indexOf('const authoritativeRemove')
+    const pollAt = chat.indexOf('const dropped')
     const loop = chat.slice(pollAt, pollAt + 900)
     expect(loop).toMatch(/settleSessionFinished\(id\)/)
   })
@@ -125,7 +125,7 @@ describe('a finished run is reported', () => {
   })
 
   it('covers both ways a run ends without the client attached', () => {
-    expect(chat).toMatch(/new Set\(\[\.\.\.authoritativeRemove, \.\.\.finishedBySnapshot\]\)/)
+    expect(chat).toMatch(/new Set\(\[\.\.\.dropped, \.\.\.finishedBySnapshot\]\)/)
   })
 
   it('lets the next run report itself again', () => {
@@ -207,9 +207,11 @@ describe('every locally-kept light has a bound at its use site', () => {
   it('bounds the stream flag and the snapshot flag where they are read', () => {
     const live = chat.slice(chat.indexOf('function isSessionLive'))
     const body = live.slice(0, live.indexOf('\n  }'))
-    expect(body).toMatch(/streamStates\.value\.has\(sessionId\)\) return hasRecentRunStart\(sessionId, now\)/)
-    expect(body).toMatch(/runStates\.value\.get\(sessionId\) === 'running' && hasRecentRunStart\(sessionId, now\)/)
-    expect(body).toMatch(/return hasRecentRunStart\(sessionId, now\)$/m)
+    // One record now: the stream flag and the server phase are fields of it
+    // rather than two maps consulted in sequence. The bound stays at the read,
+    // which is what stops a leak outliving the run it describes.
+    expect(body).toMatch(/if \(!run\.stream && run\.phase !== 'running'\) return false/)
+    expect(body).toMatch(/return hasRecentRunStart\(sessionId, now\)/)
 
     const veto = chat.slice(chat.indexOf('function hasLocalRunEvidence'))
     const vetoBody = veto.slice(0, veto.indexOf('\n  }'))

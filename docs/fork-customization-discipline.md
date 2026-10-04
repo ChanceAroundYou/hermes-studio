@@ -189,6 +189,33 @@ expect(rule).toMatch(/padding:\s*10px/)
   取值断言在把 -10px 改成 -2px 时依然绿，而那正是这次回归溜过去的原因。
 - 产物层也要查。压缩后选择器会合并分组，源码断言通过不代表产物正确。
 
+### 5.6 同一状态的多个 map = 未来的分叉点，必须合成一个记录
+
+彩环状态原本是 **6 个 map、约 100 处引用**（`streamStates`/`serverWorking`/
+`runStates`/`backgroundPendingBySession`/`runStartedAt`/run id）。反复发作的每个症状
+都是它们**互相不一致**：
+
+- 粘滞环：`reconcileSessionIdle` 只清了 6 个字段里的 3 个，`runStates` 残留 `running`，
+  而 `hasRecentRunStart` 对「无 start」返回 true → 清不掉；
+- 停止发错 run：id 只在 flag 首次设置时记录，排队 run 替换后一直是旧 id；
+- idle 也亮：快照条目一律写入 `serverWorking`，「在快照里」被当成「在跑」。
+
+本文件 5.4 写的「每个来源都要有界」是对的方向，但漏了一条更本质的：
+**来源的数量本身就是缺陷。** 修完界限之后，第 5 个、第 6 个来源又冒出来。
+
+**判据：一个状态若有 N 份存储，就有 N 份可以互相矛盾的副本。** 合成一条记录、
+一个写入函数，读者才不可能分叉。
+
+配套的两条硬性做法：
+
+- **派生视图必须只读。** 合成后 `serverWorking` 等成为 `computed` 投影。此时
+  `serverWorking.value.add(sid)` **不报错、看起来有效**（computed 缓存同一实例），
+  直到下一次失效才静默不再生效。合并后有 28 处是这种形态。必须有守卫扫描
+  `(投影)\.value\.(add|delete|set|clear)\(` 并断言为零。
+- **写函数必须只改传入的字段。** `patchSessionRun` 若把未提及字段写成 `undefined`，
+  一次 socket 事件就会抹掉快照给的 run id。**必须为「部分更新不丢失其它字段」
+  单写一条测试**，否则这类擦除永远不被捕获。
+
 ### 6. 断言必须落在「使用点」，不是「声明点」
 
 合并清单里最容易写出空壳断言的方式，是断言一个常量或方法**被声明**，而不是**被使用**。

@@ -73,7 +73,7 @@ describe('shipped build convergence guarantees', () => {
 
   it('a finished run stops being "live" after one reconciliation', () => {
     const store = useChatStore()
-    store.serverWorking.add(SID)
+    store.markSessionRunning(SID)
     expect(store.isSessionLive(SID)).toBe(true)
 
     store.reconcileSessionIdle(SID)
@@ -84,9 +84,11 @@ describe('shipped build convergence guarantees', () => {
 
   it('reconciliation clears the run timer so the elapsed clock stops', () => {
     const store = useChatStore()
-    // `runStartedAt` is the exported ref the elapsed timer reads; seeding it
-    // directly mirrors a run that was started and then lost its terminal event.
-    store.runStartedAt.set(SID, Date.now())
+    // Seeded through the same primitive production uses. Poking the projected
+    // map would look like it worked -- a computed caches its value, so mutating
+    // it is visible until the next invalidation -- and then silently have no
+    // effect on the record once anything invalidated it.
+    store.markSessionRunning(SID, Date.now())
     expect(store.runStartedAt.get(SID)).toBeGreaterThan(0)
 
     store.reconcileSessionIdle(SID)
@@ -96,7 +98,7 @@ describe('shipped build convergence guarantees', () => {
 
   it('reconciliation clears the active-session abort flag', () => {
     const store = useChatStore()
-    store.serverWorking.add(SID)
+    store.markSessionRunning(SID)
     store.activeSessionId = SID
 
     store.reconcileSessionIdle(SID)
