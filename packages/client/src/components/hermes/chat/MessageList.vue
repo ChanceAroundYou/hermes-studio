@@ -32,6 +32,7 @@ import { parseThinking } from "@/utils/thinking-parser";
 import { groupCompletedToolsByRun } from "./tool-run-grouping";
 
 const props = withDefaults(defineProps<{
+  /** Lift approval/clarify cards to the body, which realtime voice needs. */
   approvalPortalToBody?: boolean
   scrollScope?: string
 }>(), {
@@ -293,12 +294,13 @@ watch(
   () => visibleClarify.value?.clarifyId,
   () => { clarifyResponse.value = visibleClarify.value?.initialResponse || ""; },
 );
-const hasFloatingPrompt = computed(() => !!visibleApproval.value || !!visibleClarify.value);
-const virtualListPadding = computed(() => {
-  if (queuedMessages.value.length > 0 && hasFloatingPrompt.value) return "20px 20px 380px";
-  if (queuedMessages.value.length > 0 || hasFloatingPrompt.value) return "20px 20px 260px";
-  return "20px";
-});
+// The floating queue bar and the pending-interaction card are both
+// `position: absolute`, so they never take part in layout and the list must not
+// reserve room for them. It used to add 260px (380px with both present), which
+// shoved the thinking avatar up by an order of magnitude more than the panel is
+// tall -- the measured panel is 74px. a5be9ab79 had already flattened this to a
+// constant; the #3232 merge reinstated the computed and the jump came back.
+const virtualListPadding = "20px";
 
 const activeSessionScrollKey = computed(() => {
   const sessionId = chatStore.activeSessionId;
@@ -789,7 +791,7 @@ defineExpose({
       v-if="visibleApproval || visibleClarify || queuedMessages.length > 0"
       class="message-float-stack"
     >
-    <Teleport to="body" :disabled="!props.approvalPortalToBody">
+      <Teleport to="body" :disabled="!props.approvalPortalToBody">
       <Transition name="queue-float">
         <PendingInteractionCard
           v-if="visibleApproval"
@@ -804,7 +806,7 @@ defineExpose({
         />
       </Transition>
     </Teleport>
-    <Teleport to="body" :disabled="!props.approvalPortalToBody">
+      <Teleport to="body" :disabled="!props.approvalPortalToBody">
       <Transition name="queue-float">
         <PendingInteractionCard
           v-if="!visibleApproval && visibleClarify"
@@ -902,7 +904,9 @@ defineExpose({
   height: 19px;
 }
 
-.approval-float-panel,
+// Only the queue bar needs a surface here. The pending-interaction card draws
+// its own; a second copy of those rules in the host meant which border and
+// radius actually applied came down to stylesheet order.
 .queue-float-panel {
   pointer-events: auto;
   width: 100%;
@@ -916,18 +920,6 @@ defineExpose({
   .dark & {
     background: #262626;
   }
-}
-
-.approval-float-panel {
-  border-color: rgba(var(--accent-primary-rgb), 0.24);
-}
-
-.approval-float-panel--global {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: 2147483000;
-  width: min(720px, calc(100vw - 32px));
 }
 
 .queue-float-panel {
@@ -1159,17 +1151,9 @@ defineExpose({
     gap: 8px;
   }
 
-  .approval-float-panel,
   .queue-float-panel {
     padding: 7px;
     border-radius: 14px;
-  }
-
-  .approval-float-panel--global {
-    left: 8px;
-    right: 8px;
-    bottom: max(8px, env(safe-area-inset-bottom));
-    width: auto;
   }
 
   .queue-float-header {

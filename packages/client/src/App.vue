@@ -298,7 +298,11 @@ useKeyboard();
     <NMessageProvider>
       <AuthEventListener />
       <NDialogProvider>
-        <NNotificationProvider>
+        <!-- Pending clarify/approval prompts are bottom-anchored everywhere in
+             the app (see .message-float-stack). Leaving the corner to naive-ui's
+             default put the same prompt top-right for background sessions, which
+             is the "top left one minute, bottom right the next" report. -->
+        <NNotificationProvider placement="bottom-right">
           <router-view v-if="isDesktopPetRoute" />
           <div
             v-else

@@ -50,6 +50,10 @@
 | 后台委派上报 + 证据上限 | chat-run.ts + chat.ts | 保留；删掉会让侧栏环永远转 |
 | 完成信号单一出口 settleSessionFinished | chat.ts | 保留；复活第二个出口会重复通知 |
 | 工作态 3s 独立轮询 | chat.ts | 保留；改走 refreshSessionListOnly 会变成 DB 读 |
+| 浮层不占布局（padding 常量） | MessageList.vue | 保留；改回 computed 会把思考头像顶上去 |
+| 宿主不留卡片表面副本 | MessageList + GroupChatPanel | 保留；副本靠样式表顺序决胜 |
+| 三变体共用表面 | PendingInteractionCard.vue | 保留；notification 单独一套会漂移 |
+| 通知宿主固定 bottom-right | App.vue | 保留；去掉会回落到 naive-ui 默认右上 |
 
 ## 有意移除的上游功能（cherry-pick 时勿带回）
 

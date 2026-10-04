@@ -3563,24 +3563,6 @@ export default defineComponent({ components: { CreateRoomForm } })
     }
 }
 
-.approval-float-panel {
-    position: absolute;
-    right: 16px;
-    bottom: 16px;
-    z-index: 8;
-    width: min(720px, calc(100% - 32px));
-    padding: 10px;
-    border: 1px solid rgba(var(--accent-primary-rgb), 0.24);
-    border-radius: 16px;
-    background: #ffffff;
-    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.14);
-    backdrop-filter: blur(14px);
-
-    .dark & {
-        background: #262626;
-    }
-}
-
 .approval-float-header {
     display: flex;
     align-items: center;
@@ -3652,17 +3634,7 @@ export default defineComponent({ components: { CreateRoomForm } })
     border-top: 1px solid $border-color;
 }
 
-@media (max-width: 640px) {
-    .approval-float-panel {
-        left: 8px;
-        right: 8px;
-        bottom: 8px;
-        width: auto;
-        padding: 7px;
-        border-radius: 14px;
-    }
 
-}
 
 .approval-float-enter-active,
 .approval-float-leave-active {

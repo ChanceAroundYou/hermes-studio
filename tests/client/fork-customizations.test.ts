@@ -52,6 +52,7 @@ const files = {
   groupChatSocket: read('packages/server/src/modules/studio/sockets/group-chat.ts'),
   workingSessionsController: read('packages/server/src/modules/studio/controllers/chat-run.ts'),
   sessionsApi: read('packages/client/src/api/studio/sessions.ts'),
+  appRoot: read('packages/client/src/App.vue'),
 }
 
 describe('fork customization: subpath deployment', () => {
@@ -256,6 +257,48 @@ describe('fork customization: shared interaction card', () => {
     expect(files.pendingCard).toContain('.approval-float-actions')
     expect(files.messageList).not.toContain('.approval-float-actions')
     expect(files.groupChat).not.toContain('.approval-float-actions')
+  })
+
+  it('reserves no layout room for a floating stack', () => {
+    // The queue bar and the pending card are `position: absolute`, so they take
+    // no part in layout. The list used to add 260px (380px with both) of bottom
+    // padding for them, which shoved the thinking avatar up by far more than the
+    // panel is tall -- the measured card is 74px. a5be9ab79 had flattened this to
+    // a constant and the #3232 merge reinstated the computed.
+    expect(files.messageList).toContain('const virtualListPadding = "20px"')
+    expect(files.messageList).not.toMatch(/virtualListPadding = computed/)
+  })
+
+  it('leaves the host no second copy of the card surface', () => {
+    // Which border and radius applied came down to stylesheet order. The card
+    // owns the surface; the host keeps only the queue bar's.
+    expect(files.messageList).not.toContain('.approval-float-panel')
+    expect(files.groupChat).not.toContain('.approval-float-panel')
+  })
+
+  it('anchors every variant to the same corner', () => {
+    // Three complaints, one cause: the same clarify prompt appeared top-left one
+    // minute and bottom-right the next, because the notification variant
+    // inherited the toaster's chrome while inline and portal drew their own.
+    //
+    // Asserted on the surface rule's body, not on the selector: the three-variant
+    // selector legitimately appears twice (the base surface and the mobile
+    // media query), so a selector-shaped assertion keeps matching the copy the
+    // mutation did not touch -- which is how this entry was empty on first write.
+    const base = files.pendingCard.slice(
+      files.pendingCard.indexOf('.pending-interaction-card--inline,'),
+    )
+    const rule = base.slice(0, base.indexOf('}') + 1)
+    expect(rule).toContain('.pending-interaction-card--notification')
+    // The shared surface is what makes them look alike; a notification-only rule
+    // would reintroduce the drift while the selector still listed all three.
+    expect(rule).toMatch(/padding:\s*10px/)
+    expect(rule).toMatch(/border-radius:/)
+  })
+
+  it('pins the notification host to the corner the stack uses', () => {
+    // Removing the placement falls back to naive-ui's top-right default.
+    expect(files.appRoot).toMatch(/<NNotificationProvider placement="bottom-right">/)
   })
 })
 

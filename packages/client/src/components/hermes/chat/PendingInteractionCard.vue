@@ -30,7 +30,11 @@ import type { PendingCardAction } from '@/utils/hermes/pending-card-action'
  */
 const props = withDefaults(defineProps<{
   kind?: 'clarify' | 'approval' | 'custom'
-  /** 'inline' card inside the conversation, 'portal' fixed bottom-right, 'notification' bare content for a host notification window. */
+  /**
+   * 'inline' sits in the conversation, 'portal' is lifted to the body for
+   * realtime voice, 'notification' renders inside a host toaster. All three share
+   * one surface and anchor to the same corner; only the host differs.
+   */
   variant?: 'inline' | 'portal' | 'notification'
   icon?: 'question' | 'shield' | 'pairing' | 'none' | null
   /** Header text overrides; both default to the kind's i18n label. */
@@ -304,9 +308,12 @@ const rootClass = computed(() => {
 <style scoped lang="scss">
 @use "@/styles/variables" as *;
 
-// In-conversation variants (the global notification host draws its own surface).
+// One surface for every variant. The notification used to be excluded and
+// inherited the toaster's own chrome, so the same clarify prompt looked
+// different depending on which session raised it.
 .pending-interaction-card--inline,
-.pending-interaction-card--portal {
+.pending-interaction-card--portal,
+.pending-interaction-card--notification {
   pointer-events: auto;
   width: 100%;
   padding: 10px;
@@ -321,17 +328,12 @@ const rootClass = computed(() => {
   }
 }
 
-.pending-interaction-card--portal {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: 2147483000;
-  width: min(720px, calc(100vw - 32px));
-}
-
 .pending-interaction-card--notification {
   display: flex;
   flex-direction: column;
+  // Sit flush inside the toaster so the two frames cannot stack.
+  margin: -10px;
+  width: calc(100% + 20px);
   max-width: 520px;
   max-height: min(420px, calc(100dvh - 190px));
   overflow-x: hidden;
@@ -443,6 +445,12 @@ const rootClass = computed(() => {
     width: auto;
     max-width: 100%;
     height: auto;
+    // `height: auto` lets a wrapped label grow, but with naive UI's small
+    // metrics the box ends up flush against the text. 6px is the value asked
+    // for; it is padding only, so the height stays whatever the label needs.
+    padding-top: 6px;
+    padding-bottom: 6px;
+    line-height: 1.45;
   }
 
   :deep(.n-button__content) {
@@ -469,9 +477,18 @@ const rootClass = computed(() => {
   }
 }
 
+.pending-interaction-card--portal {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  width: min(720px, calc(100vw - 32px));
+}
+
 @media (max-width: 640px) {
   .pending-interaction-card--inline,
-  .pending-interaction-card--portal {
+  .pending-interaction-card--portal,
+  .pending-interaction-card--notification {
     padding: 7px;
     border-radius: 14px;
   }

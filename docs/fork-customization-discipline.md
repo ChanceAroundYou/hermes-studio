@@ -128,6 +128,28 @@ git status --short        # 每次会话开始，以及每次提交前
 最后一条最容易漏：`.gitignore` 加规则、profile 外部目录、skill frontmatter ——
 这些都不是代码，但都是「回来会出问题」的改动，同样要记录。
 
+### 5.3 同一规则存在多份副本时，断言规则块，不断言选择器
+
+浮层统一这批改动里，三变体选择器**合法地出现两次**（基础表面 + 移动端 media query）。
+我最初写成匹配选择器：
+
+```ts
+// 漏的版本：正则同时匹配到两处选择器
+expect(files.pendingCard).toMatch(/--inline,\s*--portal,\s*--notification\s*\{/)
+// 变异：只改基础表面那一处，另一处仍在 —— 测试全绿，行为已回归。
+
+// 改成切出规则块再断言块内的声明
+const base = files.pendingCard.slice(files.pendingCard.indexOf('.pending-interaction-card--inline,'))
+const rule = base.slice(0, base.indexOf('}') + 1)
+expect(rule).toContain('.pending-interaction-card--notification')
+expect(rule).toMatch(/padding:\s*10px/)
+```
+
+规律：**同一 CSS 规则在文件里出现多次是常态**（响应式覆盖、深色主题、作用域副本）。
+选择器形状的断言会匹配到「没被改的那一份」。断言规则块的**声明**，才能证明这一份真的生效。
+
+这是本纪律第 6 条（用点vs 声明点）的CSS 版本，根因相同：断言落在了能代表规则的地方，而不是规则真正生效的地方。
+
 ### 6. 断言必须落在「使用点」，不是「声明点」
 
 合并清单里最容易写出空壳断言的方式，是断言一个常量或方法**被声明**，而不是**被使用**。
