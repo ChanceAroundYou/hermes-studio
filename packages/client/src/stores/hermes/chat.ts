@@ -6321,7 +6321,13 @@ export const useChatStore = defineStore('chat', () => {
     if (!sid) return
     if (isAborting.value) return
     clearPendingInteractions(sid)
-    if (!streamStates.value.has(sid) && !serverWorking.value.has(sid)) return
+    // The ring is driven by `isSessionWorking`, which also counts a live
+    // delegation. Gating on the two foreground flags alone meant a session that
+    // was busy only through a background delegation showed a lit ring whose stop
+    // button returned without emitting anything at all -- the fourth reader of
+    // the same three sources, after the ring itself and the send-vs-queue check.
+    // Same predicate, so the indicator and the button cannot disagree.
+    if (!isSessionWorking(sid)) return
     // Set the flag only once the request can actually leave this tab. Painting
     // "Pausing..." for a stop that was dropped on the floor is what made a dead
     // socket indistinguishable from a slow agent.

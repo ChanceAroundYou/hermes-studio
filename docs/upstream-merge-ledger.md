@@ -57,6 +57,8 @@
 | 快照 phase 按 isWorking 推导 | chat-run.ts | 保留；回退成 `runState ?? 'running'` 会让 coding-agent 会话永远报 running |
 | 快照写/清委派计数 | chat.ts | 保留；只写不清会让彩环无法熄灭 |
 | 客户端三盏灯各自的界 | chat.ts | 保留；合并两窗会让真实 run 被快照推翻，或泄漏重现 |
+| notification 变体不得外扩 | PendingInteractionCard.vue | 保留；负边距会被 `.n-notification` 的 overflow:hidden 裁掉，跨会话提醒全隐 |
+| 停止按钮用 isSessionWorking | chat.ts | 保留；退回两个前台 flag 会让纯委派会话的停止键点了没反应 |
 
 ## 有意移除的上游功能（cherry-pick 时勿带回）
 

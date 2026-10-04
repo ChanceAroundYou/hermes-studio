@@ -331,9 +331,16 @@ const rootClass = computed(() => {
 .pending-interaction-card--notification {
   display: flex;
   flex-direction: column;
-  // Sit flush inside the toaster so the two frames cannot stack.
-  margin: -10px;
-  width: calc(100% + 20px);
+  // Sized to the toaster rather than pulled out of it. A negative margin here
+  // pushed the card past the notification container's own padding box, and
+  // `.n-notification` clips its content -- so the cross-session prompt for a
+  // session you are *not* looking at rendered off the visible edge and the user
+  // saw nothing at all until they opened that conversation.
+  //
+  // A pending approval or clarify has no other surface: this window is the only
+  // place it can be answered, so it must never be clipped, faded or dismissed by
+  // a style rule. Same for `max-height` and `overflow` below, which exist to
+  // keep a long question scrollable rather than to shrink the window away.
   max-width: 520px;
   max-height: min(420px, calc(100dvh - 190px));
   overflow-x: hidden;
