@@ -229,6 +229,25 @@ const isBridgeSession = computed(() => {
   if (!session) return chatStore.runtimeMode !== 'global_agent'
   return session.source === 'cli'
 })
+/**
+ * Sessions whose agent can actually run `/skill <name>`.
+ *
+ * The skill merge used to be gated on `isBridgeSession` alone, which is
+ * `source === 'cli'`. An Ekko session is `source: 'coding_agent'` with
+ * `agent: 'ekko-agent'`, so it fell through to the coding-agent branch, which
+ * offers exactly four Studio-handled verbs (context / compact / usage /
+ * status). `mergeSkillSlashCommands` was never called and not one custom skill
+ * reached the menu -- which looked like the feature was broken rather than
+ * unwired, because the menu itself still worked.
+ *
+ * Ekko runs on the same profile skill set (`target=ekko-agent` resolves to the
+ * hermes skills), so the same list applies.
+ */
+const supportsSkillSlashCommands = computed(() => {
+  const session = chatStore.activeSession
+  if (!session) return isBridgeSession.value
+  return session.source === 'cli' || session.agent === 'ekko-agent' || session.codingAgentId === 'ekko-agent'
+})
 const isCodingAgentSession = computed(() => {
   const session = chatStore.activeSession
   return !!session && (
@@ -262,7 +281,7 @@ const skillSlashCommands = computed<SlashCommandOption[]>(() =>
 
 const filteredBridgeCommands = computed(() => {
   const query = slashQuery.value.trim().toLowerCase()
-  const commands = isBridgeSession.value
+  const commands = supportsSkillSlashCommands.value
     ? mergeSkillSlashCommands(bridgeCommands.value, skillSlashCommands.value)
     : isCodingAgentSession.value
       ? bridgeCommands.value.filter(command => CODING_AGENT_SLASH_COMMANDS.includes(command.name)
@@ -308,7 +327,7 @@ function currentSkillsKey() {
 }
 
 async function loadSkills() {
-  if (!isBridgeSession.value) return
+  if (!supportsSkillSlashCommands.value) return
   const key = currentSkillsKey()
   if (skillsLoadedKey === key || skillsLoadRequest) return skillsLoadRequest
   skillsLoadRequest = (async () => {
@@ -588,7 +607,7 @@ function updateSlashState() {
   // The menu shows custom skills, so they must be in hand before it is useful.
   // loadSkills() is idempotent per profile, so this costs nothing after the
   // first call and still refreshes when the profile changes.
-  if (isBridgeSession.value && skillCategories.value.length === 0) {
+  if (supportsSkillSlashCommands.value && skillCategories.value.length === 0) {
     void loadSkills()
   }
 }

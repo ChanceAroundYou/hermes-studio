@@ -91,12 +91,17 @@ vi.mock('@/utils/video-frame-extraction', async (importOriginal) => {
   }
 })
 
-function mountForSession(sessionId: string, skills: any[] = [], preload?: () => void) {
+function mountForSession(
+  sessionId: string,
+  skills: any[] = [],
+  preload?: () => void,
+  overrides: Record<string, any> = {},
+) {
   const pinia = createTestingPinia({ stubActions: false, createSpy: vi.fn })
   const chatStore = useChatStore()
   const settingsStore = useSettingsStore()
   chatStore.sessions = [
-    { id: sessionId, title: sessionId, source: 'cli', messages: [], createdAt: Date.now(), updatedAt: Date.now() },
+    { id: sessionId, title: sessionId, source: 'cli', messages: [], createdAt: Date.now(), updatedAt: Date.now(), ...overrides },
   ]
   chatStore.activeSessionId = sessionId
   chatStore.activeSession = chatStore.sessions[0]
@@ -275,5 +280,64 @@ describe('the slash menu is reachable and the skill group is visible', () => {
     // scroll box: reachable in principle, invisible in practice.
     expect(block).toMatch(/max-height:\s*min\(\d+px,\s*\d+vh\)/)
     expect(block).not.toMatch(/max-height:\s*240px/)
+  })
+})
+
+/**
+ * An Ekko session is `source: 'coding_agent'` with `agent: 'ekko-agent'`. The
+ * skill merge used to be gated on `source === 'cli'`, so Ekko fell through to the
+ * coding-agent branch, which offers four Studio-handled verbs and never calls
+ * mergeSkillSlashCommands. The menu still worked, which is why this read as
+ * "skills are broken" instead of "skills were never wired to this session type".
+ */
+describe('an Ekko session gets the custom skills too', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setViewportWidth(1024)
+    fetchSkillsMock.mockReset()
+    fetchSkillBundlesMock.mockReset()
+    fetchSkillBundlesMock.mockResolvedValue([])
+    deleteSkillBundleApiMock.mockReset()
+    deleteSkillBundleApiMock.mockResolvedValue(undefined)
+    dialogWarningMock.mockReset()
+    extractRepresentativeVideoFramesMock.mockReset()
+    extractRepresentativeVideoFramesMock.mockResolvedValue([])
+  })
+
+  const ekko = { source: 'coding_agent', agent: 'ekko-agent', codingAgentId: 'ekko-agent' }
+
+  it('lists skills for an ekko session', async () => {
+    const wrapper = mountForSession('session-ekko', [
+      { name: 'plan only', description: 'Plan and stop', enabled: true },
+    ], undefined, ekko)
+    await typeSlash(wrapper, '/plan')
+    const names = wrapper.findAll('.slash-command-name').map(n => n.text())
+    expect(names).toContain('/plan-only')
+  })
+
+  it('keeps the four coding-agent verbs for an ekko session', async () => {
+    const wrapper = mountForSession('session-ekko-verbs', [], undefined, ekko)
+    await typeSlash(wrapper, '/')
+    const names = wrapper.findAll('.slash-command-name').map(n => n.text())
+    for (const verb of ['/context', '/compact', '/usage', '/status']) {
+      expect(names).toContain(verb)
+    }
+  })
+
+  it('recognises an ekko session identified only by codingAgentId', async () => {
+    const wrapper = mountForSession('session-ekko-id-only', [
+      { name: 'plan only', description: 'Plan and stop', enabled: true },
+    ], undefined, { source: 'coding_agent', codingAgentId: 'ekko-agent' })
+    await typeSlash(wrapper, '/plan')
+    expect(wrapper.findAll('.slash-command-name').map(n => n.text())).toContain('/plan-only')
+  })
+
+  it('still does not offer skills to a non-ekko coding agent', async () => {
+    const wrapper = mountForSession('session-codex', [
+      { name: 'plan only', description: 'Plan and stop', enabled: true },
+    ], undefined, { source: 'coding_agent', agent: 'codex', codingAgentId: 'codex' })
+    await typeSlash(wrapper, '/plan')
+    const names = wrapper.findAll('.slash-command-name').map(n => n.text())
+    expect(names).not.toContain('/plan-only')
   })
 })
