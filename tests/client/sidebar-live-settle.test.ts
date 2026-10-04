@@ -153,3 +153,72 @@ describe('the end signal is not inferred from a timer', () => {
     expect(chat).toMatch(/reconcileCompressionState\(String\(entry\.session_id\)/)
   })
 })
+/**
+ * `runState` was written when a run started and never written back.
+ *
+ * `state.isWorking` is assigned `!isCodingAgentExecution(...)`, so for a
+ * coding-agent session it is false from the start. That session is then excluded
+ * from the snapshot by the filter -- until a background delegation puts it back
+ * in, still carrying the `running` stamp from a run that is long over.
+ *
+ * The client believed it, on every poll, forever. That is the root cause of the
+ * ring that would not go out and the completion notice that never arrived, and
+ * it survived an earlier fix because that one only bounded the *client's* flags.
+ */
+describe('the snapshot derives the phase instead of reporting a stale one', () => {
+  it('does not report a stale running for a session that is not working', () => {
+    const listing = socket.slice(socket.indexOf('const runState = state.runState'))
+    const block = listing.slice(0, listing.indexOf('\n      }'))
+    // Asserted at the assignment, not on the name: reverting this to
+    // `runState ?? 'running'` keeps every other line in the file identical.
+    expect(block).toMatch(/runState: effectiveRunState/)
+    expect(block).toMatch(/const effectiveRunState[^=]*=\s*state\.isWorking/)
+    expect(block).toMatch(/runState === 'finishing' \? 'finishing' : 'idle'/)
+  })
+
+  it('still reports the finalizing phase, which is deliberately not idle', () => {
+    const listing = socket.slice(socket.indexOf('const runState = state.runState'))
+    const block = listing.slice(0, listing.indexOf('\n      }'))
+    // Otherwise the fix would swallow `finishing` into `idle` and the client
+    // would lose the one state it uses to tell "wrapping up" from "idle".
+    expect(block).toMatch(/runState === 'finishing'/)
+  })
+})
+
+/**
+ * The client bounds every flag it keeps on its own. The bounds are what end a
+ * leak when the terminal event never arrives, so each one is pinned at its use.
+ */
+describe('every locally-kept light has a bound at its use site', () => {
+  it('bounds the delegation count from the snapshot', () => {
+    // The count was computed on every poll, used to settle delegation streams,
+    // and then dropped -- so the light could be switched on by a socket event and
+    // never switched off by anything.
+    const apply = chat.slice(chat.indexOf('const backgroundPending = new Map'))
+    const block = apply.slice(0, 2000)
+    expect(block).toMatch(/setBackgroundPending\(session\.id, pending\)/)
+    expect(block).toMatch(/if \(pending === known\) continue/)
+  })
+
+  it('bounds the stream flag and the snapshot flag where they are read', () => {
+    const live = chat.slice(chat.indexOf('function isSessionLive'))
+    const body = live.slice(0, live.indexOf('\n  }'))
+    expect(body).toMatch(/streamStates\.value\.has\(sessionId\)\) return hasRecentRunStart\(sessionId, now\)/)
+    expect(body).toMatch(/runStates\.value\.get\(sessionId\) === 'running' && hasRecentRunStart\(sessionId, now\)/)
+    expect(body).toMatch(/return hasRecentRunStart\(sessionId, now\)$/m)
+
+    const veto = chat.slice(chat.indexOf('function hasLocalRunEvidence'))
+    const vetoBody = veto.slice(0, veto.indexOf('\n  }'))
+    // A short window, unlike the display bound: this decides whether the
+    // server's silence may overrule a local flag.
+    expect(vetoBody).toMatch(/now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS/)
+  })
+
+  it('keeps the display bound generous so a long tool call is not cut short', () => {
+    // Two different questions need two different windows. Collapsing them into
+    // one either lets the snapshot overrule a live run, or fails to end a leak.
+    expect(chat).toMatch(/const LOCAL_RUN_STALE_MS = \d+_?\d*/)
+    const marker = chat.match(/const LOCAL_RUN_STALE_MS = ([\d_]+)/)
+    expect(Number((marker?.[1] || '').replace(/_/g, ''))).toBeGreaterThanOrEqual(120_000)
+  })
+})

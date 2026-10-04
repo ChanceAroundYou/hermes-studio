@@ -2105,22 +2105,53 @@ export const useChatStore = defineStore('chat', () => {
    */
   const runStates = ref<Map<string, RunState>>(new Map())
 
-  function isSessionLive(sessionId: string): boolean {
+  function isSessionLive(sessionId: string, now = Date.now()): boolean {
     // `serverWorking` stays in the OR: the snapshot is a plain HTTP read that can
     // be taken before the run it would report, and clearing on absence makes the
     // sidebar blink out for a whole poll interval. It is the client's own record
     // that the server said "busy", so it must not be dropped in favour of the
     // newer state map.
-    if (streamStates.value.has(sessionId)) return true
-    if (runStates.value.get(sessionId) === 'running') return true
+    //
+    // The two flags are bounded. `streamStates` is normally cleared by the
+    // socket's own cleanup, and `serverWorking` by the snapshot, but both leak
+    // when the terminal event never arrives -- and only the session the user
+    // actually opens gets `resumeServerWorkingRun`, which is the one path that
+    // could repair them. A background session had no self-healing path at all,
+    // so a single lost `run.completed` left its ring on permanently. The bound
+    // is generous because a long tool call is legitimately silent; it exists to
+    // end a leak, not to second-guess a real run.
+    if (streamStates.value.has(sessionId)) return hasRecentRunStart(sessionId, now)
+    // Bounded for the same reason as the two flags above: `runStates` comes from
+    // the snapshot, and a value that is never withdrawn would keep the ring lit
+    // with nothing behind it. The server now reports 'idle' when the run is over,
+    // so this is the client's own backstop rather than the primary mechanism.
+    if (runStates.value.get(sessionId) === 'running' && hasRecentRunStart(sessionId, now)) return true
     // Last resort for the raced snapshot: the server told us it was working and
     // the local run has not aged out yet.
-    return serverWorking.value.has(sessionId)
+    if (!serverWorking.value.has(sessionId)) return false
+    return hasRecentRunStart(sessionId, now)
+  }
+
+  /**
+   * Whether this client has seen a run start for `sessionId` recently enough to
+   * treat the local flags as live.
+   *
+   * A flag with no recorded start is trusted, not rejected. The server writes
+   * `run_started_at` as `startedAt || now`, so a snapshot-sourced flag always
+   * carries a timestamp; the ones that do not are local residue from a run this
+   * client started and then lost track of, and `reconcileSessionIdle` is the
+   * routine that clears those. Judging them stale here instead would make the
+   * ring vanish on its own and quietly remove the reason that routine exists.
+   */
+  function hasRecentRunStart(sessionId: string, now: number): boolean {
+    const startedAt = runStartedAt.value.get(sessionId) || 0
+    if (startedAt <= 0) return true
+    return now - startedAt < LOCAL_RUN_STALE_MS
   }
 
   // Display activity is broader than foreground execution (send/queue/voice).
-  function isSessionWorking(sessionId: string): boolean {
-    return isSessionLive(sessionId) || (backgroundPendingBySession.value.get(sessionId) || 0) > 0
+  function isSessionWorking(sessionId: string, now = Date.now()): boolean {
+    return isSessionLive(sessionId, now) || (backgroundPendingBySession.value.get(sessionId) || 0) > 0
   }
 
   function isSessionCompletedUnread(sessionId: string): boolean {
@@ -2521,6 +2552,23 @@ export const useChatStore = defineStore('chat', () => {
   const WORKING_SNAPSHOT_FRESHNESS_MS = 15_000
 
   /**
+   * How long a locally-recorded run may keep the ring lit with no other signal.
+   *
+   * Much longer than the snapshot-veto window, because this guards the flags the
+   * snapshot can no longer contradict on its own: `streamStates` is normally
+   * cleared by the socket's own cleanup, and only the session the user actually
+   * opens gets `resumeServerWorkingRun` -- the one path that could repair it. A
+   * background session had no self-healing path, so one lost `run.completed` left
+   * its ring on forever.
+   *
+   * Generous on purpose. A long tool call is legitimately silent for minutes, and
+   * this bound exists to end a leak rather than to second-guess a real run; the
+   * server's own watchdog (RUN_RECONCILE_STALE_MS) is what decides a run is
+   * really dead, and it emits `run.completed` when it does.
+   */
+  const LOCAL_RUN_STALE_MS = 180_000
+
+  /**
    * How often the working-sessions snapshot is re-read while anything is live.
    *
    * Bounds how long the sidebar can show a finished run as busy, and how long a
@@ -2546,7 +2594,20 @@ export const useChatStore = defineStore('chat', () => {
    * snapshot could predate it.
    */
   function hasLocalRunEvidence(sessionId: string, now: number): boolean {
-    if (streamStates.value.has(sessionId)) return true
+    // Bounded like every other source here. An attached stream normally clears
+    // itself in its own cleanup, and the server's watchdog emits `run.completed`
+    // for a run it decides is dead -- but only for sessions with `isWorking`, so
+    // a background session whose terminal event was lost had no way out: this
+    // veto held `serverWorking` forever and the ring with it.
+    // The snapshot-veto window, not the display window: this answer decides
+    // whether the server's silence may override a local flag, so it has to be
+    // short -- a snapshot that raced a real run must not be overruled.
+    // `isSessionLive` uses the longer LOCAL_RUN_STALE_MS for the separate
+    // question of whether the ring may stay lit.
+    if (streamStates.value.has(sessionId)) {
+      const startedAt = runStartedAt.value.get(sessionId) || 0
+      return startedAt > 0 && now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS
+    }
     for (const subagent of subagentStreams.value.values()) {
       if (subagent.sessionId !== sessionId || subagent.status !== 'running') continue
       // A delegation that is still alive keeps advancing `updatedAt`. Requiring
@@ -2590,6 +2651,28 @@ export const useChatStore = defineStore('chat', () => {
       for (const entry of snapshot) {
         backgroundPending.set(String(entry.session_id), Number(entry.background_pending) || 0)
       }
+      // The snapshot is also the only authority that can switch the delegation
+      // light OFF. It was computed above, used to settle delegation streams, and
+      // then dropped on the floor -- nothing ever wrote it into
+      // `backgroundPendingBySession`, and nothing ever cleared it. So the flag
+      // was write-only from the socket events: once a `delegation.updated`
+      // lit it, no code path could put it out, and the ring stayed on forever
+      // with no notice. That is the reported symptom, and the previous fix only
+      // addressed the sibling `subagentStreams` leak, not this one.
+      //
+      // Applied for every session in the list, not just the live ones: absence
+      // from the snapshot is the server's way of saying "not busy", exactly as
+      // it is for `serverWorking` below.
+      for (const session of sessions.value) {
+        const pending = backgroundPending.get(session.id) || 0
+        const known = backgroundPendingBySession.value.get(session.id) || 0
+        if (pending === known) continue
+        // `setBackgroundPending(0)` tears down the per-session observer socket
+        // as well as clearing the count, which is what keeps a finished
+        // delegation from re-lighting the ring on a stale event.
+        setBackgroundPending(session.id, pending)
+      }
+
       const finishedBySnapshot = new Set<string>()
       for (const stream of [...subagentStreams.value.values()]) {
         if (stream.status !== 'running') continue
@@ -6578,6 +6661,10 @@ export const useChatStore = defineStore('chat', () => {
     // feed `isStreaming` can be inspected and asserted on directly.
     serverWorking,
     streamStates,
+    // Same reason as the two above: the delegation count is the third independent
+    // source behind isSessionWorking, and a test cannot tell which one lit the
+    // ring without reading it.
+    backgroundPendingBySession,
     isSessionCompletedUnread,
     clearSessionCompletedUnread,
     sessionProfileFilter,

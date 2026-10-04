@@ -179,6 +179,39 @@ describe('fork customization: run completion has one exit', () => {
     expect(body).toMatch(/now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS/)
   })
 
+  it('derives the snapshot phase instead of reporting a stale one', () => {
+    // `runState` was stamped when a run started and never written back, and
+    // `isWorking` is assigned `!isCodingAgentExecution(...)`, so a coding-agent
+    // session carried `running` forever. The client believed it on every poll:
+    // the ring never went out and no completion was ever reported. An earlier
+    // fix bounded the client's flags and left this untouched, which is why the
+    // symptom came back.
+    const listing = files.chatRunSocket.slice(files.chatRunSocket.indexOf('const runState = state.runState'))
+    const block = listing.slice(0, listing.indexOf('\n      }'))
+    expect(block).toContain('runState: effectiveRunState')
+    expect(block).toMatch(/const effectiveRunState[^=]*=\s*state\.isWorking/)
+  })
+
+  it('keeps every client-kept light bounded at its use site', () => {
+    // The delegation count used to be written by socket events and cleared by
+    // socket events only; the snapshot computed it and dropped it. A background
+    // session nobody opened has no such socket, so the light could never go out.
+    const apply = files.chatStore.slice(files.chatStore.indexOf('const backgroundPending = new Map'))
+    expect(apply.slice(0, 2000)).toContain('setBackgroundPending(session.id, pending)')
+
+    // Two windows, two questions. Collapsing them either lets a lagging snapshot
+    // overrule a live run, or fails to end a leak.
+    const veto = files.chatStore.slice(files.chatStore.indexOf('function hasLocalRunEvidence'))
+    const vetoBody = veto.slice(0, veto.indexOf('\n  }'))
+    // Anchored on the stream branch specifically: `hasLocalRunEvidence` ends with
+    // a run-start bound too, so an unanchored match is satisfied by either one and
+    // the assertion goes empty.
+    const streamBranch = vetoBody.slice(vetoBody.indexOf('if (streamStates.value.has(sessionId))'))
+    expect(streamBranch.slice(0, 300)).toMatch(/now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS/)
+    // And the display window stays separate, or the two questions collapse.
+    expect(files.chatStore).toMatch(/const LOCAL_RUN_STALE_MS = \d[\d_]*/)
+  })
+
   it('keeps the server reporting background delegations', () => {
     // Without background_pending the client cannot tell "delegation finished"
     // from "the snapshot never mentioned it", and the two deadlock.

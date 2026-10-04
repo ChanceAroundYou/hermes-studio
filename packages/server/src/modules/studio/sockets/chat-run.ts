@@ -482,6 +482,20 @@ export class ChatRunSocket {
       // and the sidebar ring spun until the user opened the session.
       const backgroundPending = this.backgroundPendingCount(state)
       if (!state.isWorking && runState !== 'finishing' && backgroundPending === 0) continue
+      // `runState` is written when a run starts and nothing ever wrote it back,
+      // so a session that stops being `isWorking` keeps reporting 'running'
+      // forever. For a coding-agent run that is guaranteed: `isWorking` is
+      // assigned `!isCodingAgentExecution(...)`, so it is false from the start
+      // and the session is excluded from this snapshot by the line above -- until
+      // a delegation puts it back in, with the stale 'running' still attached.
+      // The client then believed the server said "busy" on every poll, which is
+      // why the ring never went out and no completion was ever reported.
+      //
+      // Report the phase the state actually implies rather than the one it was
+      // last stamped with.
+      const effectiveRunState: NonNullable<SessionState['runState']> = state.isWorking
+        ? (runState ?? 'running')
+        : (runState === 'finishing' ? 'finishing' : 'idle')
       const startedAt = Number(state.runStartedAt) || 0
       // The compression snapshot rides along so the periodic poll can heal a
       // client that missed `compression.completed`, not just the run flags.
@@ -490,7 +504,7 @@ export class ChatRunSocket {
         runStartedAt: startedAt || now,
         source: state.source,
         compression: state.compression ?? null,
-        runState: runState ?? 'running',
+        runState: effectiveRunState,
         backgroundPending,
       })
     }

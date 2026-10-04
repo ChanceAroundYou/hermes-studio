@@ -47,9 +47,14 @@ function listSessions(...ids: string[]) {
 }
 
 /** The `working-sessions` payload, with each run's start pinned by the caller. */
-function workingSnapshot(entries: Array<[sessionId: string, runStartedAt: number]>) {
+function workingSnapshot(
+  entries: Array<[sessionId: string, runStartedAt: number]>,
+  backgroundPending: Record<string, number> = {},
+) {
   sessionsApi.fetchWorkingSessions.mockResolvedValue(entries.map(([session_id, run_started_at]) => ({
     session_id, run_started_at, source: 'coding_agent', compression: null,
+    background_pending: backgroundPending[session_id] || 0,
+    run_state: 'running',
   })))
 }
 
@@ -113,5 +118,194 @@ describe('sidebar working flags from the working-sessions snapshot', () => {
     await store.refreshSessionListOnly()
 
     expect(store.isSessionWorking('stale')).toBe(false)
+  })
+})
+
+/**
+ * The delegation light was write-only.
+ *
+ * `backgroundPendingBySession` was fed by socket events and cleared by socket
+ * events. The snapshot computed `background_pending` on every poll, used it to
+ * settle delegation streams -- and then dropped it, so it never switched the
+ * light off.
+ *
+ * The symptom was that the ring stayed on with no notification: once a
+ * `delegation.updated` lit it, only that same socket could put it out, and a
+ * background session nobody opened has no such socket. The previous fix
+ * addressed the sibling `subagentStreams` leak and left this one, which is why
+ * it was reported as still broken.
+ */
+describe('the delegation light is switched off by the snapshot', () => {
+  it('lights up while the server reports a live delegation', async () => {
+    // A pure delegation: no foreground run at all, and a start old enough that
+    // neither the display bound nor the veto bound can carry it. Only the
+    // delegation count can be what makes this session look busy.
+    // The server lists a delegation-only session precisely because its count is
+    // above zero, so the snapshot always carries the row. Its run_start is old,
+    // which is what makes the delegation count the only thing keeping it lit.
+    listSessions('painting')
+    const store = useChatStore()
+    workingSnapshot([['painting', Date.now() - 30_000]], { painting: 1 })
+    await store.refreshSessionListOnly()
+    // The count itself is the assertion: the other two sources are covered by
+    // their own cases, and `isSessionWorking` being true proves only that one of
+    // three lights is on, which is how the original leak hid.
+    expect(store.backgroundPendingBySession.get('painting')).toBe(1)
+
+    // And with the foreground flags cleared, the delegation count alone still
+    // keeps the ring lit -- that is the state a pure background run is in.
+    store.serverWorking.delete('painting')
+    store.runStartedAt.delete('painting')
+    expect(store.isSessionWorking('painting')).toBe(true)
+  })
+
+  it('goes out when the snapshot stops reporting the delegation', async () => {
+    listSessions('painting')
+    const store = useChatStore()
+    // A background delegation outlives the foreground run it came from, so by
+    // the time the last poll sees it the run has been going for a while. That
+    // age is what lets the snapshot's silence win over the local flags.
+    workingSnapshot([['painting', Date.now() - 30_000]], { painting: 1 })
+    await store.refreshSessionListOnly()
+    expect(store.isSessionWorking('painting')).toBe(true)
+
+    // The run itself is gone too -- this is the ordinary end of a background run.
+    workingSnapshot([])
+    await store.refreshSessionListOnly()
+    expect(store.isSessionWorking('painting')).toBe(false)
+  })
+
+  it('goes out even when only the run-start evidence is stale', async () => {
+    // A delegation outlives the foreground run it was started from, so the
+    // session can leave the snapshot entirely while the count is still 1.
+    listSessions('painting')
+    const store = useChatStore()
+    workingSnapshot([['painting', Date.now() - 60_000]], { painting: 1 })
+    await store.refreshSessionListOnly()
+    expect(store.isSessionWorking('painting')).toBe(true)
+
+    workingSnapshot([], {})
+    await store.refreshSessionListOnly()
+
+    expect(store.isSessionWorking('painting')).toBe(false)
+  })
+
+  it('reports the finish exactly once', async () => {
+    const notify = vi.fn()
+    vi.resetAllMocks()
+    const store = useChatStore()
+    listSessions('painting')
+    workingSnapshot([['painting', Date.now()]], { painting: 1 })
+    await store.refreshSessionListOnly()
+
+    workingSnapshot([])
+    await store.refreshSessionListOnly()
+    // A leaked light used to keep re-reporting on every poll.
+    await store.refreshSessionListOnly()
+    await store.refreshSessionListOnly()
+
+    expect(notify).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * `streamStates` and `serverWorking` were the other two unbounded lights.
+ *
+ * Both are normally cleared by their own path -- the socket's cleanup, and the
+ * snapshot respectively -- but only the session the user actually opens gets
+ * `resumeServerWorkingRun`, the one routine that could repair them. A background
+ * session had no self-healing path at all.
+ */
+
+describe('a leaked local run flag cannot outlive the run it describes', () => {
+  it('keeps a genuinely fresh run lit', async () => {
+    listSessions('painting')
+    const store = useChatStore()
+    store.streamStates.set('painting', { abort: vi.fn() })
+    store.runStartedAt.set('painting', Date.now())
+    expect(store.isSessionWorking('painting')).toBe(true)
+  })
+
+  it('lets a long silent tool call stay lit', async () => {
+    // The bound must be generous: a tool call can be silent for minutes, and
+    // this exists to end a leak, not to second-guess a real run. The server's own
+    // watchdog decides a run is really dead and emits run.completed.
+    listSessions('painting')
+    const store = useChatStore()
+    store.streamStates.set('painting', { abort: vi.fn() })
+    store.runStartedAt.set('painting', Date.now() - 120_000)
+    expect(store.isSessionWorking('painting')).toBe(true)
+  })
+
+  it('releases a flag whose run started long ago and reported nothing', async () => {
+    // The reported symptom for a background session: one lost run.completed and
+    // the ring never went out, with no path to repair it.
+    listSessions('painting')
+    const store = useChatStore()
+    store.streamStates.set('painting', { abort: vi.fn() })
+    store.runStartedAt.set('painting', Date.now() - 600_000)
+    expect(store.isSessionWorking('painting')).toBe(false)
+  })
+
+  it('lets the snapshot drop a stale stream flag', async () => {
+    // The veto window and the display window answer different questions. A
+    // stream flag whose run started long ago may keep the ring lit on its own,
+    // but it must not be able to overrule the server reporting the session idle,
+    // or the flag would be unremovable for any session nobody opens.
+    listSessions('painting')
+    const store = useChatStore()
+    workingSnapshot([['painting', Date.now() - 30_000]])
+    await store.refreshSessionListOnly()
+    store.streamStates.set('painting', { abort: vi.fn() })
+    store.runStartedAt.set('painting', Date.now() - 30_000)
+    expect(store.isSessionWorking('painting')).toBe(true)
+
+    workingSnapshot([])
+    await store.refreshSessionListOnly()
+
+    expect(store.serverWorking.has('painting')).toBe(false)
+  })
+
+  it('trusts a flag that never recorded a run start', () => {
+    // Deliberate, and it was the opposite before: judging such a flag stale made
+    // the ring vanish without `reconcileSessionIdle`, quietly removing the reason
+    // that routine exists (session-idle-reconcile.test.ts pins that behaviour and
+    // caught the regression when it was inverted here).
+    //
+    // The server writes `run_started_at` as `startedAt || now`, so a
+    // snapshot-sourced flag always has a timestamp. The ones that do not are
+    // local residue, and reconciliation is what clears those.
+    listSessions('orphan')
+    const store = useChatStore()
+    store.serverWorking.add('orphan')
+    expect(store.isSessionWorking('orphan')).toBe(true)
+
+    store.reconcileSessionIdle('orphan')
+    expect(store.isSessionWorking('orphan')).toBe(false)
+  })
+
+  it('does not trust a snapshot run_state with no run behind it', async () => {
+    // `runStates` came from the snapshot and used to be believed forever. The
+    // server wrote `runState` when a run started and never wrote it back, so a
+    // coding-agent session -- whose `isWorking` is assigned
+    // `!isCodingAgentExecution(...)` and is therefore false from the start --
+    // kept reporting 'running' on every poll. That is the root cause of a ring
+    // that would not go out and a notice that never arrived.
+    listSessions('painting')
+    const store = useChatStore()
+    workingSnapshot([['painting', Date.now() - 600_000]])
+    await store.refreshSessionListOnly()
+
+    expect(store.isSessionWorking('painting')).toBe(false)
+  })
+
+  it('still believes a fresh run_state', async () => {
+    // The counterpart, so the bound above cannot be read as "ignore the snapshot".
+    listSessions('painting')
+    const store = useChatStore()
+    workingSnapshot([['painting', Date.now()]])
+    await store.refreshSessionListOnly()
+
+    expect(store.isSessionWorking('painting')).toBe(true)
   })
 })

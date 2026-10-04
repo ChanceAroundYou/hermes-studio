@@ -54,6 +54,9 @@
 | 宿主不留卡片表面副本 | MessageList + GroupChatPanel | 保留；副本靠样式表顺序决胜 |
 | 三变体共用表面 | PendingInteractionCard.vue | 保留；notification 单独一套会漂移 |
 | 通知宿主固定 bottom-right | App.vue | 保留；去掉会回落到 naive-ui 默认右上 |
+| 快照 phase 按 isWorking 推导 | chat-run.ts | 保留；回退成 `runState ?? 'running'` 会让 coding-agent 会话永远报 running |
+| 快照写/清委派计数 | chat.ts | 保留；只写不清会让彩环无法熄灭 |
+| 客户端三盏灯各自的界 | chat.ts | 保留；合并两窗会让真实 run 被快照推翻，或泄漏重现 |
 
 ## 有意移除的上游功能（cherry-pick 时勿带回）
 
