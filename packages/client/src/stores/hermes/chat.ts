@@ -5438,8 +5438,10 @@ export const useChatStore = defineStore('chat', () => {
 
     const ensureAbortHandle = () => {
       if (streamStates.value.has(sid)) return
+      // Deliberately not requestRunAbort(): that prefers the stored handle, so
+      // delegating to it here made this closure call itself forever.
       streamStates.value.set(sid, {
-        abort: () => requestRunAbort(sid),
+        abort: () => emitAbortOnSessionSocket(sid),
       })
     }
 
@@ -6091,6 +6093,13 @@ export const useChatStore = defineStore('chat', () => {
     }
   })
 
+  function emitAbortOnSessionSocket(sid: string): boolean {
+    const socket = getChatRunSocket(runtimeTransport())
+    if (!socket || !socket.connected) return false
+    socket.emit('abort', { session_id: sid })
+    return true
+  }
+
   /**
    * Ask the server to stop. Returns false only when the request provably could
    * not leave this tab; a `void` from a legacy abort handle counts as sent, so a
@@ -6099,10 +6108,7 @@ export const useChatStore = defineStore('chat', () => {
   function requestRunAbort(sid: string): boolean {
     const ctrl = streamStates.value.get(sid)
     if (ctrl) return ctrl.abort() !== false
-    const socket = getChatRunSocket(runtimeTransport())
-    if (!socket || !socket.connected) return false
-    socket.emit('abort', { session_id: sid })
-    return true
+    return emitAbortOnSessionSocket(sid)
   }
 
   function stopStreaming() {

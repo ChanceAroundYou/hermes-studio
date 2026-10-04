@@ -17,7 +17,9 @@ vi.mock('@/api/studio/chat', () => ({
   resumeSession: chatApi.resumeSession,
   registerSessionHandlers: chatApi.registerSessionHandlers,
   unregisterSessionHandlers: chatApi.unregisterSessionHandlers,
-  getChatRunSocket: vi.fn(() => ({ emit: chatApi.socketEmit })),
+  // `connected` is what the store checks before it trusts the emit; a socket
+  // without it reads as dead and the stop request would be dropped silently.
+  getChatRunSocket: vi.fn(() => ({ connected: true, emit: chatApi.socketEmit })),
   respondToolApproval: vi.fn(),
   respondClarify: vi.fn(),
   onPeerUserMessage: vi.fn(() => vi.fn()),
