@@ -683,6 +683,36 @@ export class CodingAgentRunManager {
     return Boolean(run && !run.exited)
   }
 
+  /**
+   * Every session with a live agent process, for the authoritative activity
+   * snapshot.
+   *
+   * The chat-run socket tracks bridge runs in its own `isWorking` flag, which is
+   * assigned `!isCodingAgentExecution(...)` and is therefore false for every
+   * coding-agent run. A session in that state had no path into the snapshot at
+   * all, so the sidebar could only learn it was busy from a socket event -- and
+   * had no way back to "idle" when that event was lost. This is the server's own
+   * answer to the question the client was guessing at.
+   */
+  listLiveSessions(): Array<{ sessionId: string; runId: string; processing: boolean; startedAt: number }> {
+    const out: Array<{ sessionId: string; runId: string; processing: boolean; startedAt: number }> = []
+    for (const run of this.runs.values()) {
+      if (run.exited) continue
+      const sessionId = String(run.launch?.sessionId || '')
+      if (!sessionId) continue
+      out.push({
+        sessionId,
+        runId: run.id,
+        // A live CLI process is not necessarily mid-turn: `hasSession` stays true
+        // between turns, and reporting that as "running" would keep the ring lit
+        // while the agent sits idle waiting for the next message.
+        processing: this.isSessionProcessing(sessionId),
+        startedAt: Number(run.startedAt) || 0,
+      })
+    }
+    return out
+  }
+
   isSessionProcessing(sessionId: string): boolean {
     const run = this.getBySession(sessionId)
     if (!run) return false

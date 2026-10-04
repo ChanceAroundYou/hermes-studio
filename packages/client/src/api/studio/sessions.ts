@@ -318,6 +318,15 @@ export interface WorkingSessionSnapshot {
    */
   run_state?: RunState
   /**
+   * Which run the phase describes, when the server knows it.
+   *
+   * Carried so the client can name the run it is showing, and so a stop can say
+   * which run it means. Without it an abort is only "stop something", which is
+   * why it could not be buffered across a reconnect and had to be reported as a
+   * failure instead.
+   */
+  run_id?: string | null
+  /**
    * Live background delegations the server still holds for this session.
    *
    * Without it the client cannot tell "this delegation is over" from "the

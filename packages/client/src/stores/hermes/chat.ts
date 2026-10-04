@@ -1547,6 +1547,15 @@ export const useChatStore = defineStore('chat', () => {
   const activeSessionId = ref<string | null>(null)
   const focusMessageId = ref<string | null>(null)
   const streamStates = ref<Map<string, { abort: () => void | boolean }>>(new Map())
+  /**
+   * sessionId -> the id of the run the server says is live.
+   *
+   * Used to label an abort so a retry after a reconnect cannot kill a run that
+   * started in the meantime. Derived from the same snapshot as every other
+   * activity flag; the consolidation of those flags into one map is the next
+   * step, and this becomes a field of it rather than a separate ref.
+   */
+  const liveRunIds = ref<Map<string, string>>(new Map())
   /** sessionId → server-reported isWorking status */
   const serverWorking = ref<Set<string>>(new Set())
   /** Authoritative live delegation counts, never inferred from transcript history. */
@@ -2708,11 +2717,32 @@ export const useChatStore = defineStore('chat', () => {
         settleSessionFinished(id)
       }
       for (const entry of snapshot) {
+        const sid = String(entry.session_id)
         // Live again, so the next finished run is allowed to report itself.
-        snapshotFinishNotified.delete(String(entry.session_id))
-        if (serverWorking.value.has(entry.session_id)) continue
-        serverWorking.value.add(entry.session_id)
-        if (Number(entry.run_started_at) > 0) setRunStartedAt(entry.session_id, Number(entry.run_started_at))
+        snapshotFinishNotified.delete(sid)
+        // Membership of the snapshot is not the same as "running". An entry that
+        // says `finishing` is deliberately not busy, and an `idle` one is a live
+        // agent between turns -- a coding agent keeps its process, so `hasSession`
+        // stays true long after the turn ended. Adding either to `serverWorking`
+        // lit the ring for a session the server had just described as not
+        // running, which is what made the ring look arbitrary.
+        if ((entry.run_state ?? 'running') !== 'running') {
+          serverWorking.value.delete(sid)
+          liveRunIds.value.delete(sid)
+          continue
+        }
+        // Refreshed on every poll, before the `continue` below. A queued run
+        // replaces a finished one without the session ever leaving this list, so
+        // updating the identity only when the flag is first set left the client
+        // naming the previous run -- and an abort that names a run the server is
+        // no longer on is dropped as stale, which turns a stop into a silent
+        // no-op rather than a visible failure.
+        const entryRunId = String(entry.run_id || '')
+        if (entryRunId) liveRunIds.value.set(sid, entryRunId)
+        else liveRunIds.value.delete(sid)
+        if (Number(entry.run_started_at) > 0) setRunStartedAt(sid, Number(entry.run_started_at))
+        if (serverWorking.value.has(sid)) continue
+        serverWorking.value.add(sid)
       }
       // The same snapshot is the authoritative word on compression: a run-scoped
       // compression cannot outlive its run, so this heals a banner whose
@@ -6298,10 +6328,23 @@ export const useChatStore = defineStore('chat', () => {
     }
   })
 
+  /**
+   * Ask the server to stop `sid`, naming the run.
+   *
+   * `socket.connected` is deliberately not consulted. socket.io buffers an emit
+   * while the socket is down and delivers it on reconnect, so refusing to send
+   * turned a recoverable stop into a reported failure -- the exact report that
+   * came from a phone whose socket had dropped. The buffered request is only
+   * safe because it carries a run id: the server drops it if that run has since
+   * ended, so a late delivery cannot kill the run that replaced it.
+   */
   function emitAbortOnSessionSocket(sid: string): boolean {
     const socket = getChatRunSocket(runtimeTransport())
-    if (!socket || !socket.connected) return false
-    socket.emit('abort', { session_id: sid })
+    // No socket object at all is different from a socket that is reconnecting:
+    // without one there is nothing to buffer into, so that is still a failure.
+    if (!socket) return false
+    const runId = liveRunIds.value.get(sid)
+    socket.emit('abort', { session_id: sid, run_id: runId || undefined })
     return true
   }
 

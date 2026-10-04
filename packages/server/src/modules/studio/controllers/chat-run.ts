@@ -79,6 +79,7 @@ export async function workingSessions(ctx: Context) {
         source?: string
         compression?: unknown
         runState?: 'idle' | 'running' | 'finishing' | 'background'
+        runId?: string
         backgroundPending?: number
       }>)
     : []
@@ -91,6 +92,10 @@ export async function workingSessions(ctx: Context) {
     // so the client can avoid showing them as busy while still knowing they
     // are not simply idle.
     run_state: session.runState || 'running',
+    // Which run the phase describes. The client needs it to name the run it is
+    // showing and to say which run an abort means, so a stop can be retried
+    // after a reconnect without the risk of killing the next run instead.
+    run_id: session.runId || null,
     // Lets the client settle a delegation stream it missed the end of instead of
     // guessing with a timer, which either stalled the ring or cleared it early.
     background_pending: Number(session.backgroundPending) || 0,

@@ -459,6 +459,7 @@ export class ChatRunSocket {
     source?: string
     compression?: SessionState['compression']
     runState: NonNullable<SessionState['runState']>
+    runId?: string
     backgroundPending: number
   }> {
     const now = Date.now()
@@ -468,6 +469,7 @@ export class ChatRunSocket {
       source?: string
       compression?: SessionState['compression']
       runState: NonNullable<SessionState['runState']>
+      runId?: string
       backgroundPending: number
     }> = []
     for (const [sid, state] of this.sessionMap) {
@@ -497,6 +499,11 @@ export class ChatRunSocket {
         ? (runState ?? 'running')
         : (runState === 'finishing' ? 'finishing' : 'idle')
       const startedAt = Number(state.runStartedAt) || 0
+      // The run identity travels with the phase so the client can name the run it
+      // is showing, and so an abort can say which run it means. Without it a
+      // reconnected client could only say "stop something", which is why a
+      // buffered abort was unsafe to send and had to be reported as a failure.
+      const liveRunId = String(state.runId || '') || undefined
       // The compression snapshot rides along so the periodic poll can heal a
       // client that missed `compression.completed`, not just the run flags.
       list.push({
@@ -505,7 +512,40 @@ export class ChatRunSocket {
         source: state.source,
         compression: state.compression ?? null,
         runState: effectiveRunState,
+        runId: liveRunId,
         backgroundPending,
+      })
+    }
+
+    // The bridge runs above are only half the picture. A coding-agent session is
+    // never `isWorking` (see the derivation above), so without this loop the
+    // sidebar could not see one at all: the ring depended entirely on a
+    // `run.started` socket event arriving, and a client that was reconnecting --
+    // or that simply missed the event -- had no way to learn the run was live,
+    // and no way back to idle either.
+    //
+    // The run manager is the authority for these, and the abort path already
+    // consults it. Listing them here is what makes the snapshot the single
+    // answer to "who is busy" rather than one of two competing ones.
+    const seen = new Set(list.map(entry => entry.sessionId))
+    for (const live of codingAgentRunManager.listLiveSessions()) {
+      if (seen.has(live.sessionId)) {
+        // The bridge already reported this session; it owns the phase because it
+        // knows about `finishing` and delegations, which the run manager does not.
+        continue
+      }
+      const existing = this.sessionMap.get(live.sessionId)
+      list.push({
+        sessionId: live.sessionId,
+        runStartedAt: live.startedAt || existing?.runStartedAt || now,
+        source: existing?.source || 'coding_agent',
+        compression: existing?.compression ?? null,
+        // `hasSession` stays true between turns, so `processing` is what decides
+        // whether the ring should be lit. A live-but-idle agent reports `idle`
+        // and is dropped by the client, exactly like a finished bridge run.
+        runState: live.processing ? 'running' : 'idle',
+        runId: live.runId,
+        backgroundPending: 0,
       })
     }
     return list
@@ -1326,13 +1366,22 @@ export class ChatRunSocket {
       await this.resumeSession(socket, sid, { event: 'app.resumed', cachedId: data.id })
     })
 
-    socket.on('abort', async (data: { session_id?: string }) => {
+    socket.on('abort', async (data: { session_id?: string; run_id?: string }) => {
       if (data.session_id) {
         const sessionId = data.session_id
         let profile: string
         try {
           profile = await requireSocketSessionAccess(sessionId)
-        } catch {
+        } catch (err) {
+          // This used to be a bare `return`, so a stop rejected by the access
+          // check was indistinguishable in the log from a stop that never
+          // arrived -- which is exactly how it was mistaken for a client bug
+          // while the request had in fact reached the server. A dropped stop has
+          // to say so.
+          logger.warn(
+            { err, sessionId, runId: data.run_id },
+            '[chat-run-socket][abort] rejected: no access to session',
+          )
           return
         }
         this.finishTaskPlanRun(sessionId, 'abort.completed')
@@ -1343,6 +1392,9 @@ export class ChatRunSocket {
           this.sessionMap,
           this.bridge,
           this.runQueuedItem.bind(this),
+          // The run the client means, so a retry after a reconnect cannot kill
+          // the run that replaced it.
+          { expectedRunId: data.run_id },
         ).then(() => {
           const state = this.sessionMap.get(sessionId)
           this.emitSessionActivity(profile, state?.isWorking ? 'run.started' : 'abort.completed', {

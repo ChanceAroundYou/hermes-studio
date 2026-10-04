@@ -129,7 +129,11 @@ describe('a finished run is reported', () => {
   })
 
   it('lets the next run report itself again', () => {
-    expect(chat).toMatch(/snapshotFinishNotified\.delete\(String\(entry\.session_id\)\)/)
+    // The marker is cleared for every entry the snapshot still lists. Written
+    // against the entry id however it is spelled -- the loop now hoists it into
+    // `sid`, because the same value guards the run id and the phase as well.
+    expect(chat).toMatch(/snapshotFinishNotified\.delete\(sid\)/)
+    expect(chat).toMatch(/const sid = String\(entry\.session_id\)/)
   })
 
   it('stays silent for the session the user is already looking at', () => {

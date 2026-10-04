@@ -59,6 +59,12 @@
 | 客户端三盏灯各自的界 | chat.ts | 保留；合并两窗会让真实 run 被快照推翻，或泄漏重现 |
 | notification 变体不得外扩 | PendingInteractionCard.vue | 保留；负边距会被 `.n-notification` 的 overflow:hidden 裁掉，跨会话提醒全隐 |
 | 停止按钮用 isSessionWorking | chat.ts | 保留；退回两个前台 flag 会让纯委派会话的停止键点了没反应 |
+| 快照覆盖 coding-agent run | chat-run.ts + run-manager.ts | 保留；`isWorking` 对 coding-agent 恒 false，不进快照则彩环只能靠 socket 事件 |
+| 快照携带 run_id | chat-run.ts + chat.ts | 保留；停止要靠它区分「停哪个 run」，重连后重发才不会杀错 |
+| abort 校验 run_id 后丢弃陈旧请求 | abort.ts | 保留；这是允许 socket 缓冲重发的前提 |
+| abort 不因断线判失败 | chat.ts | 保留；socket.io 自带缓冲，提前 return 把可恢复的停止变成报错 |
+| serverWorking 只由 run_state==='running' 写入 | chat.ts | 保留；finishing/idle 入快照不代表在跑 |
+| run_id 每次轮询都刷新 | chat.ts | 保留；排队 run 替换时若不刷新会一直发过期 id，服务端当陈旧丢弃 |
 
 ## 有意移除的上游功能（cherry-pick 时勿带回）
 

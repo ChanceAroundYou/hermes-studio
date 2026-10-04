@@ -74,6 +74,7 @@ export const redactPrimaryAgentBridgeError = (
 
 export const chatCodingAgentRunManager = {
   hasSession: (...args: any[]) => configured().codingAgentRunManager.hasSession(...args),
+  listLiveSessions: (...args: any[]) => configured().codingAgentRunManager.listLiveSessions(...args),
   stop: (...args: any[]) => configured().codingAgentRunManager.stop(...args),
   isSessionLaunchCompatible: (...args: any[]) => configured().codingAgentRunManager.isSessionLaunchCompatible(...args),
   isSessionProcessing: (...args: any[]) => configured().codingAgentRunManager.isSessionProcessing(...args),

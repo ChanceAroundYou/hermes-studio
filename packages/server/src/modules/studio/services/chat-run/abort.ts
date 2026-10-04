@@ -48,6 +48,35 @@ function settleInterruptedBackgroundTasks(state: SessionState): Array<Record<str
   return completed
 }
 
+/**
+ * The run the client believes it is stopping, when it said so.
+ *
+ * A stop has to be re-sendable. The client used to refuse to send one at all
+ * while its socket was down -- `if (!socket.connected) return false` -- which
+ * reported a failure for a request that socket.io would have buffered and
+ * delivered on reconnect. Reporting it as failed was the lesser evil only
+ * because a buffered `abort` carried no identity: delivered late, after the run
+ * it meant had ended and another had started, it would have killed the wrong
+ * run.
+ *
+ * With the id attached, a stale abort is simply dropped, so the request can be
+ * buffered safely and a reconnect no longer turns a recoverable stop into a
+ * reported failure.
+ */
+export interface AbortOptions {
+  expectedRunId?: string
+}
+
+/** The id of the run this session is actually running right now. */
+function liveRunIdFor(sessionId: string, state: SessionState | undefined): string {
+  // The run manager owns coding-agent runs; `state.runId` is only ever set for
+  // bridge runs, so asking the state first would report "no run" for exactly the
+  // sessions where a stop is most likely to be retried.
+  const managed = codingAgentRunManager.runIdForSession(sessionId)
+  if (managed) return String(managed)
+  return String(state?.runId || '')
+}
+
 export async function handleAbort(
   nsp: ReturnType<Server['of']>,
   socket: Socket,
@@ -55,6 +84,7 @@ export async function handleAbort(
   sessionMap: Map<string, SessionState>,
   bridge: any,
   runQueuedItem: (socket: Socket, sessionId: string, next: QueuedRun, fallbackProfile?: string) => void,
+  options: AbortOptions = {},
 ) {
   let state = sessionMap.get(sessionId)
   const hasCodingAgentRun = codingAgentRunManager.hasSession(sessionId)
@@ -64,6 +94,27 @@ export async function handleAbort(
     sessionMap.set(sessionId, state)
   }
   const isCodingAgentRun = state?.source === 'coding_agent' || hasCodingAgentRun || hasEkkoBackgroundTasks
+
+  // A stop that names a run the server is no longer running is stale: the one it
+  // meant has ended and another may have taken its place. Dropping it is what
+  // lets the client keep retrying after a reconnect instead of reporting a
+  // failure it cannot recover from.
+  //
+  // Only dropped when there IS a different live run. When the server has none the
+  // request still falls through: that is the post-restart case, where the run
+  // manager lost the entry but an agent child can still be alive and registered
+  // in the durable orphan registry.
+  const requestedRunId = String(options.expectedRunId || '')
+  if (requestedRunId) {
+    const live = liveRunIdFor(sessionId, state)
+    if (live && live !== requestedRunId) {
+      logger.info(
+        { sessionId, requestedRunId, liveRunId: live },
+        '[chat-run-socket][abort] dropping stale abort for a run that already ended',
+      )
+      return
+    }
+  }
   if (
     (!state?.isWorking && !hasCodingAgentRun && !hasEkkoBackgroundTasks) ||
     (state && !isCodingAgentRun && !state.runId && !state.abortController)
