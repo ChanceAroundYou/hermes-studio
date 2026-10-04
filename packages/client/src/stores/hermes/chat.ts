@@ -4500,7 +4500,16 @@ export const useChatStore = defineStore('chat', () => {
     // text without ever loading the skill. Rewrite it here, at the one place that
     // decides what goes on the wire, so hand-typing behaves the same as selecting
     // from the menu.
-    const trimmedContent = rewriteSkillSlashCommand(content.trim(), knownSkillCommandNames.value)
+    const trimmedContent = rewriteSkillSlashCommand(
+      content.trim(),
+      knownSkillCommandNames.value,
+      // Bridge sessions only. In a coding-agent session `/skill` is inert text
+      // (`isBridgeSlashCommand` is `!isCodingAgentSession && ...`), and an Ekko
+      // session dispatches skills by bare name -- it injects valid skill names
+      // into context and the model loads the body itself. Prefixing here would
+      // replace a working invocation with one the agent cannot resolve.
+      activeSession.value?.source === 'cli',
+    )
 
     if (!activeSession.value) {
       const session = createSession()

@@ -144,7 +144,10 @@ export function toSkillPickerItems(categories: unknown): SkillPickerEntry[] {
 export function rewriteSkillSlashCommand(
   input: string,
   knownSkillNames: Iterable<string>,
+  /** Whether this session resolves `/skill <name>`. Only bridge sessions do. */
+  supportsSkillSlash = true,
 ): string {
+  if (!supportsSkillSlash) return input
   const known = knownSkillNames instanceof Set
     ? knownSkillNames
     : new Set(knownSkillNames)

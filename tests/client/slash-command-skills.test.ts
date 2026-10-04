@@ -196,6 +196,12 @@ describe('the composer reports loaded skills to the store', () => {
 
   it('and the store uses them when deciding what goes on the wire', () => {
     const source = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
-    expect(source).toContain('rewriteSkillSlashCommand(content.trim(), knownSkillCommandNames.value)')
+    expect(source).toContain('rewriteSkillSlashCommand(')
+    expect(source).toContain('knownSkillCommandNames.value')
+    // Session-type gate: an Ekko session dispatches skills by bare name and has
+    // no /skill command, so the rewrite must not run there. Asserted as wiring
+    // rather than as one source literal, so reformatting cannot silently pass.
+    const call = source.slice(source.indexOf('const trimmedContent = rewriteSkillSlashCommand('))
+    expect(call.slice(0, 600)).toContain("source === 'cli'")
   })
 })

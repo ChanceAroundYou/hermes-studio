@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/stores/hermes/settings'
 import { fetchContextLength } from '@/api/studio/sessions'
 import { setModelContext } from '@/api/hermes/model-context'
 import { fetchSkills, type SkillCategory } from '@/api/hermes/skills'
+import { fetchEkkoSkills, type EkkoSkillInfo } from '@/api/hermes/ekko-skills'
 import { deleteSkillBundleApi, fetchSkillBundles, type SkillBundleInfo } from '@/api/hermes/skill-bundles'
 import { NSpin, NButton, NTooltip, NModal, NInputNumber, NPopover, NSlider, NDropdown, useDialog, useMessage, type DropdownOption } from 'naive-ui'
 import { computed, ref, nextTick, onMounted, onUnmounted, watch, h } from 'vue'
@@ -18,9 +19,11 @@ import BundleCreateModal from './BundleCreateModal.vue'
 import { BRIDGE_SESSION_COMMAND_DEFINITIONS } from '@/utils/hermes/bridge-session-commands'
 import {
   mergeSkillSlashCommands,
+  skillCommandName,
   toSkillPickerItems,
   skillToSlashCommand,
   slashCommandInsertText,
+  type SkillPickerEntry,
   type SlashCommandOption,
 } from '@/utils/hermes/slash-command-skills'
 import { clampChatInputHeight, isMobileChatInputViewport } from '@/utils/chat-input-height'
@@ -247,6 +250,22 @@ const isBridgeSession = computed(() => {
  * the skill first, not a matching profile config.
  */
 const supportsSkillSlashCommands = computed(() => isBridgeSession.value)
+
+/**
+ * Ekko sessions can load skills too, but through a different mechanism.
+ *
+ * Ekko serves its own registry at `/api/ekko/skills` (builtin + local +
+ * external), and injects valid skill NAMES into the model's context; the model
+ * then loads one with its own skill tool. So a skill name typed in an Ekko
+ * session is meaningful in a way it is not in a plain Hermes session.
+ *
+ * Only `validationStatus === 'valid'` skills are offered -- see
+ * `isDispatchableEkkoSkill`. A `needs_metadata` skill is listed by the API but
+ * has no `metadata.keywords`, so the host never routes it to the model; showing
+ * it would rebuild the dead-entry bug this replaced.
+ */
+const isEkkoSkillSession = computed(() => isCodingAgentSession.value)
+const supportsEkkoSkills = computed(() => isEkkoSkillSession.value)
 const isCodingAgentSession = computed(() => {
   const session = chatStore.activeSession
   return !!session && (
@@ -278,18 +297,56 @@ const skillSlashCommands = computed<SlashCommandOption[]>(() =>
   skillPickerItems.value.map(skillToSlashCommand)
 )
 
+/**
+ * Ekko's own skill registry, kept apart from `skillCategories` because the two
+ * come from different APIs with different shapes and different validity rules.
+ */
+const ekkoSkills = ref<EkkoSkillInfo[]>([])
+const ekkoSkillPickerItems = computed<SkillPickerEntry[]>(() => {
+  const byCommand = new Map<string, SkillPickerEntry>()
+  for (const skill of ekkoSkills.value) {
+    if (!skill || typeof skill.name !== 'string' || !skill.name.trim()) continue
+    const commandName = skillCommandName(skill.name)
+    if (!commandName || byCommand.has(commandName)) continue
+    byCommand.set(commandName, {
+      key: `skill:${commandName}`,
+      name: skill.name,
+      commandName,
+      description: skill.description || skill.name,
+    })
+  }
+  return [...byCommand.values()]
+})
+/**
+ * Ekko skills become `/<command-name>` entries in the same menu.
+ *
+ * No `/skill` prefix here: in an Ekko session the skill NAME is what reaches the
+ * model, because Ekko injects valid skill names into its context and the model
+ * loads the body with its own skill tool. Prefixing would hand it a token it
+ * does not interpret. `rewriteSkillSlashCommand` is therefore bridge-only.
+ */
+const ekkoSkillSlashCommands = computed<SlashCommandOption[]>(() =>
+  ekkoSkillPickerItems.value.map(skillToSlashCommand)
+)
+
 const filteredBridgeCommands = computed(() => {
   const query = slashQuery.value.trim().toLowerCase()
+  const codingAgentBuiltins = bridgeCommands.value.filter(command => CODING_AGENT_SLASH_COMMANDS.includes(command.name)
+    && !(command.name === 'context' && isCursorSession.value)
+    && !(command.name === 'compact' && (
+      chatStore.activeSession?.codingAgentId === 'opencode'
+      || chatStore.activeSession?.agent === 'opencode'
+      || isCursorSession.value
+    )))
   const commands = supportsSkillSlashCommands.value
     ? mergeSkillSlashCommands(bridgeCommands.value, skillSlashCommands.value)
     : isCodingAgentSession.value
-      ? bridgeCommands.value.filter(command => CODING_AGENT_SLASH_COMMANDS.includes(command.name)
-        && !(command.name === 'context' && isCursorSession.value)
-        && !(command.name === 'compact' && (
-          chatStore.activeSession?.codingAgentId === 'opencode'
-          || chatStore.activeSession?.agent === 'opencode'
-          || isCursorSession.value
-        )))
+      // Ekko only: its skill names are dispatched by name, and `/plan-only`
+      // would otherwise match nothing at all -- the built-in list has no `plan`.
+      ? mergeSkillSlashCommands(
+          codingAgentBuiltins,
+          supportsEkkoSkills.value ? ekkoSkillSlashCommands.value : [],
+        )
       : isForkCommandSession.value
         ? bridgeCommands.value.filter(command => command.name === 'fork')
         : []
@@ -356,6 +413,38 @@ async function loadSkills() {
     }
   })()
   return skillsLoadRequest
+}
+
+let ekkoSkillsLoadedKey = ''
+let ekkoSkillsLoadRequest: Promise<void> | null = null
+
+/**
+ * Load Ekko's own skill registry for the active profile.
+ *
+ * Mirrors `loadSkills` deliberately, including the log-on-failure: a load that
+ * silently fails is indistinguishable from "this profile has no skills", and
+ * the symptom is a menu with no entries and no explanation.
+ */
+async function loadEkkoSkills() {
+  if (!supportsEkkoSkills.value) return
+  const key = currentSkillsKey()
+  if (ekkoSkillsLoadedKey === key || ekkoSkillsLoadRequest) return ekkoSkillsLoadRequest
+  ekkoSkillsLoadRequest = (async () => {
+    try {
+      const skills = await fetchEkkoSkills(key)
+      if (currentSkillsKey() !== key) return
+      ekkoSkills.value = skills
+      ekkoSkillsLoadedKey = key
+    } catch (err) {
+      console.warn('[slash] failed to load Ekko skills', key, err)
+      if (currentSkillsKey() !== key) return
+      ekkoSkills.value = []
+      ekkoSkillsLoadedKey = key
+    } finally {
+      ekkoSkillsLoadRequest = null
+    }
+  })()
+  return ekkoSkillsLoadRequest
 }
 
 async function loadBundles() {
@@ -577,6 +666,8 @@ watch(
   () => [chatStore.activeSession?.profile, profilesStore.activeProfileName],
   () => {
     skillsLoadedKey = ''
+    ekkoSkillsLoadedKey = ''
+    ekkoSkills.value = []
     skillCategories.value = []
     bundlesLoadedKey = ''
     bundles.value = []
@@ -615,6 +706,12 @@ function updateSlashState() {
   // first call and still refreshes when the profile changes.
   if (supportsSkillSlashCommands.value && skillCategories.value.length === 0) {
     void loadSkills()
+  }
+  // Same reasoning for Ekko's registry. Without it, typing `/plan` in an Ekko
+  // session filters to nothing before the fetch has resolved, and the menu
+  // silently stays closed.
+  if (supportsEkkoSkills.value && ekkoSkills.value.length === 0) {
+    void loadEkkoSkills()
   }
 }
 
