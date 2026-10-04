@@ -157,9 +157,16 @@ describe('fork customization: run completion has one exit', () => {
     // the in-memory endpoint; routing it through the session list would make it
     // a database read four times as often.
     expect(files.chatStore).toMatch(/WORKING_SNAPSHOT_POLL_MS = \d_?\d*/)
+    // Cut at the end of the fast interval itself. A fixed character count either
+    // stops short of the call it asserts on or runs into the next interval, which
+    // does call refreshSessionListOnly -- wrong for opposite reasons.
     const fastPoll = files.chatStore.slice(files.chatStore.indexOf('let workingSnapshotPollInFlight'))
-    expect(fastPoll.slice(0, 900)).toMatch(/applyWorkingSessionsSnapshot/)
-    expect(fastPoll.slice(0, 900)).not.toMatch(/refreshSessionListOnly/)
+    const body = fastPoll.slice(0, fastPoll.indexOf('}, WORKING_SNAPSHOT_POLL_MS)'))
+    expect(body).toMatch(/applyWorkingSessionsSnapshot/)
+    expect(body).not.toMatch(/refreshSessionListOnly/)
+    // And it must not gate on already knowing something is live: that gate can
+    // only confirm a run, never discover one.
+    expect(body).not.toMatch(/serverWorking\.value\.size === 0/)
   })
 
   it('bounds every local-evidence source, delegations included', () => {

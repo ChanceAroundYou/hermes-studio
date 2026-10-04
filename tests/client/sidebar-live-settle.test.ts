@@ -120,8 +120,9 @@ describe('a finished run is reported', () => {
     // The fast tick must NOT reuse refreshSessionListOnly, which is a DB read.
     expect(chat).toMatch(/const WORKING_SNAPSHOT_POLL_MS = 3_000/)
     const fastPoll = chat.slice(chat.indexOf('let workingSnapshotPollInFlight'))
-    expect(fastPoll.slice(0, 900)).toMatch(/void applyWorkingSessionsSnapshot\(\)/)
-    expect(fastPoll.slice(0, 900)).not.toMatch(/refreshSessionListOnly/)
+    const body = fastPoll.slice(0, fastPoll.indexOf('}, WORKING_SNAPSHOT_POLL_MS)'))
+    expect(body).toMatch(/void applyWorkingSessionsSnapshot\(\)/)
+    expect(body).not.toMatch(/refreshSessionListOnly/)
   })
 
   it('covers both ways a run ends without the client attached', () => {
@@ -228,12 +229,22 @@ describe('every locally-kept light has a bound at its use site', () => {
     expect(vetoBody).toMatch(/now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS/)
   })
 
-  it('polls while a stream is attached even with no phase', () => {
-    // A leftover stream with no phase has nothing else to clear it, so a guard
-    // that skipped the poll for it is how a leak becomes permanent.
-    // Anchored on the interval that drives the poll, not on the constant, which
-    // appears in its own declaration first.
-    const guard = chat.slice(chat.indexOf('window.setInterval(() => {', chat.indexOf('const WORKING_SNAPSHOT_POLL_MS')))
-    expect(guard.slice(0, 900)).toMatch(/streamStates\.value\.size === 0/)
+  it('polls unconditionally, so it can discover a run and not only confirm one', () => {
+    // The tick used to return early when the client already believed nothing was
+    // running. That is self-defeating: it can only confirm a run the client knows
+    // about, never find one, so a run started by the CLI or another device waited
+    // for the twelve-second list poll before its ring appeared.
+    //
+    // Anchored on the interval body, not on the constant, which appears in its
+    // own declaration first.
+    const tick = chat.slice(chat.indexOf('window.setInterval(() => {', chat.indexOf('const WORKING_SNAPSHOT_POLL_MS')))
+    const body = tick.slice(0, tick.indexOf('}, WORKING_SNAPSHOT_POLL_MS)'))
+    expect(body).toMatch(/applyWorkingSessionsSnapshot\(\)/)
+    expect(body).not.toMatch(/serverWorking\.value\.size === 0/)
+    expect(body).not.toMatch(/streamStates\.value\.size === 0/)
+    // Guarded on visibility only: a hidden tab has no rings to update.
+    expect(body).toMatch(/document\.visibilityState !== 'visible'/)
+    // And still skipped rather than queued when a poll is in flight.
+    expect(body).toMatch(/if \(workingSnapshotPollInFlight\) return/)
   })
 })

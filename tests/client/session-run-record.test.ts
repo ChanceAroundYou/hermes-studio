@@ -26,7 +26,7 @@ vi.mock('@/api/studio/chat', () => ({
 }))
 vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default', hasApiKey: () => false, getBaseUrlValue: () => '' }))
 // `vi.mock` factories are hoisted above the const, so the id is spelled out.
-const SESSION_ROW = { id: 'session-record', title: 'session-record', profile: 'default', createdAt: 0, updatedAt: 0, messageCount: 0 }
+const SESSION_ROW = { id: 'session-record', title: 'session-record', profile: 'default', createdAt: 0, updatedAt: 0, messageCount: 0, source: 'coding_agent', agent: 'ekko-agent' }
 vi.mock('@/api/studio/sessions', () => ({
   archiveSession: vi.fn(), deleteSession: vi.fn(), fetchSession: vi.fn(),
   fetchSessions: vi.fn(async (source?: string) => (source === 'global_agent' ? [] : [SESSION_ROW])),
@@ -172,6 +172,24 @@ describe('the whole record moves together', () => {
 
     expect(store.sessionRuns.get('session-record')?.runId).toBe('run-abc')
     expect(store.sessionRuns.get('session-record')?.startedAt).toBeGreaterThan(0)
+  })
+
+  it('lights the ring on send in a coding-agent session, before the server confirms', async () => {
+    // Coding-agent sessions were excluded from the optimistic mark, which is the
+    // one path where the user has definitely just started a run. The ring then
+    // waited for a poll to notice -- and for a run the snapshot could not see at
+    // all, it waited for nothing.
+    await store.refreshSessionListOnly()
+    // `activeSession` has to be populated, not just the id: `sendMessage` creates
+    // a fresh session when it is null, which would put the ring on a different
+    // session entirely and make this pass for the wrong reason.
+    await store.switchSession('session-record')
+    expect(store.activeSession?.source).toBe('coding_agent')
+
+    void store.sendMessage('hello')
+    // Read synchronously, straight after the call: this is about the ring being
+    // lit immediately, not eventually.
+    expect(store.isSessionWorking('session-record')).toBe(true)
   })
 
   it('lets a delegation outlive the run that started it', async () => {

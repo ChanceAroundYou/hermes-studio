@@ -4812,7 +4812,12 @@ export const useChatStore = defineStore('chat', () => {
     const submittedContent = messageReference
       ? formatMessageWithReference(messageReference, trimmedContent)
       : trimmedContent
-    const shouldOptimisticallyShowRunStatus = !isCodingAgentSession && !isBridgeForkCommand
+    // Coding agents were excluded here, which is the one path where the user has
+    // definitely just started a run and least wants to wait for a poll. The
+    // exclusion came in with an upstream commit and carried no reason; the
+    // snapshot corrects a wrong guess within one interval, so guessing early is
+    // strictly better than being dark late.
+    const shouldOptimisticallyShowRunStatus = !isBridgeForkCommand
     const wasLiveBeforeSend = isSessionLive(sid)
     if (isBridgeForkCommand) {
       if (pendingForkCommands.value.has(sid)) return
@@ -6537,10 +6542,17 @@ export const useChatStore = defineStore('chat', () => {
       // Skip rather than queue: a colliding poll is redundant and the next tick
       // is 3s away.
       if (workingSnapshotPollInFlight) return
-      // Streams count as much as phases. A leftover stream with no phase has
-      // nothing else to clear it, and skipping the poll for it is exactly how a
-      // leak used to become permanent.
-      if (serverWorking.value.size === 0 && streamStates.value.size === 0 && subagentStreams.value.size === 0) return
+      // Unconditional, and that is the point.
+      //
+      // This used to return early when the client already believed nothing was
+      // running -- which is self-defeating: it can only ever confirm a run the
+      // client already knows about, never discover one. A run started by the CLI,
+      // by another device, or by a background delegation therefore waited for the
+      // twelve-second session-list poll, and the ring appeared long after the run
+      // had visibly started.
+      //
+      // The read is a plain in-memory map on the server with no database access,
+      // which is what makes polling it at this rate reasonable.
       workingSnapshotPollInFlight = true
       void applyWorkingSessionsSnapshot()
         .catch(() => { /* a failed poll must not surface as an error toast */ })
