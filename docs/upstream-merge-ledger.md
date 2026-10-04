@@ -47,6 +47,9 @@
 | 移动端 Enter 换行 | ChatInput.vue | 上游删了分支，补回 |
 | 历史视图 error 显示为 system | HistoryView.vue | 保留 |
 | 统一红泡 + 原地保留 + 不进上下文 | chat.ts + MessageItem.vue + session-store.ts | 保留 |
+| 后台委派上报 + 证据上限 | chat-run.ts + chat.ts | 保留；删掉会让侧栏环永远转 |
+| 完成信号单一出口 settleSessionFinished | chat.ts | 保留；复活第二个出口会重复通知 |
+| 工作态 3s 独立轮询 | chat.ts | 保留；改走 refreshSessionListOnly 会变成 DB 读 |
 
 ## 有意移除的上游功能（cherry-pick 时勿带回）
 

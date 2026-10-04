@@ -86,10 +86,10 @@ describe('the client settles delegations from the authoritative snapshot', () =>
 })
 
 describe('a finished run is reported', () => {
-  it('notifies from the poll, once per session', () => {
-    expect(chat).toMatch(/function notifySessionFinishedBySnapshot\(sessionId: string\)/)
-    expect(chat).toMatch(/if \(snapshotFinishNotified\.has\(sid\)\) return/)
-    expect(chat).toMatch(/showCompletionNotificationIfEnabled\(sid\)/)
+  it('routes every completion path through one exit, once per session', () => {
+    expect(chat).toMatch(/function settleSessionFinished\(sessionId: string, messageId\?: string \| null\)/)
+    expect(chat).toMatch(/if \(alreadyReported\) return/)
+    expect(chat).toMatch(/showCompletionNotificationIfEnabled\(sid, messageId \?\? null\)/)
   })
 
   it('actually calls it from the poll loop', () => {
@@ -98,7 +98,30 @@ describe('a finished run is reported', () => {
     // precisely "the end is never reported".
     const pollAt = chat.indexOf('const authoritativeRemove')
     const loop = chat.slice(pollAt, pollAt + 900)
-    expect(loop).toMatch(/notifySessionFinishedBySnapshot\(id\)/)
+    expect(loop).toMatch(/settleSessionFinished\(id\)/)
+  })
+
+  it('has exactly one exit, so a new path cannot bypass the dedupe', () => {
+    // Three paths used to conclude "done" on their own -- two run.completed
+    // handlers and the poll -- and only the poll consulted the dedupe set, so
+    // one completion could notify twice. `showCompletionNotificationIfEnabled`
+    // is the single remaining caller, and it is reached only through the exit.
+    const exits = chat.match(/settleSessionFinished\(/g) || []
+    // 1 definition + 1 poll call + 2 run.completed calls
+    expect(exits.length).toBe(4)
+    const notifyCalls = chat.match(/showCompletionNotificationIfEnabled\(/g) || []
+    // 1 inside the exit, 1 inside its own definition, 0 elsewhere in the store
+    expect(notifyCalls.length).toBe(2)
+  })
+
+  it('polls the cheap endpoint on its own short interval', () => {
+    // The completion notice for a session this client is not attached to can
+    // only be learned from the snapshot, so notice latency was the old 12s tick.
+    // The fast tick must NOT reuse refreshSessionListOnly, which is a DB read.
+    expect(chat).toMatch(/const WORKING_SNAPSHOT_POLL_MS = 3_000/)
+    const fastPoll = chat.slice(chat.indexOf('let workingSnapshotPollInFlight'))
+    expect(fastPoll.slice(0, 900)).toMatch(/void applyWorkingSessionsSnapshot\(\)/)
+    expect(fastPoll.slice(0, 900)).not.toMatch(/refreshSessionListOnly/)
   })
 
   it('covers both ways a run ends without the client attached', () => {

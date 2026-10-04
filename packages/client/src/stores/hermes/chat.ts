@@ -2521,6 +2521,15 @@ export const useChatStore = defineStore('chat', () => {
   const WORKING_SNAPSHOT_FRESHNESS_MS = 15_000
 
   /**
+   * How often the working-sessions snapshot is re-read while anything is live.
+   *
+   * Bounds how long the sidebar can show a finished run as busy, and how long a
+   * completion notice for an unattached session can be delayed. Cheap endpoint,
+   * no database.
+   */
+  const WORKING_SNAPSHOT_POLL_MS = 3_000
+
+  /**
    * How long a silent delegation still counts as local evidence of a live run.
    *
    * A safety net for a client that received nothing at all; the precise path is
@@ -2613,7 +2622,7 @@ export const useChatStore = defineStore('chat', () => {
       // used to be silent about it, which is why a finished run looked identical
       // to a stuck one. Report it once per session.
       for (const id of new Set([...authoritativeRemove, ...finishedBySnapshot])) {
-        notifySessionFinishedBySnapshot(id)
+        settleSessionFinished(id)
       }
       for (const entry of snapshot) {
         // Live again, so the next finished run is allowed to report itself.
@@ -4438,28 +4447,43 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * Sessions this client already reported as finished via the snapshot, so a
-   * long-running leak cannot notify on every poll.
+   * Sessions this client has already reported finished, so one completed run
+   * cannot notify twice and a leak cannot notify every poll.
    */
   const snapshotFinishNotified = new Set<string>()
 
   /**
-   * Announce a run that finished without this client ever seeing its terminal
-   * event.
+   * The single place a run is declared finished.
    *
-   * `run.completed` already notifies when it arrives; this covers the sessions
-   * it never arrives for, which is why finishing used to be indistinguishable
-   * from being stuck. Gated by the same notify_on_complete setting, and silent
-   * for a session that never ran.
+   * Three paths used to conclude "done" independently:
+   *
+   *   1. two `run.completed` handlers, one per transport (socket start, resume);
+   *   2. the periodic snapshot, for sessions this client is not attached to;
+   *   3. the delegation reconciliation inside the snapshot.
+   *
+   * Each decided for itself whether to notify, and only path 2 consulted the
+   * dedupe set. So one completion could fire twice (socket, then the snapshot
+   * that followed it), and the notice for a non-active session was delivered up
+   * to a full poll interval late -- which is what "the notification is delayed"
+   * looked like. Deduplicating here rather than at each caller means a new
+   * completion path cannot reintroduce either problem.
+   *
+   * `messageId` is only known to the transport paths; the snapshot has no
+   * message to point at and lets the notification pick the latest assistant
+   * message itself.
    */
-  function notifySessionFinishedBySnapshot(sessionId: string) {
+  function settleSessionFinished(sessionId: string, messageId?: string | null) {
     const sid = String(sessionId || '').trim()
     if (!sid) return
-    if (snapshotFinishNotified.has(sid)) return
+    const alreadyReported = snapshotFinishNotified.has(sid)
     snapshotFinishNotified.add(sid)
+    // Whoever gets here first is the authority: the snapshot may lag behind a
+    // terminal event this client already saw, so it must not overwrite a
+    // message-specific notification with a less precise one.
+    if (alreadyReported) return
     if (!sessions.value.some(session => session.id === sid)) return
     if (sid === activeSessionId.value) return
-    showCompletionNotificationIfEnabled(sid)
+    showCompletionNotificationIfEnabled(sid, messageId ?? null)
   }
 
   function showCompletionNotificationIfEnabled(sessionId: string, messageId?: string | null) {
@@ -5353,7 +5377,7 @@ export const useChatStore = defineStore('chat', () => {
                 addSystemErrorMessage(sid, 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.')
               } else {
                 playCompletionBellIfEnabled()
-                showCompletionNotificationIfEnabled(sid, completedAssistantMessageId)
+                settleSessionFinished(sid, completedAssistantMessageId)
               }
               const terminalAssistantMessageId = completedAssistantMessageId || [...getSessionMsgs(sid)]
                 .reverse()
@@ -5962,7 +5986,7 @@ export const useChatStore = defineStore('chat', () => {
             addSystemErrorMessage(sid, 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.')
           } else {
             playCompletionBellIfEnabled()
-            showCompletionNotificationIfEnabled(sid, completedAssistantMessageId)
+            settleSessionFinished(sid, completedAssistantMessageId)
           }
           const terminalAssistantMessageId = completedAssistantMessageId || [...getSessionMsgs(sid)]
             .reverse()
@@ -6290,6 +6314,35 @@ export const useChatStore = defineStore('chat', () => {
         }
       }
     })
+  }
+
+  /**
+   * Fast poll for run state only.
+   *
+   * The 12s tick below ends up calling `refreshSessionListOnly`, which is a
+   * database read for the session list. Running that four times as often to
+   * tighten the completion notice would quadruple the DB load, so the
+   * working-sessions endpoint gets its own faster tick instead: it reads the
+   * socket server's in-memory `sessionMap` and serializes a small array, so it
+   * is cheap enough to run while a run is in flight.
+   *
+   * This is what makes "the notification arrives late" go away. The notice for
+   * a session this client is not attached to can only be learned from the
+   * snapshot, so the notice latency was exactly the old poll interval.
+   */
+  let workingSnapshotPollInFlight = false
+  if (typeof window !== 'undefined' && !(typeof process !== 'undefined' && process.env.VITEST) && !(globalThis as any).__vitest_worker__) {
+    window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      // Skip rather than queue: a colliding poll is redundant and the next tick
+      // is 3s away.
+      if (workingSnapshotPollInFlight) return
+      if (serverWorking.value.size === 0 && subagentStreams.value.size === 0) return
+      workingSnapshotPollInFlight = true
+      void applyWorkingSessionsSnapshot()
+        .catch(() => { /* a failed poll must not surface as an error toast */ })
+        .finally(() => { workingSnapshotPollInFlight = false })
+    }, WORKING_SNAPSHOT_POLL_MS)
   }
 
   // Background polling for live session-list sync: sessions created or advanced

@@ -50,6 +50,8 @@ const files = {
   bridgeRun: read('packages/server/src/modules/studio/services/chat-run/handle-bridge-run.ts'),
   chatRunSocket: read('packages/server/src/modules/studio/sockets/chat-run.ts'),
   groupChatSocket: read('packages/server/src/modules/studio/sockets/group-chat.ts'),
+  workingSessionsController: read('packages/server/src/modules/studio/controllers/chat-run.ts'),
+  sessionsApi: read('packages/client/src/api/studio/sessions.ts'),
 }
 
 describe('fork customization: subpath deployment', () => {
@@ -120,6 +122,74 @@ describe('fork customization: chat run stability', () => {
 
   it('lets the store read a session owned by another profile', () => {
     expect(files.chatRunSocket).toContain('requireSocketSessionAccess')
+  })
+})
+
+/**
+ * Run state is owned by more than one mechanism, and each of them looked
+ * correct on its own. `isStreaming` is an OR over three independent sources
+ * (the socket stream, the server snapshot, live subagent streams), and a run
+ * that has finished is concluded by three separate paths.
+ *
+ * When those disagreed, the failure was silent and permanent rather than loud:
+ * the sidebar ring kept spinning and the completion notice never came, because
+ * the notice for a session this client is not attached to can only be learned
+ * from the 12s snapshot poll. Both halves were reported as "the ring does not
+ * clear" and "the notification is late", which is why the two have to be pinned
+ * together here: they are one mechanism seen from two sides.
+ *
+ * Behaviour lives in tests/client/sidebar-live-settle.test.ts. These entries
+ * answer the merge question only -- did the single exit and the server-side
+ * authority survive the merge.
+ */
+describe('fork customization: run completion has one exit', () => {
+  it('concludes a run in exactly one place', () => {
+    // Three paths used to decide "done" independently, and only the poll
+    // consulted the dedupe set -- so one completion could notify twice. A new
+    // path that skips the exit reintroduces that.
+    expect(files.chatStore).toMatch(/function settleSessionFinished\(/)
+    expect(files.chatStore).not.toMatch(/notifySessionFinishedBySnapshot/)
+  })
+
+  it('polls the working snapshot on its own short interval', () => {
+    // Notice latency was exactly the old 12s tick. The fast tick must stay on
+    // the in-memory endpoint; routing it through the session list would make it
+    // a database read four times as often.
+    expect(files.chatStore).toMatch(/WORKING_SNAPSHOT_POLL_MS = \d_?\d*/)
+    const fastPoll = files.chatStore.slice(files.chatStore.indexOf('let workingSnapshotPollInFlight'))
+    expect(fastPoll.slice(0, 900)).toMatch(/applyWorkingSessionsSnapshot/)
+    expect(fastPoll.slice(0, 900)).not.toMatch(/refreshSessionListOnly/)
+  })
+
+  it('bounds every local-evidence source, delegations included', () => {
+    // The one unbounded veto is what deadlocked hasLocalRunEvidence against
+    // authoritativeRemove, so the ring could only be cleared by opening the
+    // conversation. Any new evidence source must arrive with a bound.
+    //
+    // The constant being declared is not evidence that it is applied: an earlier
+    // revision asserted only the declaration, and replacing the guarded branch
+    // with a bare `return true` left this test green. The use site is asserted.
+    const evidence = files.chatStore.slice(files.chatStore.indexOf('function hasLocalRunEvidence'))
+    const body = evidence.slice(0, evidence.indexOf('\n  }'))
+    expect(body).toMatch(/subagent\.status !== 'running'\) continue/)
+    expect(body).toMatch(/now - subagent\.updatedAt < SUBAGENT_EVIDENCE_FRESHNESS_MS/)
+
+    // The sibling run-start bound must stay too, or the same leak returns through it.
+    expect(body).toMatch(/now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS/)
+  })
+
+  it('keeps the server reporting background delegations', () => {
+    // Without background_pending the client cannot tell "delegation finished"
+    // from "the snapshot never mentioned it", and the two deadlock.
+    //
+    // Asserted at the use site, not on the method name: replacing the call with
+    // a literal 0 left this test green while the field silently became useless.
+    const listing = files.chatRunSocket.slice(files.chatRunSocket.indexOf('const runState = state.runState'))
+    const block = listing.slice(0, listing.indexOf('\n      }'))
+    expect(block).toMatch(/backgroundPending = this\.backgroundPendingCount\(state\)/)
+    expect(block).toMatch(/backgroundPending === 0\) continue/)
+    expect(files.workingSessionsController).toMatch(/background_pending:/)
+    expect(files.sessionsApi).toMatch(/background_pending\?: number/)
   })
 })
 
