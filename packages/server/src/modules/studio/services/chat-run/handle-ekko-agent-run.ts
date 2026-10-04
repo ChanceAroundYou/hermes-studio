@@ -251,6 +251,48 @@ async function toUserAgentContent(value: unknown): Promise<{ content: string; co
   }
 }
 
+/**
+ * Does this failure mean the provider refuses image input?
+ *
+ * Providers spell it several ways ("vision_disabled", "does not support image
+ * input"), and none of it is knowable up front from the model id, so the run has
+ * to discover it from the failure and retry once.
+ */
+function isVisionDisabledError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err || '')
+  return /vision[_\s-]?disabled|vision is not (?:enabled|supported)|does not support (?:image|vision)|image input (?:is )?not supported|no vision support/i.test(message)
+}
+
+/**
+ * Drop image parts from a message list, keeping every text part.
+ *
+ * The text half matters: `toUserAgentContent` already writes
+ * `[Attached image: <name>]\nLocal image path for tools: <path>` alongside the
+ * image, so a text-only model still learns an image exists and can read it off
+ * disk with a tool instead of failing the whole turn.
+ *
+ * Returns the original array when nothing had to change, so the caller can tell
+ * "stripped" from "there was never an image" and avoid a pointless retry.
+ */
+function stripImageParts(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false
+  const next = messages.map((message) => {
+    const parts = (message as any).contentParts
+    if (!Array.isArray(parts) || parts.length === 0) return message
+    const kept = parts.filter((part: any) => {
+      const isImage = part?.type === 'image' || part?.type === 'image_url' || typeof part?.mimeType === 'string'
+      if (isImage) changed = true
+      return !isImage
+    })
+    if (kept.length === parts.length) return message
+    const copy: any = { ...message }
+    if (kept.length > 0) copy.contentParts = kept
+    else delete copy.contentParts
+    return copy
+  })
+  return changed ? next : messages
+}
+
 async function toAgentMessages(messages: Array<ChatMessage | SessionState['messages'][number]>): Promise<AgentMessage[]> {
   const toolCallIds = new Set<string>()
   const result: AgentMessage[] = []
@@ -1423,7 +1465,7 @@ export async function handleEkkoAgentRun(
           writeScopes: data.memory_write_scopes ?? [profileScope, contextScope, sessionScope],
           defaultWriteScope: data.memory_default_write_scope ?? (isGroupMemory ? contextScope : profileScope),
         }
-    const result = await agent.run({
+    const runOptions = {
       modelClient,
       model: modelConfig.model,
       reasoningEffort,
@@ -1439,7 +1481,7 @@ export async function handleEkkoAgentRun(
           ? structuredClone(callbackContext.messages)
           : await toAgentMessages(compressedHistory)),
         currentMessage,
-      ],
+      ] as AgentMessage[],
       ...(memoryInput ? { memoryInput } : {}),
       signal: abortController.signal,
       logContext: {
@@ -1476,7 +1518,25 @@ export async function handleEkkoAgentRun(
           }
         : {}),
       backgroundDelegationEnabled: data.background_delegation_enabled !== false,
-    })
+    }
+
+    // A model that cannot see images rejects the whole request, so one retry
+    // without them beats surfacing a 400 the user cannot act on. History images
+    // are stripped unconditionally below; this covers the image the user just
+    // attached, which is the one case where dropping it changes the answer.
+    let result: any
+    try {
+      result = await agent.run(runOptions as any)
+    } catch (err) {
+      if (abortController.signal.aborted || isAbortError(err) || !isVisionDisabledError(err)) throw err
+      const withoutImages = stripImageParts(runOptions.messages)
+      if (withoutImages === runOptions.messages) throw err
+      logger.warn(
+        { sessionId, runId: runId || '', model: modelConfig.model, provider: modelConfig.provider },
+        '[chat-run-socket] provider refused image input; retrying this turn without images',
+      )
+      result = await agent.run({ ...runOptions, messages: withoutImages } as any)
+    }
     assistantText = result.output.content || assistantText
     const persistedRunMarker = runId || result.runId
     const outputUsage = result.output.usage

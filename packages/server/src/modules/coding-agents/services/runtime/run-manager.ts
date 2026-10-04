@@ -26,6 +26,7 @@ import { killOwnedProcessTree } from '../../../studio/public/process-tree'
 import { attachPiJsonlReader } from '../pi/jsonl-parser'
 import { normalizePiThinkingLevel } from '../pi/thinking'
 import { compactCodexThread } from './codex-compact'
+import { registerLiveRun, unregisterLiveRun } from './live-run-registry'
 import { updateManagedPromptFileSync } from '../prompt-file'
 import { grokSessionExists, startGrokTurnProcess } from '../grok/turn-process'
 import { applyGrokStreamEvent } from '../grok/event-adapter'
@@ -777,6 +778,7 @@ export class CodingAgentRunManager {
             : launch.agentId === 'cursor'
               ? 'Cursor'
             : 'Claude Code'
+      registerLiveRun({ sessionId: launch.sessionId, runId: run.id, pid: run.currentChild?.pid || 0, agentId: launch.agentId, profile: launch.profile })
       this.emitTerminalStatus(run, `${agentName} chat runner ready.`)
       logger.info({
         runId: run.id,
@@ -845,6 +847,8 @@ export class CodingAgentRunManager {
       model: launch.model,
       pid: proc.pid,
     }, '[coding-agent-run] hidden session started')
+
+    registerLiveRun({ sessionId: launch.sessionId, runId: run.id, pid: proc.pid, agentId: launch.agentId, profile: launch.profile })
 
     return { runId: run.id, pid: proc.pid }
   }
@@ -1530,6 +1534,7 @@ export class CodingAgentRunManager {
     if (run.terminalFlushTimer) clearTimeout(run.terminalFlushTimer)
     this.runs.delete(run.id)
     if (this.sessionIndex.get(run.launch.sessionId) === run.id) this.sessionIndex.delete(run.launch.sessionId)
+    unregisterLiveRun(run.launch.sessionId, run.id)
     if (options.kill && !run.exited) {
       if (run.launch.agentId === 'pi' && run.turnActive && childIsRunning(run.currentChild)) {
         this.writePiRpcCommand(run, { id: `abort_${Date.now()}`, type: 'abort' })

@@ -6,6 +6,7 @@ import type { Server, Socket } from 'socket.io'
 import { updateSession, updateSessionStats } from '../../repositories/session-store'
 import { logger } from '../../public/logging'
 import { chatCodingAgentRunManager as codingAgentRunManager } from '../../public/chat-agent-runtime'
+import { forceKillLiveRun, findLiveRun } from '../../../coding-agents/services/runtime/live-run-registry'
 import {
   abortChatEkkoBackgroundTasks as abortGlobalEkkoBackgroundTasks,
   hasChatEkkoBackgroundTasks as hasGlobalEkkoBackgroundTasks,
@@ -67,7 +68,35 @@ export async function handleAbort(
     (!state?.isWorking && !hasCodingAgentRun && !hasEkkoBackgroundTasks) ||
     (state && !isCodingAgentRun && !state.runId && !state.abortController)
   ) {
-    logger.info({ sessionId }, '[chat-run-socket][abort] ignored: no active run')
+    // The in-memory run is gone, but a coding-agent child spawned before a
+    // restart is still alive and still billing tokens. Fall through to the
+    // durable registry so stop means stop even from a fresh server process.
+    const orphan = findLiveRun(sessionId)
+    if (orphan) {
+      logger.warn({ sessionId, pid: orphan.pid, runId: orphan.runId }, '[chat-run-socket][abort] no in-memory run; force killing orphan agent process')
+      const result = forceKillLiveRun(sessionId)
+      if (result.killed) {
+        if (state) {
+          state.isWorking = false
+          state.isAborting = false
+          state.runId = undefined
+          state.abortController = undefined
+          state.events = []
+        }
+        emitToSession(nsp, socket, sessionId, 'abort.completed', {
+          event: 'abort.completed',
+          run_id: result.runId || 'orphan_agent_kill',
+          synced: true,
+          force_killed: true,
+          killed_pid: result.pid,
+        })
+        logger.info({ sessionId, pid: result.pid }, '[chat-run-socket][abort] force killed orphan agent and completed')
+        return
+      }
+      logger.warn({ sessionId, pid: orphan.pid }, '[chat-run-socket][abort] orphan agent pid was already gone')
+    }
+
+    logger.info({ sessionId }, '[chat-run-socket][abort] no run and no orphan process to kill')
     if (state) {
       if (state.queueInsertion) {
         emitToSession(nsp, socket, sessionId, 'run.queue_insertion.updated', {
@@ -200,7 +229,24 @@ export async function handleAbort(
     }
   } else if (isCodingAgentRun) {
     activeState.abortController?.abort()
-    codingAgentRunManager.stop(sessionId, { reportClosed: false })
+    const stoppedInMemory = codingAgentRunManager.stop(sessionId, { reportClosed: false })
+    // `false` means the run manager had no entry for this session. After a server
+    // restart that is the normal case while the agent child is still alive, and
+    // reporting `synced: true` there told the user it stopped when it had not.
+    // The durable registry is the handle that outlives the process.
+    if (!stoppedInMemory) {
+      const orphan = findLiveRun(sessionId)
+      if (orphan) {
+        const result = forceKillLiveRun(sessionId)
+        if (result.killed) {
+          logger.warn({ sessionId, pid: result.pid, runId: result.runId }, '[chat-run-socket][abort] run manager had no entry; force killed orphan agent process')
+        } else {
+          logger.warn({ sessionId, pid: orphan.pid }, '[chat-run-socket][abort] orphan agent pid was already gone')
+        }
+      } else {
+        logger.warn({ sessionId, runId }, '[chat-run-socket][abort] run manager had no entry and no orphan process is registered')
+      }
+    }
     if (hasEkkoBackgroundTasks) {
       await abortGlobalEkkoBackgroundTasks(sessionId)
       for (const task of settleInterruptedBackgroundTasks(activeState)) {
