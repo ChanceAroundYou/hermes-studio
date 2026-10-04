@@ -334,6 +334,13 @@ async function loadSkills() {
       const data = await fetchSkills(key)
       if (currentSkillsKey() !== key) return
       skillCategories.value = data.categories || []
+      // The store rewrites a bare `/plan-only` into `/skill plan-only` before the
+      // Agent sees it, and it can only do that for names it knows. Without this
+      // the menu entry would insert text that silently arrived as prose.
+      chatStore.setKnownSkillCommandNames(
+        chatStore.activeSessionId,
+        (data.categories ?? []).flatMap(category => category?.skills ?? []).map(skill => skill?.name ?? ''),
+      )
       skillsLoadedKey = key
     } catch (err) {
       // Swallowing this made the whole feature undiagnosable: a failed load is

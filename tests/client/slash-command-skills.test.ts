@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  rewriteSkillSlashCommand,
   mergeSkillSlashCommands,
   skillCommandName,
   skillToSlashCommand,
@@ -57,11 +58,11 @@ describe('custom skills are offered in the slash command menu', () => {
     // same rule the /skill command applies, so the menu cannot offer a token the
     // Agent would reject.
     expect(merged.map(c => c.name)).toEqual(['usage', 'skill', 'plan-only', 'root-cause'])
-    expect(slashCommandInsertText(merged[3])).toBe('/skill root-cause ')
+    expect(slashCommandInsertText(merged[3])).toBe('/root-cause ')
   })
 
-  it('inserts /skill <command-name>, the only form the Agent resolves', () => {
-    expect(slashCommandInsertText(skill('plan only'))).toBe('/skill plan-only ')
+  it('inserts the command name itself; the store rewrites it to /skill <name>', () => {
+    expect(slashCommandInsertText(skill('plan only'))).toBe('/plan-only ')
   })
 
   it('finds a skill by the command name the user already knows', () => {
@@ -116,5 +117,85 @@ describe('the chat composer wires skills into the slash menu', () => {
     const start = chatInput.indexOf('function updateSlashState')
     const body = chatInput.slice(start, chatInput.indexOf('\nfunction ', start + 10))
     expect(body).toMatch(/void loadSkills\(\)/)
+  })
+})
+
+/**
+ * The wire contract.
+ *
+ * The composer inserts `/plan-only` because that is what the menu displays. That
+ * bare form is not a known bridge command, so without a rewrite the store sends
+ * it as an ordinary user message: the Agent receives the text and never loads
+ * the skill. Everything here exists to make that rewrite reliable.
+ */
+describe('a bare skill command is rewritten to the form the Agent resolves', () => {
+  const known = new Set(['plan-only', 'root-cause'])
+
+  it('rewrites the exact form the menu inserts', () => {
+    // The menu's trailing space is normalized away: the store trims for the wire
+    // regardless, so preserving it would only hide a difference that is not one.
+    expect(rewriteSkillSlashCommand('/plan-only ', known)).toBe('/skill plan-only')
+  })
+
+  it('rewrites a hand-typed command identically', () => {
+    // The whole point of pushing the rewrite down: selecting from the menu and
+    // typing it must not differ.
+    expect(rewriteSkillSlashCommand('/plan-only', known))
+      .toBe(rewriteSkillSlashCommand('/plan-only ', known))
+  })
+
+  it('keeps trailing instructions attached to the skill', () => {
+    expect(rewriteSkillSlashCommand('/plan-only 先看看登录流程', known))
+      .toBe('/skill plan-only 先看看登录流程')
+  })
+
+  it('leaves a built-in command alone even when a skill shares its prefix', () => {
+    // `/plan` changes how the run executes; it must never be captured as a skill.
+    expect(rewriteSkillSlashCommand('/plan something', known)).toBe('/plan something')
+    expect(rewriteSkillSlashCommand('/plan', known)).toBe('/plan')
+  })
+
+  it('leaves the already-rewritten form untouched', () => {
+    expect(rewriteSkillSlashCommand('/skill plan-only', known)).toBe('/skill plan-only')
+    expect(rewriteSkillSlashCommand('/skill plan-only 说明', known)).toBe('/skill plan-only 说明')
+  })
+
+  it('leaves an unknown command alone so it reaches the Agent as typed', () => {
+    expect(rewriteSkillSlashCommand('/not-a-skill', known)).toBe('/not-a-skill')
+    expect(rewriteSkillSlashCommand('/', known)).toBe('/')
+    expect(rewriteSkillSlashCommand('hello', known)).toBe('hello')
+    expect(rewriteSkillSlashCommand('', known)).toBe('')
+  })
+
+  it('accepts an array as well as a Set', () => {
+    expect(rewriteSkillSlashCommand('/plan-only', ['plan-only'])).toBe('/skill plan-only')
+  })
+})
+
+describe('the menu shows and inserts the same text', () => {
+  it('carries no insertText override, so the name is what gets typed', () => {
+    const option = skillToSlashCommand({ name: 'plan only', commandName: 'plan-only', description: 'x' })
+    // The substitution used to live here, which meant the composer produced text
+    // the user never saw and could not predict.
+    expect(option.insertText).toBeUndefined()
+    expect(slashCommandInsertText(option)).toBe('/plan-only ')
+  })
+
+  it('and that text is exactly what the store then rewrites', () => {
+    const option = skillToSlashCommand({ name: 'plan only', commandName: 'plan-only', description: 'x' })
+    const typed = slashCommandInsertText(option)
+    expect(rewriteSkillSlashCommand(typed, new Set(['plan-only']))).toBe('/skill plan-only')
+  })
+})
+
+describe('the composer reports loaded skills to the store', () => {
+  it('registers the command names after a successful load', () => {
+    const source = readFileSync('packages/client/src/components/hermes/chat/ChatInput.vue', 'utf8')
+    expect(source).toContain('setKnownSkillCommandNames(')
+  })
+
+  it('and the store uses them when deciding what goes on the wire', () => {
+    const source = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
+    expect(source).toContain('rewriteSkillSlashCommand(content.trim(), knownSkillCommandNames.value)')
   })
 })

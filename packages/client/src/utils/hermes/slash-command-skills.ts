@@ -26,9 +26,9 @@ export function skillCommandName(name: string): string {
 /**
  * Turn one skill into a menu entry.
  *
- * The menu searches on `commandName` but inserts `/skill <commandName>`. A bare
- * "/plan-only" is not a known bridge command, so the store would send it as an
- * ordinary user message and the Agent would never load the skill.
+ * The menu shows and inserts `/commandName` alike. A bare "/plan-only" is not a
+ * known bridge command, so `rewriteSkillSlashCommand` in the store turns it into
+ * "/skill plan-only" before the Agent sees it.
  */
 export function skillToSlashCommand(skill: { name: string; commandName: string; description: string }): SlashCommandOption {
   return {
@@ -36,7 +36,10 @@ export function skillToSlashCommand(skill: { name: string; commandName: string; 
     name: skill.commandName,
     args: '',
     description: skill.description,
-    insertText: `skill ${skill.commandName}`,
+    // No insertText override: the menu inserts `/plan-only`, the same shape it
+    // displays and the same shape every built-in uses. The rewrite to
+    // `/skill plan-only` happens in the store, at the point that decides what
+    // goes on the wire, so hand-typing the command works identically.
     skill: true,
   }
 }
@@ -117,4 +120,46 @@ export function toSkillPickerItems(categories: unknown): SkillPickerEntry[] {
     })
   }
   return entries
+}
+
+/**
+ * Rewrites a bare skill invocation into the form the Agent resolves.
+ *
+ * The menu shows `/plan-only` and must insert exactly that -- what you see is
+ * what you type, the same contract every built-in command already honours. But
+ * a bare `/plan-only` is not a known bridge command, so `isKnownBridgeSessionCommand`
+ * rejects it and the store would send it as an ordinary user message. The Agent
+ * would receive the text and never load the skill.
+ *
+ * So the substitution lives here, at the one place that decides what actually
+ * goes on the wire, instead of inside the menu item that the user never sees
+ * the inside of. Two things follow:
+ *
+ *   - typing `/plan-only` by hand works, not only selecting it from the menu
+ *   - there is exactly one rule to change if the Agent's skill syntax ever moves
+ *
+ * Returns the original input when it is not a skill invocation, when the skill
+ * name is unknown, or when it already uses the `/skill` form.
+ */
+export function rewriteSkillSlashCommand(
+  input: string,
+  knownSkillNames: Iterable<string>,
+): string {
+  const known = knownSkillNames instanceof Set
+    ? knownSkillNames
+    : new Set(knownSkillNames)
+  const trimmed = (input ?? '').trim()
+  if (!trimmed.startsWith('/')) return input
+  // Already the executable form, or a built-in that happens to be named like a
+  // skill (`/skill`, `/plan`, ...) -- leave both alone.
+  if (/^\/skill(?:\s|$)/i.test(trimmed)) return input
+
+  const match = /^\/([^\s]+)([\s\S]*)$/.exec(trimmed)
+  if (!match) return input
+  const token = match[1]
+  const rest = match[2] ?? ''
+  // A bare `/` or a name with no usable token cannot be a skill.
+  if (!token) return input
+  if (!known.has(token)) return input
+  return `/skill ${token}${rest}`
 }

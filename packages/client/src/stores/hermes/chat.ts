@@ -18,6 +18,7 @@ import { primeCompletionSound, playCompletionSound } from '@/utils/completion-so
 import { showCompletionNotification } from '@/utils/completion-notification'
 import { detectThinkingBoundary } from '@/utils/thinking-parser'
 import { isKnownBridgeSessionCommand } from '@/utils/hermes/bridge-session-commands'
+import { rewriteSkillSlashCommand, skillCommandName } from '@/utils/hermes/slash-command-skills'
 import { responseErrorMessage } from '@/utils/http-error'
 import { errorMessage } from '@/utils/format'
 import {
@@ -1861,6 +1862,18 @@ export const useChatStore = defineStore('chat', () => {
 
   // Compression state is scoped per session because sockets can stay joined to
   // background sessions while another chat is active.
+  /**
+   * Command names of the skills loaded for this session, used to decide whether a
+   * bare `/name` is a skill invocation before the Agent sees it. Populated by the
+   * composer's skills fetch; a miss here means the text goes through as prose,
+   * which is exactly the failure this exists to prevent.
+   */
+  const knownSkillCommandNames = ref<Set<string>>(new Set())
+  function setKnownSkillCommandNames(sessionId: string | null | undefined, names: string[]) {
+    if (!sessionId) return
+    knownSkillCommandNames.value = new Set(names.map(name => skillCommandName(name)).filter(Boolean))
+  }
+
   const compressionStates = ref<Map<string, CompressionState>>(new Map())
   const compressionState = computed<CompressionState | null>(() => {
     const sid = activeSessionId.value
@@ -4481,7 +4494,13 @@ export const useChatStore = defineStore('chat', () => {
 
     primeNotificationSoundIfEnabled()
 
-    const trimmedContent = content.trim()
+    // The composer inserts `/plan-only` for a custom skill: what the menu shows
+    // is what gets typed. That bare form is not a known bridge command, so it
+    // would be sent as an ordinary user message and the Agent would receive the
+    // text without ever loading the skill. Rewrite it here, at the one place that
+    // decides what goes on the wire, so hand-typing behaves the same as selecting
+    // from the menu.
+    const trimmedContent = rewriteSkillSlashCommand(content.trim(), knownSkillCommandNames.value)
 
     if (!activeSession.value) {
       const session = createSession()
@@ -6434,6 +6453,7 @@ export const useChatStore = defineStore('chat', () => {
     validateSessionProfileFilter,
     setHermesSessionProfileFilter,
     compressionState,
+    setKnownSkillCommandNames,
     abortState,
     isAborting,
     queueLengths,
