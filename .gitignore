@@ -64,3 +64,9 @@ packages/client/src/**/*.js
 
 # local build backups created by the release build
 dist.bak.*
+
+# tsc accidentally run without --outDir leaked CommonJS output into the source
+# tree; 86 sibling .js files shadowed the .ts sources and would be picked up by
+# any build that resolves .js before .ts. The package builds to dist/ via
+# tsconfig.build.json, so nothing under src/ should be JavaScript.
+packages/ekko-agent/src/**/*.js

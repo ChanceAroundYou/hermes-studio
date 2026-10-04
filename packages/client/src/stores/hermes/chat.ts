@@ -2521,6 +2521,16 @@ export const useChatStore = defineStore('chat', () => {
   const WORKING_SNAPSHOT_FRESHNESS_MS = 15_000
 
   /**
+   * How long a silent delegation still counts as local evidence of a live run.
+   *
+   * A safety net for a client that received nothing at all; the precise path is
+   * the snapshot reconciliation in applyWorkingSessionsSnapshot. Generous,
+   * because a delegation running one long tool call emits nothing for a while
+   * and clearing early would show the session as idle while it still works.
+   */
+  const SUBAGENT_EVIDENCE_FRESHNESS_MS = 120_000
+
+  /**
    * Whether this client has evidence that `sessionId` is running right now,
    * which a lagging snapshot must not talk it out of: an attached stream, a
    * live subagent delegation, or a start observed so recently that the
@@ -2529,7 +2539,14 @@ export const useChatStore = defineStore('chat', () => {
   function hasLocalRunEvidence(sessionId: string, now: number): boolean {
     if (streamStates.value.has(sessionId)) return true
     for (const subagent of subagentStreams.value.values()) {
-      if (subagent.sessionId === sessionId && subagent.status === 'running') return true
+      if (subagent.sessionId !== sessionId || subagent.status !== 'running') continue
+      // A delegation that is still alive keeps advancing `updatedAt`. Requiring
+      // recent activity bounds this veto the same way the run-start evidence
+      // below is bounded, so a leaked stream cannot outlive the snapshot. Every
+      // other source here is bounded, and this one was not: a `subagent.complete`
+      // that never reached a background session kept the sidebar ring spinning
+      // until the user opened the conversation and triggered a resume.
+      if (now - subagent.updatedAt < SUBAGENT_EVIDENCE_FRESHNESS_MS) return true
     }
     const startedAt = runStartedAt.value.get(sessionId) || 0
     return startedAt > 0 && now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS
@@ -2554,6 +2571,25 @@ export const useChatStore = defineStore('chat', () => {
       // at face value instead of being inferred from membership. A session the
       // server still reports as `finishing` must keep that state rather than
       // being cleared as unknown.
+      // A delegation runs outside `isWorking`, so the server reports
+      // `background_pending` per session and includes sessions that have live
+      // delegations but no foreground run. This is the authority the client
+      // lacked. Settle those streams first: hasLocalRunEvidence below consults
+      // them, so reconciling later would deadlock against itself and the ring
+      // would never stop.
+      const backgroundPending = new Map<string, number>()
+      for (const entry of snapshot) {
+        backgroundPending.set(String(entry.session_id), Number(entry.background_pending) || 0)
+      }
+      const finishedBySnapshot = new Set<string>()
+      for (const stream of [...subagentStreams.value.values()]) {
+        if (stream.status !== 'running') continue
+        if (live.has(stream.sessionId)) continue
+        if ((backgroundPending.get(stream.sessionId) || 0) > 0) continue
+        settleInterruptedSubagents(stream.sessionId)
+        finishedBySnapshot.add(stream.sessionId)
+      }
+
       const nextRunStates = new Map<string, RunState>()
       for (const entry of snapshot) {
         const state = entry.run_state ?? 'running'
@@ -2572,7 +2608,16 @@ export const useChatStore = defineStore('chat', () => {
       // Only relax flags for sessions this client has not observed a terminal
       // event for since the snapshot may lag behind a just-finished run.
       for (const id of authoritativeRemove) serverWorking.value.delete(id)
+      // The terminal event for a session this client is not attached to never
+      // arrives, so the poll is the only place that can learn it finished. It
+      // used to be silent about it, which is why a finished run looked identical
+      // to a stuck one. Report it once per session.
+      for (const id of new Set([...authoritativeRemove, ...finishedBySnapshot])) {
+        notifySessionFinishedBySnapshot(id)
+      }
       for (const entry of snapshot) {
+        // Live again, so the next finished run is allowed to report itself.
+        snapshotFinishNotified.delete(String(entry.session_id))
         if (serverWorking.value.has(entry.session_id)) continue
         serverWorking.value.add(entry.session_id)
         if (Number(entry.run_started_at) > 0) setRunStartedAt(entry.session_id, Number(entry.run_started_at))
@@ -4390,6 +4435,31 @@ export const useChatStore = defineStore('chat', () => {
   function completionNotificationBody(session: Session, message?: Message): string {
     const preview = message?.content || session.title || 'Message complete.'
     return truncateNotificationText(preview, 140)
+  }
+
+  /**
+   * Sessions this client already reported as finished via the snapshot, so a
+   * long-running leak cannot notify on every poll.
+   */
+  const snapshotFinishNotified = new Set<string>()
+
+  /**
+   * Announce a run that finished without this client ever seeing its terminal
+   * event.
+   *
+   * `run.completed` already notifies when it arrives; this covers the sessions
+   * it never arrives for, which is why finishing used to be indistinguishable
+   * from being stuck. Gated by the same notify_on_complete setting, and silent
+   * for a session that never ran.
+   */
+  function notifySessionFinishedBySnapshot(sessionId: string) {
+    const sid = String(sessionId || '').trim()
+    if (!sid) return
+    if (snapshotFinishNotified.has(sid)) return
+    snapshotFinishNotified.add(sid)
+    if (!sessions.value.some(session => session.id === sid)) return
+    if (sid === activeSessionId.value) return
+    showCompletionNotificationIfEnabled(sid)
   }
 
   function showCompletionNotificationIfEnabled(sessionId: string, messageId?: string | null) {

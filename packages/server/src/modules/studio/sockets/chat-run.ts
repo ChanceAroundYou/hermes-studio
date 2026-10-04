@@ -459,6 +459,7 @@ export class ChatRunSocket {
     source?: string
     compression?: SessionState['compression']
     runState: NonNullable<SessionState['runState']>
+    backgroundPending: number
   }> {
     const now = Date.now()
     const list: Array<{
@@ -467,6 +468,7 @@ export class ChatRunSocket {
       source?: string
       compression?: SessionState['compression']
       runState: NonNullable<SessionState['runState']>
+      backgroundPending: number
     }> = []
     for (const [sid, state] of this.sessionMap) {
       // A finalizing run is no longer `isWorking` — it emits no messages and
@@ -474,7 +476,12 @@ export class ChatRunSocket {
       // "busy wrapping up", so it is reported with an explicit state instead of
       // being dropped from the snapshot.
       const runState = state.runState
-      if (!state.isWorking && runState !== 'finishing') continue
+      // A background delegation is not `isWorking`, so a session running only a
+      // delegation used to be missing entirely. The client then had no way to
+      // settle a subagent stream whose `subagent.complete` it never received,
+      // and the sidebar ring spun until the user opened the session.
+      const backgroundPending = this.backgroundPendingCount(state)
+      if (!state.isWorking && runState !== 'finishing' && backgroundPending === 0) continue
       const startedAt = Number(state.runStartedAt) || 0
       // The compression snapshot rides along so the periodic poll can heal a
       // client that missed `compression.completed`, not just the run flags.
@@ -484,6 +491,7 @@ export class ChatRunSocket {
         source: state.source,
         compression: state.compression ?? null,
         runState: runState ?? 'running',
+        backgroundPending,
       })
     }
     return list

@@ -79,6 +79,7 @@ export async function workingSessions(ctx: Context) {
         source?: string
         compression?: unknown
         runState?: 'idle' | 'running' | 'finishing' | 'background'
+        backgroundPending?: number
       }>)
     : []
   ctx.body = { sessions: sessions.map(session => ({
@@ -90,6 +91,9 @@ export async function workingSessions(ctx: Context) {
     // so the client can avoid showing them as busy while still knowing they
     // are not simply idle.
     run_state: session.runState || 'running',
+    // Lets the client settle a delegation stream it missed the end of instead of
+    // guessing with a timer, which either stalled the ring or cleared it early.
+    background_pending: Number(session.backgroundPending) || 0,
   })) }
 }
 

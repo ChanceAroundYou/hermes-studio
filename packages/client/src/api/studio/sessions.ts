@@ -318,6 +318,14 @@ export interface WorkingSessionSnapshot {
    */
   run_state?: RunState
   /**
+   * Live background delegations the server still holds for this session.
+   *
+   * Without it the client cannot tell "this delegation is over" from "the
+   * snapshot did not mention it", and a missed `subagent.complete` kept the
+   * session reading as busy forever.
+   */
+  background_pending?: number
+  /**
    * Authoritative compression snapshot for the live run. Riding on the periodic
    * poll is what lets a client that missed `compression.completed` heal itself.
    */
