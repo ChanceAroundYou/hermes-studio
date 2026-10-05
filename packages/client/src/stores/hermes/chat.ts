@@ -899,6 +899,45 @@ export function isBridgeFailureText(raw: unknown): boolean {
   return BRIDGE_FAILURE_PATTERNS.some(pattern => pattern.test(text))
 }
 
+/**
+ * The agent's turn-lease notices: "another process holds this session".
+ *
+ * These need their own list because the agent gives them no distinguishing
+ * structure. Its status callback carries a `kind`, but the lease wait and a
+ * compression both arrive as `lifecycle`, so the kind cannot separate "your turn
+ * has not started" from "your turn is running and doing maintenance".
+ *
+ * They are not ordinary progress, though: nothing is happening yet and the
+ * reader is waiting on someone else, so they keep the error treatment rather
+ * than the neutral notice card. Narrow machine signatures only -- the hourglass
+ * the agent prefixes these with, and the two phrasings it uses -- so this cannot
+ * match a reply.
+ */
+const BRIDGE_BLOCKED_PATTERNS: RegExp[] = [
+  // The agent prefixes this whole family with an hourglass, and this is the
+  // only place that glyph is used as a marker. Deliberately the whole pattern:
+  // a first version also matched the phrase "waiting for it to finish", which
+  // is exactly the mistake this fork already made once -- it repainted the
+  // ordinary reply "I was waiting for it to finish, then the parser looked
+  // correct" as a blocked session.
+  /^\s*\u23f3/,
+]
+
+export function isBridgeBlockedText(raw: unknown): boolean {
+  const text = String(raw || '').trim()
+  if (!text) return false
+  return BRIDGE_BLOCKED_PATTERNS.some(pattern => pattern.test(text))
+}
+
+/**
+ * The status kind the agent tags a message with: `lifecycle` for ordinary
+ * progress, `warn` for a degraded path the reader must know about. Only `warn`
+ * is treated as a problem.
+ */
+export function isWarningStatusKind(raw: unknown): boolean {
+  return String(raw || '').trim().toLowerCase() === 'warn'
+}
+
 function hasAssistantVisibleText(message: Message | null | undefined): boolean {
   if (!message) return false
   return message.content.trim() !== '' || (message.reasoning?.trim() ?? '') !== ''
@@ -4103,12 +4142,16 @@ export const useChatStore = defineStore('chat', () => {
     const text = String((evt as any).text || (evt as any).message || rawError || '').trim()
     if (!text) return
     // Some bridge failures arrive as status *text* rather than an `error` field,
-    // e.g. "Non-retryable error (HTTP 502): ...". Those must not fall through
-    // to the neutral amber system bubble and then be re-rendered red once the
-    // server persists the same failure, which made one run look like two
-    // differently-styled errors. Only unambiguous machine-generated signatures
-    // count; none of them can occur in a normal reply.
-    if ((evt as any).event === 'run.reattach_failed' || isErrorEvent || isBridgeFailureText(text)) {
+    // e.g. "Non-retryable error (HTTP 502): ...". Those must not fall through to
+    // the notice bubble and then be re-rendered red once the server persists the
+    // same failure, which made one run look like two differently-styled errors.
+    // Only unambiguous machine-generated signatures count; none of them can
+    // occur in a normal reply.
+    //
+    // The lease notices are routed with them, and `kind === 'warn'` with those:
+    // what falls past this point is progress, and progress is not a problem.
+    if ((evt as any).event === 'run.reattach_failed' || isErrorEvent || isBridgeFailureText(text)
+      || isBridgeBlockedText(text) || isWarningStatusKind((evt as any).kind)) {
       addAgentErrorMessage(sid, text)
       return
     }

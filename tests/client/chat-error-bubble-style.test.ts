@@ -23,11 +23,13 @@ describe('error bubble styling is unified', () => {
     expect(body).not.toContain('.content')
     // Command failures are errors too, so they share the one red treatment.
     expect(item).toContain('if (message.role === "command") return isCommandError.value;')
-    // Every notice wears the one bubble too. The third treatment -- an amber,
-    // left-striped system bubble -- was described as retired in a comment while
-    // the class was still applied, so an agent notice ("waiting for another
-    // process holding this session") rendered in a style nothing else used.
-    expect(item).toContain("'agent-error': isAgentError || isSystemNotice,")
+    // Two shapes, and only two. The third treatment -- an amber, left-striped
+    // system bubble -- was described as retired in a comment while the class was
+    // still applied, so an agent notice rendered in a style nothing else used.
+    expect(item).toContain("'agent-error': isAgentError,")
+    expect(item).toContain('notice: isSystemNotice,')
+    // Progress is not a problem, so it must not be painted as one.
+    expect(item).not.toContain("'agent-error': isAgentError || isSystemNotice,")
     // A system row with no `systemType` is a notice; anything with one is a
     // structured entry and keeps its own treatment.
     const noticeStart = item.indexOf('const isSystemNotice = computed')
@@ -46,6 +48,25 @@ describe('error bubble styling is unified', () => {
     // The row keeps a `system` class for layout (align-items), which is fine and
     // is not a colour; the bubble no longer receives one.
     expect(item).not.toMatch(/&\.system \{[^}]*background-color/)
+  })
+
+  it('routes the blocked family and the warn kind to the error row', () => {
+    const store = readClientFile('stores/hermes/chat.ts')
+
+    // The agent gives the lease notices no distinguishing structure: its status
+    // callback carries a `kind`, but a lease wait and a compression are both
+    // `lifecycle`. So "your turn has not started" is separated from "your turn
+    // is running" by narrow machine signatures, the same shape of list the
+    // failure classifier already uses.
+    expect(store).toContain('const BRIDGE_BLOCKED_PATTERNS: RegExp[] = [')
+    const blocked = store.slice(store.indexOf('const BRIDGE_BLOCKED_PATTERNS'))
+    expect(blocked.slice(0, 900)).toContain('/^\\s*\\u23f3/')
+
+    // Only `warn` is a problem; `lifecycle` is progress.
+    expect(store).toContain('export function isWarningStatusKind')
+    expect(store).toContain("isWarningStatusKind((evt as any).kind)")
+    // All three reach the one error row.
+    expect(store).toContain("|| isBridgeBlockedText(text) || isWarningStatusKind((evt as any).kind)) {")
   })
 
   it('routes a bridge failure carried as status text to the one error bubble', () => {

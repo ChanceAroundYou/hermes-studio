@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { isBridgeFailureText } from '@/stores/hermes/chat'
+import { isBridgeBlockedText, isBridgeFailureText, isWarningStatusKind } from '@/stores/hermes/chat'
 
 /**
  * One real failure used to render twice in two styles. The bridge streamed
@@ -69,5 +69,52 @@ describe('bridge failure text detection', () => {
     ]) {
       expect(isBridgeFailureText(text), JSON.stringify(text)).toBe(false)
     }
+  })
+})
+
+/**
+ * The agent's mid-run commentary splits in two, and the split cannot come from
+ * the agent: its status callback carries a \`kind\`, but a lease wait and a
+ * compression are both \`lifecycle\`. So the blocking family is recognised by
+ * narrow machine signatures, and everything else is progress.
+ *
+ * Getting this wrong in either direction is visible: marking progress red cries
+ * wolf, and letting a real block look like progress hides the one line the
+ * reader has to act on.
+ */
+describe('blocked-versus-progress classification', () => {
+  it('recognises both lease phrasings the agent emits', () => {
+    expect(isBridgeBlockedText(
+      '⏳ Another Hermes process is using this session; waiting for it to finish before starting your turn...',
+    )).toBe(true)
+    expect(isBridgeBlockedText(
+      '⏳ Still waiting for the other Hermes process on this session (12s)...',
+    )).toBe(true)
+  })
+
+  it('does not mistake progress or prose for a block', () => {
+    for (const text of [
+      '📦 Preflight compression: ~120,000 tokens >= 100,000 threshold. This may take a moment.',
+      '🗜️ Compacting context — summarizing earlier conversation so I can continue...',
+      '💤 Resumed after 3600s idle — compacting ~120,000 tokens before continuing.',
+      '🧠 Memory — recalled 3 memories',
+      'Session is free; loading the latest transcript...',
+      // Ordinary replies. A text classifier inside the render path once painted
+      // exactly this kind of prose red, which is why these are here.
+      'I was waiting for it to finish, then the parser looked correct.',
+      'Another Hermes process is documented in the README.',
+      '',
+    ]) {
+      expect(isBridgeBlockedText(text)).toBe(false)
+    }
+  })
+
+  it('treats only `warn` as a problem, since `lifecycle` is the progress kind', () => {
+    expect(isWarningStatusKind('warn')).toBe(true)
+    expect(isWarningStatusKind('WARN')).toBe(true)
+    expect(isWarningStatusKind('lifecycle')).toBe(false)
+    expect(isWarningStatusKind('compacted')).toBe(false)
+    expect(isWarningStatusKind(undefined)).toBe(false)
+    expect(isWarningStatusKind(null)).toBe(false)
   })
 })

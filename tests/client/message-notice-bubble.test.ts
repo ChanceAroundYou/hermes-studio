@@ -92,18 +92,35 @@ function mountMessage(message: Partial<Message>) {
   })
 }
 
-describe('a notice wears the same bubble as a failure', () => {
-  it('gives an agent notice the error bubble rather than a third style', () => {
-    // The reported case, verbatim.
+describe('two shapes for what the agent says mid-run', () => {
+  it('gives progress the neutral card, not the error colour', () => {
+    // The agent narrating its own maintenance. Nothing is wrong and nothing is
+    // asked of the reader, so this must not look like a failure.
     const wrapper = mountMessage({
       role: 'system',
-      content: '⏳ Another Hermes process is using this session; waiting for it to finish before starting your turn...',
+      content: '📦 Preflight compression: ~120,000 tokens >= 100,000 threshold. This may take a moment.',
       commandAction: 'agent.event',
     })
     const bubble = wrapper.find('.message-bubble')
     expect(bubble.exists()).toBe(true)
-    expect(bubble.classes()).toContain('agent-error')
+    expect(bubble.classes()).toContain('notice')
+    expect(bubble.classes()).not.toContain('agent-error')
+    // And the third style is gone for good.
     expect(bubble.classes()).not.toContain('system')
+  })
+
+  it('gives a blocked wait the error bubble', () => {
+    // The reported case, verbatim. The store routes it to the error row, so it
+    // arrives here tagged -- waiting on another process is something the reader
+    // has to act on, not progress.
+    const wrapper = mountMessage({
+      role: 'system',
+      content: '⏳ Another Hermes process is using this session; waiting for it to finish before starting your turn...',
+      systemType: 'error',
+    })
+    const bubble = wrapper.find('.message-bubble')
+    expect(bubble.classes()).toContain('agent-error')
+    expect(bubble.classes()).not.toContain('notice')
   })
 
   it('gives a system error the same bubble', () => {

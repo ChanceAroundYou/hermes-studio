@@ -110,19 +110,20 @@ const isAgentError = computed(() => {
   return message.systemType === "error";
 });
 
-// A system row with no `systemType` is a notice the agent sent mid-run -- the
-// "waiting for another process holding this session" line and its relatives.
+// A system row with no `systemType` is the agent's running commentary: what it
+// is compacting, what it recalled, that it got the session back. It resolves on
+// its own and needs no action, so it takes the neutral card.
 //
-// It is not an error in the formal sense, but it is the same kind of thing to
-// read: something has gone wrong with this turn and you have to act on it. It
-// used to render in a third style, an amber left-striped bubble, which is what
-// this fork set out to retire and never actually did -- the class was still
-// applied here.
+// It used to render in a third style, an amber left-striped bubble, which this
+// fork set out to retire and never actually did -- the class was still applied
+// here.
 //
 // Stated as "no systemType" rather than by listing the structured ones, so a new
-// structural entry cannot silently inherit the error colour: `fork-divider`,
+// structural entry cannot silently inherit this treatment: `fork-divider`,
 // `tool-run`, `compression` and `command` all carry a type, and `error` is
-// already handled above.
+// already handled above. The lease notices never reach here: the store routes
+// them to the error row, because waiting on another process is something the
+// reader has to act on.
 const isSystemNotice = computed(() =>
   isSystem.value
   && props.message.systemType === undefined
@@ -1096,11 +1097,12 @@ onBeforeUnmount(() => {
           <div
             class="message-bubble"
             :class="{
-              // One bubble for anything the reader has to act on: a failure, and
-              // the agent's own notices. The third treatment this used to reach
-              // for -- amber, left-striped -- is gone from the stylesheet, so
-              // there is no longer a style to opt out of.
-              'agent-error': isAgentError || isSystemNotice,
+              // Two shapes, and only two: anything the reader has to act on is
+              // the error bubble, and the agent's running commentary is the
+              // neutral card. The third treatment this used to reach for --
+              // amber, left-striped -- is gone from the stylesheet.
+              'agent-error': isAgentError,
+              notice: isSystemNotice,
               compression: !!props.message.compression,
               command: isCommandMessage,
               'command-error': isCommandError,
@@ -1587,10 +1589,14 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
 
   &.command,
-  // One style for every compression state. Sharing `.command` deliberately:
-  // this fork retired the amber system bubble, and a third treatment here would
-  // reintroduce exactly the drift that retirement was meant to end.
-  &.compression {
+  // One style for every compression state, and for the agent's progress notices.
+  // Sharing `.command` deliberately: this fork retired the amber system bubble,
+  // and a third treatment here would reintroduce exactly the drift that
+  // retirement was meant to end. A notice is a settled fact too -- it reports
+  // something the run is doing and resolves on its own -- so it belongs here
+  // rather than in the error colour.
+  &.compression,
+  &.notice {
     border-inline-start: none;
     border: 1px solid rgba(var(--accent-primary-rgb), 0.12);
     background-color: rgba(var(--accent-primary-rgb), 0.04);

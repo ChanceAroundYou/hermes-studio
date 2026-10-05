@@ -285,6 +285,32 @@ MessageItem 的样式中写着：
 - 类名有双重身份时要分清：行上的 `system` 来自 `role`，是**布局**（`align-items`）；
   气泡上的 `system` 才是颜色。删颜色时不要连布局一起删。
 
+### 5.10 上游不给信号时，「按文本分类」必须先过反例
+
+agent 的中途状态有两大类：
+
+- **阻塞**：`⏳ Another Hermes process is using this session; waiting ...`
+- **进度**：`📦 Preflight compression: ...` / `🧠 recalled 3 memories`
+
+agent 的 `status_callback` **带 `kind`**（`lifecycle` / `warn`），而且它确实传到了前端
+（`bridge_pool.py:1227` 构造 `{event:'status', kind, text}`）。但**阻塞和进度都是
+`lifecycle`** —— 结构信号分不开这两类。
+
+我第一版补了短语匹配 `/waiting for it to finish/i`，反例立刻抓到我：
+
+    普通回复 "I was waiting for it to finish, then the parser looked correct"
+    → 被误判为「会话被阻塞」
+
+**这正是本仓库已经犯过一次的错**（`MessageItem` 里那条「按文本猜，把
+'Error handling in the parser looks correct' 涂红」的注释）。
+
+**判据：任何按文本分类的规则，必须同时写「必须匹配」和「必须不匹配」两组用例，
+反例要包含「把关键词放在自然句子里」。** 只写正例的文本分类等于没测。
+
+最终只保留 `/^\s*⏳/` —— **锚定在开头的机器前缀**，因为 agent 给这一族全都加了
+同一个字形。代价要如实说：上游若换掉这个字形，这族会降级成灰色（而不是报错），
+是软退化不是崩溃。
+
 ### 6. 断言必须落在「使用点」，不是「声明点」
 
 合并清单里最容易写出空壳断言的方式，是断言一个常量或方法**被声明**，而不是**被使用**。
