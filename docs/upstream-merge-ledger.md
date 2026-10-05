@@ -70,6 +70,11 @@
 | markSessionIdle 清全部字段 | chat.ts | 保留；漏掉 phase 会让 reconcile 之后环仍亮 |
 | 存活判定不设客户端时钟 | chat.ts | 保留；`run_started_at` 是开始时间，任何年龄界限都会误杀更长的 run |
 | 轮询守卫含已附加的流 | chat.ts | 保留；漏掉流会让无 phase 的残留流永不清理 |
+| 轮询守卫不以「已知在跑」为前提 | chat.ts | 保留；门槛引用被查状态本身时只能确认不能发现，CLI/其它设备启动的 run 要等 12s 慢轮询才亮环 |
+| coding-agent 会话也乐观点亮 | chat.ts | 保留；上游把 coding-agent 排除在乐观点亮外，而那正是用户刚启动 run 的路径 |
+| 状态行只有两种形状 | MessageItem.vue | 保留；琥珀左条已从样式表删除，复活它会再出现「全应用只有这一处在用」的第三种样子 |
+| 阻塞/warn 归入错误行，进度归入中性卡 | chat.ts | 保留；agent 对这两类都发 `kind='lifecycle'`，合并会让「正在压缩，稍候」看起来像故障 |
+| 阻塞族用锚定字形识别 | chat.ts | 保留；短语特征的宽版本已把普通回复误判为阻塞，参考 5.10 |
 
 ## 有意移除的上游功能（cherry-pick 时勿带回）
 
@@ -94,5 +99,16 @@ server 20 条。`coding-agents-launch`(4) 与 `group-chat-member-sync`(1) 已修
 - `agent-bridge-python-concurrency`(2)：Python bridge 并发，需真实 bridge 环境
 - `hermes-web-ui-mcp`(2)、`profiles-routes`(2)、`sessions-routes`(14)：模块级 mock 边界
 
-client 全绿（289 文件 / 1983 用例）。
+client 8 条失败 / 2 个文件，**均为预存**，与本轮无关：
+
+```
+tests/client/chat-input-slash-menu.test.ts
+tests/client/compression-transcript-entry.test.ts
+→ TypeError: readFileSync is not a function
+```
+
+成因：`// @vitest-environment jsdom` 与 `import { readFileSync } from 'node:fs'` 同文件冲突。
+**新写的源码扫描测试不得加 jsdom 指令**（`session-run-single-writer.test.ts` 因此拆成无 DOM 的纯源码扫描）。
+
+判断回归必须比对「失败名集合」，且先去掉尾部的 `123ms` 时间戳 —— **不能比计数**。
 
