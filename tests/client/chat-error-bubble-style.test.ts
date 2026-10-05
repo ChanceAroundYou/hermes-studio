@@ -23,16 +23,29 @@ describe('error bubble styling is unified', () => {
     expect(body).not.toContain('.content')
     // Command failures are errors too, so they share the one red treatment.
     expect(item).toContain('if (message.role === "command") return isCommandError.value;')
-    // The neutral warning-striped system bubble must not also render an error.
-    // Expressed as a rule rather than the literal expression: the system class is
-    // now also excluded for compression entries, which are settled facts rather
-    // than notices, and pinning the exact string made that legitimate narrowing
-    // look like a regression.
-    const systemClassStart = item.indexOf('system: isSystem')
-    expect(systemClassStart).toBeGreaterThan(-1)
-    const systemClass = item.slice(systemClassStart, item.indexOf('\n', systemClassStart))
-    expect(systemClass).toContain('!isAgentError')
-    expect(systemClass).toContain('!props.message.compression')
+    // Every notice wears the one bubble too. The third treatment -- an amber,
+    // left-striped system bubble -- was described as retired in a comment while
+    // the class was still applied, so an agent notice ("waiting for another
+    // process holding this session") rendered in a style nothing else used.
+    expect(item).toContain("'agent-error': isAgentError || isSystemNotice,")
+    // A system row with no `systemType` is a notice; anything with one is a
+    // structured entry and keeps its own treatment.
+    const noticeStart = item.indexOf('const isSystemNotice = computed')
+    expect(noticeStart).toBeGreaterThan(-1)
+    const notice = item.slice(noticeStart, item.indexOf(');', noticeStart))
+    expect(notice).toContain('props.message.systemType === undefined')
+    expect(notice).toContain('!props.message.compression')
+  })
+
+  it('has no second notice colour left in the stylesheet', () => {
+    const item = readClientFile('components/hermes/chat/MessageItem.vue')
+    // The amber treatment is deleted, not merely unused: leaving the rule behind
+    // is how a style comes back the next time someone reaches for `system`.
+    expect(item).not.toContain('warning-rgb')
+    expect(item).not.toContain('$warning')
+    // The row keeps a `system` class for layout (align-items), which is fine and
+    // is not a colour; the bubble no longer receives one.
+    expect(item).not.toMatch(/&\.system \{[^}]*background-color/)
   })
 
   it('routes a bridge failure carried as status text to the one error bubble', () => {

@@ -264,6 +264,27 @@ run，只能等 12 秒的慢轮询，环比 run 晚亮十几秒。
 不是切在字符数上：字符数要么短到够不着被测代码，要么长到切进下一个函数 —— 两种
 错法方向相反，都会让守卫变成噪声。
 
+### 5.9 「已在注释里宣布退役」不等于已退役
+
+MessageItem 的样式中写着：
+
+    // this fork retired the amber system bubble, and a third treatment here would
+    // reintroduce exactly the drift that retirement was meant to end.
+
+而同一个文件里，`.message-bubble &.system { border-inline-start: 3px solid $warning }`
+**仍在生效**。结果是 agent 的通知（「⏳ Another Hermes process is using this session」）
+落到一套全应用只有它在用的样式里。
+
+**判据：退役一个样式，要搜的是它的「颜色/属性」而不是它的名字。** 注释会撒谎，
+类名会换个地方继续用；只有 `$warning` / `warning-rgb` 这类**取值**能证明它真的没了。
+
+配套：
+
+- 结构化的 `systemType` 用**白名单之外即通知**来判定（`systemType === undefined`），
+  而不是列出结构化类型 —— 否则**新增一个结构化类型会静默继承错误色**。
+- 类名有双重身份时要分清：行上的 `system` 来自 `role`，是**布局**（`align-items`）；
+  气泡上的 `system` 才是颜色。删颜色时不要连布局一起删。
+
 ### 6. 断言必须落在「使用点」，不是「声明点」
 
 合并清单里最容易写出空壳断言的方式，是断言一个常量或方法**被声明**，而不是**被使用**。

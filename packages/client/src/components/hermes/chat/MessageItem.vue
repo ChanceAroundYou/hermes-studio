@@ -110,6 +110,25 @@ const isAgentError = computed(() => {
   return message.systemType === "error";
 });
 
+// A system row with no `systemType` is a notice the agent sent mid-run -- the
+// "waiting for another process holding this session" line and its relatives.
+//
+// It is not an error in the formal sense, but it is the same kind of thing to
+// read: something has gone wrong with this turn and you have to act on it. It
+// used to render in a third style, an amber left-striped bubble, which is what
+// this fork set out to retire and never actually did -- the class was still
+// applied here.
+//
+// Stated as "no systemType" rather than by listing the structured ones, so a new
+// structural entry cannot silently inherit the error colour: `fork-divider`,
+// `tool-run`, `compression` and `command` all carry a type, and `error` is
+// already handled above.
+const isSystemNotice = computed(() =>
+  isSystem.value
+  && props.message.systemType === undefined
+  && !props.message.compression
+);
+
 const effectiveHeadingIdPrefix = computed(() => props.headingIdPrefix || `msg-${props.message.id}`);
 
 const commandResultContent = computed(() => {
@@ -1077,13 +1096,12 @@ onBeforeUnmount(() => {
           <div
             class="message-bubble"
             :class="{
-              // A compression is a settled fact, not a notice. role:'system' pulls
-              // in .message-bubble.system, the amber left-striped bubble this fork
-              // already retired, so it opts out and takes the rounded command
-              // treatment instead.
-              system: isSystem && !isAgentError && !props.message.compression,
+              // One bubble for anything the reader has to act on: a failure, and
+              // the agent's own notices. The third treatment this used to reach
+              // for -- amber, left-striped -- is gone from the stylesheet, so
+              // there is no longer a style to opt out of.
+              'agent-error': isAgentError || isSystemNotice,
               compression: !!props.message.compression,
-              'agent-error': isAgentError,
               command: isCommandMessage,
               'command-error': isCommandError,
               'speech-playing': isPlayingThisMessage && !isPausedThisMessage,
@@ -1567,13 +1585,6 @@ onBeforeUnmount(() => {
   min-width: 0;
   position: relative;
   box-sizing: border-box;
-
-  &.system {
-    border-inline-start: 3px solid $warning;
-    border-radius: $radius-sm;
-    max-width: 80%;
-    background-color: rgba(var(--warning-rgb), 0.06);
-  }
 
   &.command,
   // One style for every compression state. Sharing `.command` deliberately:
