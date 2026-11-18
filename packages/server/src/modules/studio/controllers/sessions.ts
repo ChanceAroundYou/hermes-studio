@@ -2389,8 +2389,12 @@ export async function getConversationMessagesPaginated(ctx: any) {
     limit: result.limit,
     hasMore: result.hasMore,
   }
-  // On-session-open reconciliation (non-blocking, debounced): ensure the
-  // webui mirror isn't stale for a live CLI/Feishu session.
+  // On-session-open reconciliation (non-blocking, debounced): the WebUI mirror
+  // holds an import-time snapshot of any session that also lives in the Hermes
+  // Agent state.db. Once the CLI, a cron job or Feishu keeps writing there, the
+  // mirror drifts and this page renders old messages with no error to explain
+  // it. Filling the gap is one-way and additive; a failure here must never fail
+  // the read the user asked for.
   try {
     const { SessionMessageSync } = await import('../services/session-message-sync')
     SessionMessageSync.getInstance().scheduleSessionSync(ctx.params.id)

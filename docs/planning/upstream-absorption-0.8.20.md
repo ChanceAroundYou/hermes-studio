@@ -153,8 +153,12 @@
 | ~~`sessionRuns` 单写者重构 + 3 秒快照轮询~~ | **已吸收**：32 个旧写入点全部改由 `patchSessionRun` 单写，`serverWorking`/`streamStates`/`backgroundPendingBySession`/`runStartedAt` 变成派生视图 | 已解锁 | `working-poll` 15/15、`sidebar-live-settle` 21/21、`session-list-activity-regression`、`compression-reconcile` 6/6 |
 | slash 自定义技能菜单 | `slash-command-skills.ts` 已恢复（168 行）但 `ChatInput.vue` **0 引用** | 10 个 | `chat-input-slash-menu` |
 | `chat.ts` 去重 / 历史 profile 过滤 / 直连拉取 / 系统错误行 | 5 组标识符 | 2 个 | `chat-store-compression-state` 2 |
-| 其余 63 个 fork 独有源文件 | `DevicesView`、`workspace-preferences`、`OAuthLoginShell`、`transcript-order`、`reasoning-effort-resolve` 等 | — | 当前 **0 处引用**，无实时断链 |
-| 9 种语言 locale | 各缺 270–343 行 | — | — |
+| ~~`chat.ts` 去重 / 历史 profile 过滤 / 直连拉取 / 错误行~~ | **部分吸收**：错误行已完成（`addSystemErrorMessage` + 三个 classifier + reattach 走错误行）；去重 / 历史过滤 / 直连拉取仍缺 | — | `chat-store-compression-state` 已 33/33，其余无测试覆盖 |
+| ~~`session-message-sync`（真实损失）~~ | **已吸收**：服务端拉取会话时按需对账 webui 镜像与 `state.db` | 已解锁 | 7/7 测试 · 3/3 变异 |
+| ~~`live-run-registry`~~ | **已吸收**：重启后 abort 仍能强杀孤儿子进程（整进程组），全部 spawn 点注册 | 已解锁 | 10/10 测试 · 3/3 变异 |
+| `sessionRuns` 之外的 3 组 `chat.ts` 功能 | `isDuplicateAssistantContent`、`historySessionProfileFilter`、`ensureSessionByDirectFetch` 全部 0 次出现 | — | 无测试覆盖 |
+| 40 个 fork 独有源文件 | 分四类：**不需要**（devices/lan，零调用）、**已被上游替代**（reasoning-effort / native-model / history-sources / WorkflowModelSelector）、**可选**（workspace-prefs / OAuth / codex / opencode）、**值得**（仅 `session-message-sync`、`live-run-registry`） | — | 当前无断链 |
+| 9 种语言 locale | 与 fork 比，en/zh 反而**多**127/125 行；ja/ko/fr/de/es 多 122、ru 多 181 | — | 无缺口（早先「缺 270–343 行」的判断已过期） |
 | E2E 4 个 spec | `pending-interaction-cross-session`、`clarify-option-touch-target`、`group-chat-room-deeplink`、`navigation-rail` | — | 本轮未复跑 |
 
 ### G. `sessionRuns` 单写者重构：实测结论（2026-11-09）
@@ -178,6 +182,74 @@
 
 **门禁**：`vite build` ✓、`vue-tsc -b --force` 0 错误、服务端 `tsc` 0 错误、治理集 **182/182**、
 客户端 **426/445**（余 19 = 7 个既有 `readFileSync` 缺陷 + 10 个 slash 菜单 + 2 个其余 `chat.ts` 分组）。
+
+---
+
+## 七、收尾轮：值得项补齐 + E2E（2026-11-09）
+
+### 补齐的两个「值得」项
+
+**1. `session-message-sync`（服务端镜像对账）**
+
+WebUI 对同时存在于 Hermes Agent `state.db` 的会话只保留导入时快照。CLI / 飞书 / cron 继续写入后镜像变得陈旧，
+页面显示旧消息且没有任何报错。服务在打开会话时按需对账（15s 防抖），另有 15 分钟周期扫描。
+
+三条不变量，各有测试：**只补不删**（无 DELETE、无 message 行 UPDATE）、**只写不来回**（从不回写 state.db）、
+**幂等**（`(session_id, role, content)` 计数式比对，不是存在性判断——存在性会永久吞掉第二次「继续」）。
+
+两处易错点由测试钉住：
+- **assistant 行**在 300s 窗口内折叠重复（Hermes 内核会写两遍同一条回复），**user 行永不折叠**
+  （重发同一句话是合法动作）。
+- **比较前归一空白**：state.db 里同一个消息可能只因尾随空白/多余换行而不同。
+
+**2. `live-run-registry`（孤儿子进程强杀）**
+
+内存中的 run 随服务进程死亡。重启后 `abort` 找不到运行，报「no active run」直接返回，**而 agent 仍在烧 token**。
+注册表把 pid 落到磁盘，按会话索引，并记录 ownerPid 以防跨进程误杀。
+
+接入点：
+- `spawnCodingAgentChild` 拆分出 `spawnCodingAgentChildProcess`，在工厂内统一注册（覆盖 pi RPC、两条主执行路径、nmem），
+  子进程 `exit` 时自动注销；
+- `abort.ts` 在「无内存状态」分支里先尝试强杀，成功则发 `abort.completed { reason: 'orphan_force_killed' }`
+  并返回，而不是报「ignored」；
+- 强杀先 `kill(-pid)` 再 `kill(pid)`：agent 会派生子 MCP 进程，只杀父进程会让会话看起来仍然忙。
+
+**不谎报成功**是这一项的核心：`findLiveRun` / `forceKillLiveRun` 都先做存活探测，pid 已死则丢弃记录并返回未杀。
+
+### E2E
+
+`tests/e2e/fixtures.ts`（1194 行）在基座迁移时丢失，从 `backup/local-2026-11-09` 取回后 E2E 才能运行。
+
+**7/7 通过，连跑两次稳定**：
+- `pending-interaction-cross-session`（6 个用例）
+- `clarify-option-touch-target`（4 个用例，其中 1 个曾失败）
+
+`clarify-option-touch-target` 的失败**不是产品缺陷**：诊断显示采样时 `.n-notification` 的 `right` 为负、
+容器 `x=-12`、入口 transition 未结束，因此 `elementFromPoint` 返回 null。断言改为等动画结束后轮询，
+同时保留「按钮尺寸大于 0」和「卡片在 `.n-notification` 内」两条几何约束。
+
+> `group-chat-room-deeplink` 与 `navigation-rail` 两个 spec 在 0.8.20 基座上**不存在**（上游重构），不是本轮遗漏。
+
+### 本轮门禁
+
+| 项 | 结果 |
+| --- | --- |
+| 客户端全量 | **450 / 450** |
+| 服务端全量（`--no-file-parallelism`） | **398 / 398**（42 文件） |
+| E2E | **7 / 7**，连跑两次 |
+| `npx vite build` | ✓ |
+| `vue-tsc -b --force` | 0 错误 |
+| 服务端 `tsc` | 0 错误 |
+| 变异测试 | **6 / 6 捕获** |
+
+变异里 `M4`（`forceKillLiveRun` 不校验进程存活）**起初存活**——原有测试只断言「已死的 pid 不报 killed」，
+却没有断言「它探测过」。补了 liveness 守卫后才被杀。这是本轮唯一一个假守卫。
+
+### 仍未处理（非阻塞）
+
+- `chat.ts` 三组：`isDuplicateAssistantContent`、`historySessionProfileFilter`、`ensureSessionByDirectFetch`，均无测试覆盖。
+- 40 个 fork 独有源文件中，12 个「不需要」（devices/lan，零调用）、8 个「已被上游替代」、11 个「可选」。
+- locale 无缺口（与 fork 比，各语言行数反而更多）。
 
 ### D. 既有缺陷（非本次吸收造成，不计入回归）
 

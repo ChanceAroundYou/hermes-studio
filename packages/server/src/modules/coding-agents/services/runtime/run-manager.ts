@@ -484,6 +484,31 @@ function spawnCodingAgentChild(command: string, args: string[], options: {
   cwd: string
   env: NodeJS.ProcessEnv
   pipeStdin?: boolean
+  /** Who this child belongs to, so a restarted server can still stop it. */
+  sessionId?: string
+  runId?: string
+  agentId?: string
+}): ChildProcess {
+  const child = spawnCodingAgentChildProcess(command, args, options)
+  // Recorded before the caller can lose the reference: the in-memory run dies
+  // with this process, and a child that kept working after a restart is exactly
+  // the failure this registry exists to fix.
+  if (child.pid && options.sessionId) {
+    registerLiveRun({
+      sessionId: options.sessionId,
+      runId: options.runId || '',
+      pid: child.pid,
+      agentId: options.agentId || '',
+    })
+    child.once('exit', () => unregisterLiveRun(options.sessionId!, options.runId))
+  }
+  return child
+}
+
+function spawnCodingAgentChildProcess(command: string, args: string[], options: {
+  cwd: string
+  env: NodeJS.ProcessEnv
+  pipeStdin?: boolean
 }): ChildProcess {
   const normalizedCommand = process.platform === 'win32' ? normalizeWindowsCommandPath(command) : command
   if (process.platform === 'win32' && windowsCommandNeedsShell(command)) {
@@ -1609,6 +1634,9 @@ export class CodingAgentRunManager {
         ? { ...process.env, ...(run.launch.env || {}) }
         : isolatedCodingAgentChildEnv(run.launch.env),
       pipeStdin: true,
+      sessionId: run.launch.sessionId,
+      runId: run.id,
+      agentId: run.launch.agentId,
     })
     run.currentChild = child
     run.currentChildStderr = ''
@@ -2103,6 +2131,9 @@ export class CodingAgentRunManager {
         ? { ...process.env, ...(run.launch.env || {}) }
         : isolatedCodingAgentChildEnv(run.launch.env),
       pipeStdin: true,
+      sessionId: run.launch.sessionId,
+      runId: run.id,
+      agentId: run.launch.agentId,
     })
     run.currentChild = child
 
@@ -3186,6 +3217,9 @@ export class CodingAgentRunManager {
         ? { ...process.env, ...(run.launch.env || {}) }
         : isolatedCodingAgentChildEnv(run.launch.env),
       pipeStdin: true,
+      sessionId: run.launch.sessionId,
+      runId: run.id,
+      agentId: run.launch.agentId,
     })
     run.currentChild = child
 
@@ -3803,6 +3837,9 @@ export class CodingAgentRunManager {
       child = spawnCodingAgentChild('nmem', args, {
         cwd: existsSync(run.launch.workspaceDir) ? run.launch.workspaceDir : homedir(),
         env,
+        sessionId: run.launch.sessionId,
+        runId: run.id,
+        agentId,
       })
     } catch (err) {
       logger.debug({ err, runId: run.id, sessionId: run.launch.sessionId, agentId, nativeSessionId }, '[coding-agent-run] memory export failed to start')

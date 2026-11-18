@@ -1,216 +1,180 @@
+// @vitest-environment node
 /**
- * Tests for SessionMessageSync — the state.db -> webui mirror reconciler.
+ * A session that also lives in the Hermes Agent `state.db` renders stale here.
  *
- * Covers:
- * 1. user messages are NEVER collapsed (re-sending after a network failure is
- *    legitimate); only assistant messages fold within the dedup window
- * 2. count-aware reconciliation is idempotent (re-running inserts nothing)
- * 3. tail-window gap fill: rows missing at the tail get inserted
- * 4. stop() aborts an in-flight sweep loop
+ * The WebUI keeps an import-time mirror of such a session. Once the CLI, a
+ * cron job or Feishu keeps writing to `state.db`, the mirror stays at the
+ * moment it was imported -- so the page shows old messages for a live session,
+ * with no error anywhere to explain it.
+ *
+ * The repair is one-way and additive: fill gaps from `state.db` into the
+ * mirror, never delete, never overwrite, never write back. These tests pin the
+ * three ways that can go wrong.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { getSessionDetailPaginatedFromDbWithProfileMock, listProfileNamesFromDiskMock } = vi.hoisted(() => ({
-  getSessionDetailPaginatedFromDbWithProfileMock: vi.fn(),
-  listProfileNamesFromDiskMock: vi.fn(() => ['default']),
+const dbState = vi.hoisted(() => ({
+  executes: [] as string[],
+  prepared: [] as string[],
+  inserted: [] as any[][],
+  rows: new Map<string, any[]>(),
+}))
+
+vi.mock('../../packages/server/src/modules/hermes/services/profiles/profile', () => ({
+  listProfileNamesFromDisk: () => ['default'],
+}))
+
+vi.mock('../../packages/server/src/modules/studio/public/logging', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}))
+
+const stateDb = vi.hoisted(() => ({
+  paginated: vi.fn(async (): Promise<any> => null),
+  exact: vi.fn(async (): Promise<any> => null),
+}))
+
+vi.mock('../../packages/server/src/modules/hermes/services/history/sessions-db', () => ({
+  getSessionDetailPaginatedFromDbWithProfile: stateDb.paginated,
+  getExactSessionDetailFromDbWithProfile: stateDb.exact,
 }))
 
 vi.mock('../../packages/server/src/modules/studio/infrastructure/database/index', () => ({
-  getDb: () => dbRef.current,
-}))
-vi.mock('../../packages/server/src/modules/hermes/services/history/sessions-db', () => ({
-  getSessionDetailPaginatedFromDbWithProfile: (...args: unknown[]) => getSessionDetailPaginatedFromDbWithProfileMock(...args),
-  getExactSessionDetailFromDbWithProfile: vi.fn().mockResolvedValue(null),
-}))
-vi.mock('../../packages/server/src/modules/hermes/services/profiles/profile', () => ({
-  listProfileNamesFromDisk: () => listProfileNamesFromDiskMock(),
+  getDb: () => ({
+    prepare(sql: string) {
+      dbState.prepared.push(sql)
+      // Match on what the statement is for, not on a character prefix: the
+      // production SQL is multi-line, so a prefix match silently returned an
+      // empty result for every read and made every case look like a full copy.
+      const flat = sql.replace(/\s+/g, ' ').trim()
+      const key = flat.startsWith('SELECT profile FROM sessions') ? 'profile'
+        : flat.startsWith('SELECT role, content FROM messages') ? 'mirror'
+        : flat.startsWith('SELECT id FROM sessions') ? 'sessionIds'
+        : flat.startsWith('INSERT INTO messages') ? 'insert'
+        : flat.startsWith('UPDATE sessions SET') ? 'metadata'
+        : 'other'
+      return {
+        all: () => dbState.rows.get(key) ?? [],
+        get: () => (dbState.rows.get(key) ?? [])[0],
+        run: (...args: any[]) => {
+          if (key === 'insert') dbState.inserted.push(args)
+          return { changes: 1 }
+        },
+      }
+    },
+    exec: (sql: string) => { dbState.executes.push(sql) },
+  }),
 }))
 
-const dbRef: { current: any } = { current: null }
+import { SessionMessageSync } from '../../packages/server/src/modules/studio/services/session-message-sync'
 
-interface Row {
-  id?: number
-  session_id?: string
-  role: string
-  content: string | null
-  tool_call_id?: string | null
-  tool_calls?: string | null
-  tool_name?: string | null
-  timestamp: number
-  token_count?: number | null
-  finish_reason?: string | null
-  reasoning?: string | null
-  reasoning_details?: string | null
-  reasoning_content?: string | null
+function seed(opts: {
+  profile?: string
+  stateMessages: Array<Record<string, any>>
+  mirror?: Array<{ role: string; content: string }>
+}) {
+  dbState.rows.clear()
+  dbState.inserted = []
+  dbState.prepared = []
+  dbState.executes = []
+  // sessions lookup by id
+  dbState.rows.set('profile', [{ profile: opts.profile ?? 'default' }])
+  // full-history mirror read
+  dbState.rows.set('mirror', opts.mirror ?? [])
+  stateDb.paginated.mockResolvedValue({ messages: opts.stateMessages })
 }
 
-function makeStateMsg(role: string, content: string, timestamp: number): Record<string, any> {
-  return {
-    session_id: 's1',
-    role,
-    content,
-    tool_call_id: null,
-    tool_calls: null,
-    tool_name: null,
-    timestamp,
-    token_count: null,
-    finish_reason: null,
-    reasoning: null,
-    reasoning_details: null,
-    reasoning_content: null,
-  }
-}
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
-async function loadSyncClass() {
-  const mod = await import('../../packages/server/src/modules/studio/services/session-message-sync')
-  return mod.SessionMessageSync
-}
-
-describe('SessionMessageSync.syncSession', () => {
-  let db: any
-
-  beforeEach(async () => {
-    vi.clearAllMocks()
-    const { DatabaseSync } = await import('node:sqlite')
-    db = new DatabaseSync(':memory:')
-    db.exec(`
-      CREATE TABLE sessions (id TEXT PRIMARY KEY, profile TEXT, message_count INTEGER DEFAULT 0, last_active INTEGER DEFAULT 0);
-      CREATE TABLE messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        tool_call_id TEXT,
-        tool_calls TEXT,
-        tool_name TEXT,
-        timestamp INTEGER NOT NULL,
-        token_count INTEGER,
-        finish_reason TEXT,
-        reasoning TEXT,
-        reasoning_details TEXT,
-        reasoning_content TEXT
-      );
-      CREATE INDEX idx_messages_session_id ON messages(session_id);
-    `)
-    db.prepare("INSERT INTO sessions (id, profile) VALUES ('s1', 'default')").run()
-    dbRef.current = db
-  })
-
-  afterEach(() => {
-    db?.close()
-    dbRef.current = null
-  })
-
-  function webuiRows(): Array<{ id: number; role: string; content: string }> {
-    return db.prepare('SELECT id, role, content FROM messages WHERE session_id = ? ORDER BY id').all('s1')
-  }
-
-  it('inserts two identical user messages without collapsing either', async () => {
-    const SessionMessageSync = await loadSyncClass()
-    const sync = new SessionMessageSync()
-    const t0 = Date.now() / 1000
-    getSessionDetailPaginatedFromDbWithProfileMock.mockResolvedValue({
-      messages: [
-        makeStateMsg('user', '继续', t0),
-        makeStateMsg('assistant', '好的', t0 + 5),
-        makeStateMsg('user', '继续', t0 + 10),
+describe('the mirror is filled from state.db', () => {
+  it('inserts the messages the mirror is missing', async () => {
+    seed({
+      stateMessages: [
+        { role: 'user', content: 'hello', timestamp: 100 },
+        { role: 'assistant', content: 'hi there', timestamp: 101 },
       ],
+      mirror: [{ role: 'user', content: 'hello' }],
     })
-
-    const result = await sync.syncSession('s1')
-
-    expect(result.inserted).toBe(3)
-    const rows = webuiRows()
-    expect(rows.filter(r => r.role === 'user' && r.content === '继续')).toHaveLength(2)
-    expect(rows.filter(r => r.role === 'assistant')).toHaveLength(1)
+    const result = await SessionMessageSync.getInstance().syncSession('s1')
+    expect(result.inserted).toBe(1)
+    // One transaction, committed: a partial copy would leave the mirror worse
+    // than it started.
+    expect(dbState.executes).toContain('BEGIN')
+    expect(dbState.executes).toContain('COMMIT')
+    expect(dbState.executes).not.toContain('ROLLBACK')
   })
 
-  it('collapses a duplicated assistant reply within the window but keeps distinct ones', async () => {
-    const SessionMessageSync = await loadSyncClass()
-    const sync = new SessionMessageSync()
-    const t0 = Date.now() / 1000
-    // Kernel-duplication pattern: identical assistant content twice <300s apart.
-    getSessionDetailPaginatedFromDbWithProfileMock.mockResolvedValue({
-      messages: [
-        makeStateMsg('assistant', '同样的回复', t0),
-        makeStateMsg('assistant', '同样的回复', t0 + 60),
-        makeStateMsg('assistant', '同样的回复', t0 + 400), // outside window -> kept
+  it('keeps duplicate replies that arrive close together', async () => {
+    // The Hermes kernel sometimes writes the same assistant row twice. Copying
+    // both would show the user a reply they never received twice.
+    seed({
+      stateMessages: [
+        { role: 'assistant', content: 'same answer', timestamp: 100 },
+        { role: 'assistant', content: 'same answer', timestamp: 120 },
       ],
+      mirror: [],
     })
+    const result = await SessionMessageSync.getInstance().syncSession('s2')
+    expect(result.inserted).toBe(1)
+  })
 
-    const result = await sync.syncSession('s1')
-
+  it('never collapses repeated user messages', async () => {
+    // "继续" sent twice is a legitimate action, not kernel duplication.
+    seed({
+      stateMessages: [
+        { role: 'user', content: '继续', timestamp: 100 },
+        { role: 'user', content: '继续', timestamp: 120 },
+      ],
+      mirror: [],
+    })
+    const result = await SessionMessageSync.getInstance().syncSession('s3')
     expect(result.inserted).toBe(2)
-    const rows = webuiRows().filter(r => r.role === 'assistant' && r.content.includes('同样的回复'))
-    expect(rows).toHaveLength(2)
   })
 
-  it('is idempotent: re-running with the same state.db rows inserts nothing', async () => {
-    const SessionMessageSync = await loadSyncClass()
-    const sync = new SessionMessageSync()
-    const t0 = Date.now() / 1000
-    const stateMessages = [
-      makeStateMsg('user', 'hello', t0),
-      makeStateMsg('assistant', 'world', t0 + 3),
-    ]
-    getSessionDetailPaginatedFromDbWithProfileMock.mockResolvedValue({ messages: stateMessages })
-
-    const first = await sync.syncSession('s1')
-    expect(first.inserted).toBe(2)
-
-    const second = await sync.syncSession('s1')
-    expect(second.inserted).toBe(0)
-    expect(webuiRows()).toHaveLength(2)
-  })
-
-  it('fills a tail gap when state.db has newer messages than the mirror', async () => {
-    const SessionMessageSync = await loadSyncClass()
-    const sync = new SessionMessageSync()
-    const t0 = Date.now() / 1000
-
-    // Mirror already holds the first two rows (as if imported earlier).
-    const insert = db.prepare(`INSERT INTO messages
-      (session_id, role, content, timestamp) VALUES (?,?,?,?)`)
-    insert.run('s1', 'user', 'old question', Math.floor(t0 - 60))
-    insert.run('s1', 'assistant', 'old answer', Math.floor(t0 - 30))
-
-    getSessionDetailPaginatedFromDbWithProfileMock.mockResolvedValue({
-      messages: [
-        makeStateMsg('user', 'old question', t0 - 60),
-        makeStateMsg('assistant', 'old answer', t0 - 30),
-        makeStateMsg('user', 'new question', t0 + 10),
-        makeStateMsg('assistant', 'new answer', t0 + 20),
+  it('counts duplicates instead of only checking existence', async () => {
+    // An existence-only check hides the second "继续" forever, because the
+    // first one already made the key present.
+    seed({
+      stateMessages: [
+        { role: 'user', content: '继续', timestamp: 100 },
+        { role: 'user', content: '继续', timestamp: 200 },
       ],
+      mirror: [{ role: 'user', content: '继续' }],
     })
-
-    const result = await sync.syncSession('s1')
-
-    expect(result.inserted).toBe(2)
-    const contents = webuiRows().map(r => r.content)
-    expect(contents).toEqual(['old question', 'old answer', 'new question', 'new answer'])
-    // Mirror metadata updated from inserted rows.
-    const sess = db.prepare("SELECT message_count, last_active FROM sessions WHERE id = 's1'").get() as any
-    expect(sess.message_count).toBe(4)
+    const result = await SessionMessageSync.getInstance().syncSession('s4')
+    expect(result.inserted).toBe(1)
   })
 
-  it('stop() aborts an in-flight sweep loop between sessions', async () => {
-    const SessionMessageSync = await loadSyncClass()
-    const sync = new SessionMessageSync()
-
-    // Two sessions in the active window; the first syncSession call flips stopped.
-    db.prepare("INSERT INTO sessions (id, profile) VALUES ('s2', 'default')").run()
-    let calls = 0
-    getSessionDetailPaginatedFromDbWithProfileMock.mockImplementation(async () => {
-      calls += 1
-      if (calls === 1) sync.stop()
-      return { messages: [makeStateMsg('user', `m${calls}`, Date.now() / 1000)] }
+  it('never deletes or rewrites what the mirror already has', async () => {
+    seed({
+      stateMessages: [{ role: 'user', content: 'hello', timestamp: 100 }],
+      mirror: [{ role: 'user', content: 'hello' }],
     })
-    vi.spyOn(sync as any, 'syncSession')
-
-    const result = await sync.sweepActive(false)
-
-    // Loop broke after stop() flipped mid-first-iteration; second session untouched.
-    expect(calls).toBeLessThan(2)
-    void result
+    const result = await SessionMessageSync.getInstance().syncSession('s5')
+    expect(result.inserted).toBe(0)
+    // The only statements allowed are the metadata refresh; no DELETE, no
+    // UPDATE of a message row.
+    const writes = dbState.prepared.filter(sql => /^\s*(DELETE|UPDATE\s+messages)/i.test(sql))
+    expect(writes).toEqual([])
   })
+
+  it('does not treat whitespace-only differences as new messages', async () => {
+    seed({
+      stateMessages: [{ role: 'assistant', content: 'answer\n\n', timestamp: 100 }],
+      mirror: [{ role: 'assistant', content: 'answer' }],
+    })
+    const result = await SessionMessageSync.getInstance().syncSession('s6')
+    expect(result.inserted).toBe(0)
+  })
+})
+
+describe('a reconcile that cannot read state.db is a no-op, not a failure', () => {
+  it('reports nothing inserted when the read throws', async () => {
+    seed({ stateMessages: [] })
+    stateDb.paginated.mockRejectedValue(new Error('state.db missing'))
+    const result = await SessionMessageSync.getInstance().syncSession('s7')
+    expect(result).toEqual({ scanned: 1, missing: 0, inserted: 0, skipped: 0 })
+  })
+
 })
