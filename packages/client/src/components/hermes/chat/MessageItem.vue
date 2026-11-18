@@ -76,6 +76,10 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
+/**
+ * One sentence for all three compression states, so the entry never changes
+ * shape between "working", "done" and "failed".
+ */
 const compressionEntryText = computed(() => {
   const entry = props.message.compression
   if (!entry) return ''
@@ -90,6 +94,7 @@ const compressionEntryText = computed(() => {
 })
 
 const isSystem = computed(() => props.message.role === "system");
+
 const isCommandMessage = computed(() => props.message.role === "command" || props.message.systemType === "command");
 const isCommandError = computed(() => props.message.role === "command" && props.message.systemType === "error");
 
@@ -1101,7 +1106,8 @@ onBeforeUnmount(() => {
               // the error bubble, and the agent's running commentary is the
               // neutral card. The third treatment this used to reach for --
               // amber, left-striped -- is gone from the stylesheet.
-              'agent-error': isAgentError,
+              system: isSystem && !props.message.compression,
+                'agent-error': isAgentError,
               notice: isSystemNotice,
               compression: !!props.message.compression,
               command: isCommandMessage,
@@ -1301,12 +1307,12 @@ onBeforeUnmount(() => {
               @select="file => openAssistantWorkspaceChangeFile(file, change)"
             />
 
-            <!-- A compression is a fact about the conversation, so it renders as
-                 a transcript entry at the position it happened rather than inside
-                 the run indicator, which used to hide it the moment a run settled. -->
-            <!-- One card for all three states: compressing, settled, failed. The
-                 same rounded treatment the /compact command uses, so a compression
-                 never changes shape between "working" and "done". -->
+            <!-- A compression is a fact about the conversation, so it renders
+                 as a transcript entry at the position it happened rather than
+                 inside the run indicator, which hid it the moment a run settled.
+                 One card for all three states: the same rounded treatment the
+                 /compact command uses, so a compression never changes shape
+                 between "working" and "done". -->
             <div v-if="message.compression" class="compression-entry">
               <span class="command-result-icon">
                 <svg
@@ -1670,6 +1676,39 @@ onBeforeUnmount(() => {
   border: 1.5px solid currentColor;
   /* Logical inline-end, not a physical side: a physical border leaves the gap
      on the wrong edge under RTL. The rtl-logical-css test guards this. */
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+  animation: compression-entry-spin 0.7s linear infinite;
+}
+
+@keyframes compression-entry-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* A compression transcript entry. Sits inline in the flow, muted like the tool
+   strip it replaces, so a completed compression reads as a settled fact rather
+   than as part of the still-running turn. The card itself is
+   `.message-bubble.compression`, so it reads with the same rounded border as the
+   command that triggered it. */
+.compression-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compression-entry-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compression-entry-spinner {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  /* Logical inline-end, not a physical side: a physical border leaves the gap
+     on the wrong edge under RTL. */
   border-inline-end-color: transparent;
   border-radius: 50%;
   animation: compression-entry-spin 0.7s linear infinite;

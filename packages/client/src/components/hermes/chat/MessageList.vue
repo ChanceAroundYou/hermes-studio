@@ -702,12 +702,14 @@ defineExpose({
       <template #after>
         <Transition name="fade">
         <div v-if="isRunIndicatorActive" class="streaming-indicator">
+          <LiveReasoningStatus
+            :agent="assistantAgent"
+            :reasoning="liveReasoningDetail?.reasoning"
+            :reasoning-id="liveReasoningDetail?.messageId"
+            :elapsed="formattedThinkingElapsed"
+          />
           <div v-if="chatStore.abortState" class="tool-calls-panel">
-            <!-- Abort indicator. The compression notice used to sit here too, but
-                 this block is gated on the run being live, so a completed
-                 compression vanished as soon as the run settled. It now renders
-                 as a real transcript entry in MessageItem, ordered by when it
-                 started. -->
+            <!-- Abort indicator -->
             <div v-if="chatStore.abortState" class="tool-call-item compression-item">
               <svg
                 v-if="chatStore.abortState.aborting"
@@ -751,6 +753,7 @@ defineExpose({
                 class="tool-call-spinner"
               ></span>
             </div>
+            <!-- Tool calls render inside the trailing transcript card. -->
           </div>
           <LiveReasoningStatus
             :agent="assistantAgent"

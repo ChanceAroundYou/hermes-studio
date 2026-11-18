@@ -1,3 +1,4 @@
+import { rewriteSkillSlashCommand, skillCommandName } from '@/utils/hermes/slash-command-skills'
 import { normalizeRunUsage, type RunUsageSummary } from '@/utils/run-usage'
 import { mergeTaskPlanMessages, type TaskPlanSnapshot } from '@/utils/task-plan'
 import { chatSessionAgentAvatar } from '@/utils/chat-agent-avatar'
@@ -18,7 +19,6 @@ import { primeCompletionSound, playCompletionSound } from '@/utils/completion-so
 import { showCompletionNotification } from '@/utils/completion-notification'
 import { detectThinkingBoundary } from '@/utils/thinking-parser'
 import { isKnownBridgeSessionCommand } from '@/utils/hermes/bridge-session-commands'
-import { rewriteSkillSlashCommand, skillCommandName } from '@/utils/hermes/slash-command-skills'
 import { responseErrorMessage } from '@/utils/http-error'
 import { errorMessage } from '@/utils/format'
 import {
@@ -871,23 +871,17 @@ function getToolMetadata<T>(map: Map<string, T>, message: unknown, toolCallId: s
     ?? map.get(toolInstanceKey(null, toolCallId))
 }
 
-function isQueueInsertionInterruption(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false
-  const event = value as Pick<RunEvent, 'interrupted' | 'stop_reason'>
-  return event.interrupted === true && event.stop_reason === 'queue_insertion'
-}
-
 // A few bridge failures reach the client as status *text* instead of an `error`
 // field, e.g. "Non-retryable error (HTTP 502): HTTP 502: Provider returned 400".
 // Rendering those as a neutral system notice meant one failure appeared twice:
 // once amber while the run was still failing, then again red once the server
-// persisted the same failure as a `role: 'error'` row.
+// persisted the same failure as an error row.
 //
-// The patterns are deliberately high precision. An earlier, broader version also
-// matched any sentence containing "error" or "failed" and repainted ordinary
-// replies ("Error handling in the parser looks correct", "The failed test was
-// flaky") red. Every pattern below is a machine-generated signature that cannot
-// occur in a normal assistant answer.
+// The patterns are deliberately high precision. A broader version also matched
+// any sentence containing "error" or "failed" and repainted ordinary replies
+// ("Error handling in the parser looks correct", "The failed test was flaky")
+// red. Every pattern below is a machine-generated signature that cannot occur in
+// a normal assistant answer.
 const BRIDGE_FAILURE_PATTERNS: RegExp[] = [
   /^\s*Error\s*:/,
   /^\s*Non[- ]?retryable\b/i,
@@ -911,23 +905,20 @@ export function isBridgeFailureText(raw: unknown): boolean {
  * The agent's turn-lease notices: "another process holds this session".
  *
  * These need their own list because the agent gives them no distinguishing
- * structure. Its status callback carries a `kind`, but the lease wait and a
- * compression both arrive as `lifecycle`, so the kind cannot separate "your turn
- * has not started" from "your turn is running and doing maintenance".
+ * structure: the lease wait and a compression both arrive as `lifecycle`, so the
+ * kind cannot separate "your turn has not started" from "your turn is running
+ * and doing maintenance". They are not ordinary progress either -- nothing is
+ * happening yet and the reader is waiting on someone else -- so they keep the
+ * error treatment rather than the neutral notice card.
  *
- * They are not ordinary progress, though: nothing is happening yet and the
- * reader is waiting on someone else, so they keep the error treatment rather
- * than the neutral notice card. Narrow machine signatures only -- the hourglass
- * the agent prefixes these with, and the two phrasings it uses -- so this cannot
- * match a reply.
+ * Narrow machine signatures only, so this cannot match a reply.
  */
 const BRIDGE_BLOCKED_PATTERNS: RegExp[] = [
-  // The agent prefixes this whole family with an hourglass, and this is the
-  // only place that glyph is used as a marker. Deliberately the whole pattern:
-  // a first version also matched the phrase "waiting for it to finish", which
-  // is exactly the mistake this fork already made once -- it repainted the
-  // ordinary reply "I was waiting for it to finish, then the parser looked
-  // correct" as a blocked session.
+  // The agent prefixes this whole family with an hourglass, and this is the only
+  // place that glyph is used as a marker. Deliberately the whole pattern: a
+  // first version also matched the phrase "waiting for it to finish", which
+  // repainted the ordinary reply "I was waiting for it to finish, then the
+  // parser looked correct" as a blocked session.
   /^\s*\u23f3/,
 ]
 
@@ -945,6 +936,24 @@ export function isBridgeBlockedText(raw: unknown): boolean {
 export function isWarningStatusKind(raw: unknown): boolean {
   return String(raw || '').trim().toLowerCase() === 'warn'
 }
+
+function isQueueInsertionInterruption(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const event = value as Pick<RunEvent, 'interrupted' | 'stop_reason'>
+  return event.interrupted === true && event.stop_reason === 'queue_insertion'
+}
+
+// A few bridge failures reach the client as status *text* instead of an `error`
+// field, e.g. "Non-retryable error (HTTP 502): HTTP 502: Provider returned 400".
+// Rendering those as a neutral system notice meant one failure appeared twice:
+// once amber while the run was still failing, then again red once the server
+// persisted the same failure as a `role: 'error'` row.
+//
+// The patterns are deliberately high precision. An earlier, broader version also
+// matched any sentence containing "error" or "failed" and repainted ordinary
+// replies ("Error handling in the parser looks correct", "The failed test was
+// flaky") red. Every pattern below is a machine-generated signature that cannot
+// occur in a normal assistant answer.
 
 function hasAssistantVisibleText(message: Message | null | undefined): boolean {
   if (!message) return false
@@ -2056,12 +2065,13 @@ export const useChatStore = defineStore('chat', () => {
   // Compression state is scoped per session because sockets can stay joined to
   // background sessions while another chat is active.
   /**
-   * Command names of the skills loaded for this session, used to decide whether a
-   * bare `/name` is a skill invocation before the Agent sees it. Populated by the
-   * composer's skills fetch; a miss here means the text goes through as prose,
-   * which is exactly the failure this exists to prevent.
+   * Command names of the skills loaded for this session, used to decide whether
+   * a bare `/name` is a skill invocation before the Agent sees it. Populated by
+   * the composer's skills fetch; a miss here means the text goes through as
+   * prose, which is exactly the failure this exists to prevent.
    */
   const knownSkillCommandNames = ref<Set<string>>(new Set())
+
   function setKnownSkillCommandNames(sessionId: string | null | undefined, names: string[]) {
     if (!sessionId) return
     knownSkillCommandNames.value = new Set(names.map(name => skillCommandName(name)).filter(Boolean))
@@ -3975,23 +3985,6 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
-  // A failure is a real turn outcome, so it belongs in the transcript at the
-  // position where it happened and it stays there. The server persists it as a
-  // `role: 'error'` row that is excluded from model context, which is why the
-  // user can see it forever while the agent never receives it.
-  //
-  // This used to try to be clever and it broke that guarantee three ways:
-  //
-  //  - it overwrote a short streaming message in place, erasing the reply that
-  //    the run had already produced;
-  //  - it rewrote the previous error bubble when the same failure was reported
-  //    twice, moving the error to the end of the transcript;
-  //  - it scanned the whole history and silently dropped a new error whenever an
-  //    identical one existed within the window, so retrying made the recorded
-  //    failure disappear and reappear somewhere else.
-  //
-  // All three are gone. A failure is always appended as its own row and never
-  // merged into, or suppressed by, an earlier one.
   function addAgentErrorMessage(sessionId: string, error?: unknown) {
     const message = errorMessage(error)
     const content = message ? `Error: ${message}` : 'Run failed'
@@ -4176,6 +4169,15 @@ export const useChatStore = defineStore('chat', () => {
     // The lease notices are routed with them, and `kind === 'warn'` with those:
     // what falls past this point is progress, and progress is not a problem.
     if ((evt as any).event === 'run.reattach_failed' || isErrorEvent || isBridgeFailureText(text)
+      || isBridgeBlockedText(text) || isWarningStatusKind((evt as any).kind)) {
+      addAgentErrorMessage(sid, text)
+      return
+    }
+
+    // A bridge failure that arrives as text is still a failure: it renders
+    // through the single error bubble instead of the neutral notice, so one
+    // failure cannot appear twice in two different styles.
+    if ((evt as any).event === 'run.reattach_failed' || isBridgeFailureText(text)
       || isBridgeBlockedText(text) || isWarningStatusKind((evt as any).kind)) {
       addAgentErrorMessage(sid, text)
       return
@@ -4842,18 +4844,16 @@ export const useChatStore = defineStore('chat', () => {
 
     // The composer inserts `/plan-only` for a custom skill: what the menu shows
     // is what gets typed. That bare form is not a known bridge command, so it
-    // would be sent as an ordinary user message and the Agent would receive the
-    // text without ever loading the skill. Rewrite it here, at the one place that
-    // decides what goes on the wire, so hand-typing behaves the same as selecting
-    // from the menu.
+    // would be sent as an ordinary user message and the Agent would never load
+    // the skill. Rewritten here, at the one place that decides what goes on the
+    // wire, so hand-typing behaves the same as selecting from the menu.
     const trimmedContent = rewriteSkillSlashCommand(
       content.trim(),
       knownSkillCommandNames.value,
-      // Bridge sessions only. In a coding-agent session `/skill` is inert text
-      // (`isBridgeSlashCommand` is `!isCodingAgentSession && ...`), and an Ekko
-      // session dispatches skills by bare name -- it injects valid skill names
-      // into context and the model loads the body itself. Prefixing here would
-      // replace a working invocation with one the agent cannot resolve.
+      // Bridge sessions only. In a coding-agent session `/skill` is inert text,
+      // and an Ekko session dispatches skills by bare name -- it injects valid
+      // names into context and the model loads the body itself. Prefixing there
+      // would replace a working invocation with one the agent cannot resolve.
       activeSession.value?.source === 'cli',
     )
 
