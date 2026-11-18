@@ -316,16 +316,12 @@ const rootClass = computed(() => {
 .pending-interaction-card--notification {
   pointer-events: auto;
   width: 100%;
-  padding: 10px;
-  border: 1px solid rgba(var(--accent-primary-rgb), 0.24);
-  border-radius: 16px;
-  background: #ffffff;
+  padding: calc(10px * var(--spacing-scale, 1));
+  border: var(--border-width, 1px) solid rgba(var(--accent-primary-rgb), 0.24);
+  border-radius: var(--radius-component, 14px);
+  background: var(--theme-content-bg, var(--bg-main-surface));
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.14);
   backdrop-filter: blur(14px);
-
-  .dark & {
-    background: #262626;
-  }
 }
 
 .pending-interaction-card--notification {
@@ -352,8 +348,8 @@ const rootClass = computed(() => {
 .float-panel-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 2px 4px 8px;
+  gap: calc(8px * var(--spacing-scale, 1));
+  padding: calc(2px * var(--spacing-scale, 1)) calc(4px * var(--spacing-scale, 1)) calc(8px * var(--spacing-scale, 1));
   color: var(--accent-primary);
   font-size: 11px;
   font-weight: 700;
@@ -371,7 +367,7 @@ const rootClass = computed(() => {
   justify-content: center;
   color: var(--accent-primary);
   background: rgba(var(--accent-primary-rgb), 0.12);
-  border: 1px solid rgba(var(--accent-primary-rgb), 0.24);
+  border: var(--border-width, 1px) solid rgba(var(--accent-primary-rgb), 0.24);
 }
 
 .approval-float-title {
@@ -392,9 +388,9 @@ const rootClass = computed(() => {
 
 .approval-float-command {
   display: block;
-  margin: 8px 4px 0;
-  border: 1px solid rgba(var(--text-primary-rgb), 0.1);
-  border-radius: 10px;
+  margin: calc(8px * var(--spacing-scale, 1)) calc(4px * var(--spacing-scale, 1)) 0;
+  border: var(--border-width, 1px) solid rgba(var(--text-primary-rgb), 0.1);
+  border-radius: var(--radius-component, 10px);
   background: rgba(var(--accent-primary-rgb), 0.055);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.035);
   overflow: hidden;
@@ -404,9 +400,9 @@ const rootClass = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: calc(12px * var(--spacing-scale, 1));
   min-height: 36px;
-  padding: 4px 6px 4px 12px;
+  padding: calc(4px * var(--spacing-scale, 1)) calc(6px * var(--spacing-scale, 1)) calc(4px * var(--spacing-scale, 1)) calc(12px * var(--spacing-scale, 1));
   border-bottom: 1px solid rgba(var(--text-primary-rgb), 0.08);
 }
 
@@ -419,7 +415,7 @@ const rootClass = computed(() => {
 .approval-float-command pre {
   max-height: 240px;
   margin: 0;
-  padding: 12px;
+  padding: calc(12px * var(--spacing-scale, 1));
   overflow: auto;
   overscroll-behavior: contain;
   white-space: pre;
@@ -439,9 +435,9 @@ const rootClass = computed(() => {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-start;
-  gap: 8px;
+  gap: calc(8px * var(--spacing-scale, 1));
   margin-top: 10px;
-  padding: 10px 4px 0;
+  padding: calc(10px * var(--spacing-scale, 1)) calc(4px * var(--spacing-scale, 1)) 0;
   border-top: 1px solid $border-color;
 
   // Buttons size to their own label and wrap instead of being pinned into
@@ -469,9 +465,9 @@ const rootClass = computed(() => {
 
 .clarify-float-input-row {
   display: flex;
-  gap: 8px;
+  gap: calc(8px * var(--spacing-scale, 1));
   margin-top: 10px;
-  padding: 10px 4px 0;
+  padding: calc(10px * var(--spacing-scale, 1)) calc(4px * var(--spacing-scale, 1)) 0;
   border-top: 1px solid $border-color;
 
   :deep(.n-input) {
@@ -496,8 +492,8 @@ const rootClass = computed(() => {
   .pending-interaction-card--inline,
   .pending-interaction-card--portal,
   .pending-interaction-card--notification {
-    padding: 7px;
-    border-radius: 14px;
+    padding: calc(7px * var(--spacing-scale, 1));
+    border-radius: calc(var(--radius-component, 14px) * 14 / 16);
   }
 
   .pending-interaction-card--portal {

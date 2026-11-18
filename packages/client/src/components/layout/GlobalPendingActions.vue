@@ -58,14 +58,16 @@ function loadApprovalSoundSetting() {
       return
     }
     approvalSoundArmed = true
-    if (pendingSoundKeys.size > 0 && settingsStore.display.approval_bell) void playCompletionSound()
-    if (settingsStore.display.notify_on_approval) {
-      for (const action of pendingActions(false)) {
-        if (pendingNotificationKeys.has(action.key)) notifyPendingAction(action)
-      }
-    }
+    const queuedForSound = pendingSoundKeys.size > 0
     pendingSoundKeys.clear()
     pendingNotificationKeys.clear()
+    if (queuedForSound && settingsStore.display.approval_bell) void playCompletionSound()
+    // Arming is when every live action the user has never been told about gets
+    // its turn: one whose parked announcement was dropped by a failed or
+    // repeated settings load, and one that arrived while the previous load was
+    // still in flight. Marking a key before it was actually announced burned it
+    // and left that card silent for good.
+    announceUnannouncedActions()
   }).catch(() => {
     if (generation !== settingsLoadGeneration) return
     approvalSoundArmed = false
@@ -124,6 +126,15 @@ function handleVisibleWorkflowApproval(event: Event) {
   if (!key) return
   if (detail.visible === false) visibleWorkflowApprovalKeys.delete(key)
   else visibleWorkflowApprovalKeys.add(key)
+}
+
+/** Tell the user about every live action they have not been told about yet. */
+function announceUnannouncedActions() {
+  for (const action of pendingActions(false)) {
+    if (announcedKeys.has(action.key)) continue
+    announcedKeys.add(action.key)
+    if (settingsStore.display.notify_on_approval) notifyPendingAction(action)
+  }
 }
 
 function pendingSoundActionKeys(): string[] {
@@ -393,17 +404,25 @@ watch(pendingSoundActionKeys, keys => {
   }
   for (const key of keys) {
     if (announcedKeys.has(key)) continue
+    if (!shouldAnnounce) {
+      // Baseline pass: what was already waiting when this surface mounted is
+      // history, not news.
+      announcedKeys.add(key)
+      continue
+    }
+    hasNewAction = true
+    if (!approvalSoundArmed) {
+      // The settings are still loading, so park the announcement. The key stays
+      // unannounced on purpose: that queue can be dropped before it is ever
+      // drained.
+      pendingSoundKeys.add(key)
+      pendingNotificationKeys.add(key)
+      continue
+    }
     announcedKeys.add(key)
-    if (shouldAnnounce) {
-      hasNewAction = true
-      if (!approvalSoundArmed) {
-        pendingSoundKeys.add(key)
-        pendingNotificationKeys.add(key)
-      }
-      if (approvalSoundArmed && settingsStore.display.notify_on_approval) {
-        const action = pendingActions(false).find(candidate => candidate.key === key)
-        if (action) notifyPendingAction(action)
-      }
+    if (settingsStore.display.notify_on_approval) {
+      const action = pendingActions(false).find(candidate => candidate.key === key)
+      if (action) notifyPendingAction(action)
     }
   }
   pendingBaselineEstablished = true

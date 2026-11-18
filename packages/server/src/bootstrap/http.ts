@@ -503,6 +503,10 @@ export async function bootstrap() {
   void refreshModelCatalog(true)
   const { interruptOrphanedTaskPlans } = await import('../modules/studio/repositories/task-plan-store')
   interruptOrphanedTaskPlans()
+  // A pending interaction is backed by a live callback in this process. After a
+  // restart nothing can answer it, so it must not come back as an answerable card.
+  const { expireOrphanedPendingInteractions } = await import('../modules/studio/repositories/pending-interaction-store')
+  expireOrphanedPendingInteractions()
   startChatWebhookDispatcher()
   console.log('[bootstrap] all stores initialized')
 

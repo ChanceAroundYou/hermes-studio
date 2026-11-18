@@ -36,8 +36,12 @@ describe('the server reports background delegations', () => {
   it('lists a session whose only live work is a delegation', () => {
     // Without this the client cannot distinguish "delegation finished" from
     // "snapshot never mentioned it", which was the whole deadlock.
+    // Anchored on the behaviour: the count is computed before the filter, and
+    // the filter keeps a session whose only work is that count. The call's
+    // arity is upstream's business (`backgroundPendingCount(state)` became
+    // `(state, sid)`), so it is deliberately not pinned here.
     expect(socket).toMatch(
-      /const backgroundPending = this\.backgroundPendingCount\(state\)[\s\S]{0,200}backgroundPending === 0\) continue/,
+      /const backgroundPending = this\.backgroundPendingCount\(state[\s\S]{0,200}backgroundPending === 0\) continue/,
     )
   })
 
@@ -125,6 +129,15 @@ describe('a finished run is reported', () => {
     expect(body).not.toMatch(/refreshSessionListOnly/)
   })
 
+  it('decides the drop set before it writes to it', () => {
+    // `hasLocalRunEvidence` reads the same record the loop writes to, so a key
+    // set read after the first `markSessionIdle` is already missing the sessions
+    // this poll was supposed to settle -- nothing gets reported at all.
+    expect(chat).toMatch(/const knownRunsAtStart = \[\.\.\.sessionRuns\.value\.keys\(\)\]/)
+    const dropped = chat.slice(chat.indexOf('const dropped = '))
+    expect(dropped.slice(0, 120)).toMatch(/\[\.\.\.knownRunsAtStart\]/)
+  })
+
   it('covers both ways a run ends without the client attached', () => {
     expect(chat).toMatch(/new Set\(\[\.\.\.dropped, \.\.\.finishedBySnapshot\]\)/)
   })
@@ -195,13 +208,31 @@ describe('the snapshot derives the phase instead of reporting a stale one', () =
  * leak when the terminal event never arrives, so each one is pinned at its use.
  */
 describe('every locally-kept light has a bound at its use site', () => {
+  it('bounds the attached-stream veto even when the stream is still attached', () => {
+    // The stream flag alone must not be enough. An attached stream normally
+    // clears itself, but a background session whose terminal event was lost has
+    // no other exit: an unbounded veto holds that flag forever and the ring with
+    // it, which is the exact leak this predicate exists to bound.
+    const veto = chat.slice(chat.indexOf('function hasLocalRunEvidence'))
+    const vetoBody = veto.slice(0, veto.indexOf('\n  }'))
+    const streamBranch = vetoBody.slice(
+      vetoBody.indexOf('if (streamStates.value.has(sessionId))'),
+      vetoBody.indexOf('for (const subagent of subagentStreams.value.values())'),
+    )
+    expect(streamBranch).toMatch(/now - startedAt < WORKING_SNAPSHOT_FRESHNESS_MS/)
+    expect(streamBranch).not.toMatch(/has\(sessionId\)\)\s*return true/)
+  })
+
   it('bounds the delegation count from the snapshot', () => {
     // The count was computed on every poll, used to settle delegation streams,
     // and then dropped -- so the light could be switched on by a socket event and
     // never switched off by anything.
     const apply = chat.slice(chat.indexOf('const backgroundPending = new Map'))
     const block = apply.slice(0, 2000)
-    expect(block).toMatch(/setBackgroundPending\(session\.id, pending\)/)
+    // The loop key is a session id however it is spelled, and it is deliberately
+    // not `session.id`: this poll runs before the session list is fetched, so
+    // iterating the loaded sessions would skip every count it exists to carry.
+    expect(block).toMatch(/setBackgroundPending\(sid, pending\)/)
     expect(block).toMatch(/if \(pending === known\) continue/)
   })
 

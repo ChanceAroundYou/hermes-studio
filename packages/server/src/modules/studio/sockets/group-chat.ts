@@ -4,6 +4,8 @@ import { authenticatedPushActor, prepareRunPushSnapshot } from '../services/noti
 import { bindRunPushTarget, findPushRunLink, linkPushRun, pushRunTransaction, type PushActor } from '../repositories/run-push-store'
 import { parseGroupTaskPlan } from '../services/group-chat/task-plan'
 import { parseGroupRunUsage } from '../services/group-chat/run-usage'
+import { persistRoomClarify, settleRoomClarify, settleRoomClarifies } from '../services/group-chat/pending-interactions'
+import type { PendingInteractionReason } from '../contracts/pending-interaction'
 import { bindLegacyAppEvents } from '../services/webhooks/legacy-app-events'
 import { registerGroupEventAccess } from '../services/webhooks/app-events'
 import { publishGroupMessage, publishGroupInteraction } from '../services/webhooks/domain-events'
@@ -3307,12 +3309,19 @@ export class GroupChatServer {
         return route
     }
 
-    private takePendingClarifyRoute(routeKey: string): PendingGroupClarifyRoute | undefined {
+    private takePendingClarifyRoute(
+        routeKey: string,
+        reason: PendingInteractionReason = 'cancelled',
+    ): PendingGroupClarifyRoute | undefined {
         const route = this.pendingClarifyRoutes.get(routeKey)
         this.pendingClarifyRoutes.delete(routeKey)
         const timer = this.pendingClarifyTimers.get(routeKey)
         if (timer) clearTimeout(timer)
         this.pendingClarifyTimers.delete(routeKey)
+        // The in-memory route is what the agent's answer travels back through; the
+        // stored row is what the user's screen reconciles against. Settling only one
+        // of them is how a card outlived the prompt it belonged to.
+        if (route) settleRoomClarify(route.roomId, route.clarifyId, reason)
         return route
     }
 
@@ -5591,7 +5600,7 @@ export class GroupChatServer {
             ) {
                 continue
             }
-            const claimed = this.takePendingClarifyRoute(routeKey)
+            const claimed = this.takePendingClarifyRoute(routeKey, 'aborted')
             if (claimed) routes.push(claimed)
         }
         return routes
@@ -5650,6 +5659,18 @@ export class GroupChatServer {
         }
         this.pendingClarifyRoutes.set(routeKey, route)
         this.schedulePendingClarifyExpiry(routeKey, route)
+        // Mirror it into storage: a row is what a reload, or a client that is not
+        // sitting in this room, can still find.
+        persistRoomClarify({
+            roomId,
+            profile: this.storage.getRoom(roomId)?.summaryProfile || 'default',
+            clarifyId: route.clarifyId,
+            question: route.question,
+            choices: route.choices,
+            runId: route.runId,
+            timeoutMs: route.timeoutMs,
+            requestedAt: route.requestedAt,
+        })
         this.emitToRoomManagers(roomId, 'clarify.requested', {
             runId: route.runId,
             event: 'clarify.requested',
@@ -5670,7 +5691,10 @@ export class GroupChatServer {
         const roomId = data.roomId
         const agentName = data.agentName || ''
         if (!roomId || !data.clarify_id || !this.getCurrentAgentEventMember(socket, roomId, agentName, data.agentSessionId)) return
-        const route = this.takePendingClarifyRoute(this.pendingClarifyRouteKey(roomId, data.clarify_id))
+        const route = this.takePendingClarifyRoute(
+            this.pendingClarifyRouteKey(roomId, data.clarify_id),
+            data.resolved === false ? 'dismissed' : 'response',
+        )
         if (!route || route.agentName !== agentName) return
         this.emitToRoomManagers(roomId, 'clarify.resolved', {
             runId: route.runId,
@@ -5711,7 +5735,7 @@ export class GroupChatServer {
             try {
                 const resolved = await remoteExecutor.respondClarify(data.clarify_id, response)
                 if (resolved) {
-                    this.takePendingClarifyRoute(routeKey)
+                    this.takePendingClarifyRoute(routeKey, 'response')
                     ack?.({ ok: true, resolved: true })
                     return
                 }
@@ -5739,14 +5763,14 @@ export class GroupChatServer {
                 ack?.({ error: 'Clarification does not belong to the active Agent session' })
                 return
             }
-            this.takePendingClarifyRoute(routeKey)
+            this.takePendingClarifyRoute(routeKey, 'response')
             ack?.({ ok: true, resolved: true })
             return
         }
         try {
             const result = await createGroupPrimaryAgentBridge().clarifyRespond(data.clarify_id, response)
             const resolved = Boolean((result as any)?.resolved)
-            if (resolved) this.takePendingClarifyRoute(routeKey)
+            if (resolved) this.takePendingClarifyRoute(routeKey, 'response')
             ack?.({ ok: true, resolved })
         } catch (err: any) {
             logger.warn(`[GroupChat] failed to respond clarification ${data.clarify_id}: ${err.message}`)
@@ -5791,7 +5815,7 @@ export class GroupChatServer {
             const routeKey = this.pendingClarifyRouteKey(roomId, clarifyId)
             const route = this.pendingClarifyRoutes.get(routeKey)
             if (!route || route.agentName !== agentName) continue
-            this.takePendingClarifyRoute(routeKey)
+            this.takePendingClarifyRoute(routeKey, 'expired')
             this.emitToRoomManagers(roomId, 'clarify.resolved', {
                 runId: route.runId,
                 event: 'clarify.resolved',
@@ -5815,6 +5839,10 @@ export class GroupChatServer {
     private clearPendingClarifyRoutes(roomId: string): void {
         const pendingRoutes = this.pendingClarifyRoutes
         if (!pendingRoutes) return
+        // Settle the room's rows first: a stored row can outlive the process that
+        // created it, so "the room was cleared" has to reach storage even for a
+        // prompt this process never held in memory.
+        settleRoomClarifies(roomId, 'cancelled')
         for (const [routeKey, route] of pendingRoutes) {
             if (route.roomId === roomId) this.takePendingClarifyRoute(routeKey)
         }

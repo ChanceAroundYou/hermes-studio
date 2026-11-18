@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.hoisted(() => { (globalThis as unknown as Record<string, unknown>).__APP_VERSION__ = 'test' })
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
@@ -16,6 +17,7 @@ const completionSoundMock = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/studio/chat', () => ({
+  onUnobservedRunStarted: vi.fn(() => vi.fn()),
   startRunViaSocket: chatApi.startRunViaSocket,
   resumeSession: chatApi.resumeSession,
   registerSessionHandlers: chatApi.registerSessionHandlers,
@@ -175,8 +177,8 @@ describe('chat store error handling - #1644', () => {
 
     expect(store.pendingApprovals.get('session-b')!.countdownDeadline - now).toBeGreaterThanOrEqual(41_900)
     expect(store.pendingApprovals.get('session-b')!.countdownDeadline - now).toBeLessThanOrEqual(42_100)
-    expect(store.pendingClarifies.get('session-b')!.countdownDeadline - now).toBeGreaterThanOrEqual(16_900)
-    expect(store.pendingClarifies.get('session-b')!.countdownDeadline - now).toBeLessThanOrEqual(17_100)
+    expect(store.pendingClarifies.get('session-b:clarify-b')!.countdownDeadline - now).toBeGreaterThanOrEqual(16_900)
+    expect(store.pendingClarifies.get('session-b:clarify-b')!.countdownDeadline - now).toBeLessThanOrEqual(17_100)
   })
 
   it('keeps a pending approval when the authoritative response is unresolved', () => {
@@ -205,12 +207,12 @@ describe('chat store error handling - #1644', () => {
       event: 'clarify.requested', session_id: 'session-b', clarify_id: 'clarify-b', question: 'Continue?', timeout_ms: 1,
     })
     store.pendingApprovals.get('session-b')!.requestedAt = Date.now() - 10
-    store.pendingClarifies.get('session-b')!.requestedAt = Date.now() - 10
+    store.pendingClarifies.get('session-b:clarify-b')!.requestedAt = Date.now() - 10
 
     expect(store.respondApprovalFor('session-b', 'approval-b', 'once')).toBe('submitted')
     expect(store.respondToClarifyFor('session-b', 'clarify-b', 'Continue')).toBe('submitted')
     expect(store.pendingApprovals.has('session-b')).toBe(true)
-    expect(store.pendingClarifies.has('session-b')).toBe(true)
+    expect(store.pendingClarifies.has('session-b:clarify-b')).toBe(true)
     expect(expired).not.toHaveBeenCalled()
 
     chatApi.globalPendingHandler?.({
@@ -223,7 +225,7 @@ describe('chat store error handling - #1644', () => {
     })
 
     expect(store.pendingApprovals.has('session-b')).toBe(false)
-    expect(store.pendingClarifies.has('session-b')).toBe(false)
+    expect(store.pendingClarifies.has('session-b:clarify-b')).toBe(false)
     expect(expired).toHaveBeenCalledTimes(2)
     window.removeEventListener('hermes:pending-interaction-expired', expired)
   })

@@ -145,6 +145,11 @@ describe('each profile select resolves the display name', () => {
     ['views/hermes/ModelsView.vue', 'profileOptions'],
     ['components/hermes/settings/GatewayAutoStartSettings.vue', 'profileOptions'],
     ['components/hermes/settings/WebhookSettings.vue', 'profileOptions'],
+    // Added by upstream 0.8.20 after this guard was written. The whole-tree scan
+    // caught both; UsageView is listed by name here as well so renaming its computed
+    // is caught too. ProviderImportModal builds its options inline in the template
+    // rather than in a computed, so only the scan can cover it.
+    ['views/hermes/UsageView.vue', 'profileOptions'],
   ]
 
   it.each(CALL_SITES)('%s resolves labels in %s', (file, symbol) => {

@@ -26,11 +26,14 @@ describe('chat message header profile name', () => {
   })
 
   it('resolves the displayed name instead of falling back to the raw alias', () => {
+    // Upstream 0.8.20 added `props.userLabel`, which PersonView sets to a fixed "You"
+    // label for the person's own turns. That override has to stay in front: a person
+    // surface is not showing a Hermes profile at all. What must not come back is the
+    // pre-a440c83ac `alias?.trim() || activeSessionProfileName` chain, which silently
+    // returned the raw profile id whenever a profile had a display name but no alias.
     expect(source).toMatch(
-      /const userProfileName = computed\(\(\) => \(\s*\n?\s*(?:\/\/[^\n]*\n\s*)?resolveProfileDisplayName\(\s*profilesStore\.profiles,\s*activeSessionProfileName\.value,?\s*\)/,
+      /const userProfileName = computed\(\(\) => \(\s*\n?\s*(?:\/\/[^\n]*\n\s*)*props\.userLabel \|\| resolveProfileDisplayName\(\s*profilesStore\.profiles,\s*activeSessionProfileName\.value,?\s*\)/,
     )
-    // The pre-a440c83ac expression would silently return "default" whenever the
-    // profile carried a display name but no alias.
     expect(source).not.toMatch(/activeSessionProfile\.value\?\.alias\?\.trim\(\) \|\|/)
   })
 

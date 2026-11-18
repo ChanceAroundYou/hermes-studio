@@ -559,7 +559,15 @@ interface AbortState {
 // How long to wait for abort.completed / abort.timeout before concluding the
 // stop request was lost. Generous enough for a slow agent, short enough that a
 // lost request does not leave the stop button dead for the rest of the run.
-const ABORT_WATCHDOG_MS = 8000
+// A stop that lands while the run is parked on a question is slower than an
+// ordinary one: the server has to settle that question before the run can reach
+// its terminal event. Reporting such a stop as lost tells the user to press a
+// button that is already doing the right thing.
+const ABORT_WATCHDOG_MS = 20_000
+// ...but never indefinitely, or a genuinely lost stop would leave the button
+// dead for the rest of the run. Extra windows are granted only while the
+// session is still waiting on a prompt.
+const ABORT_WATCHDOG_MAX_EXTENSIONS = 3
 const STOP_UNCONFIRMED_MESSAGE = 'Stop was not confirmed by the run. Press stop again.'
 
 function uid(): string {
@@ -2235,31 +2243,48 @@ export const useChatStore = defineStore('chat', () => {
   // while another conversation is selected.
   const abortStates = ref<Map<string, AbortState>>(new Map())
   const abortWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
+  const abortWatchdogExtensions = new Map<string, number>()
+
+  /** Is the stop still waiting on an answer the server has to settle first? */
+  function sessionWaitsOnPrompt(sessionId: string): boolean {
+    // One prompt per session in this branch's model, so presence is the whole
+    // question. `pendingApprovals` is keyed by session; clarifications are not.
+    return pendingClarifies.value.has(sessionId) || pendingApprovals.value.has(sessionId)
+  }
 
   function clearAbortWatchdog(sessionId: string) {
     const timer = abortWatchdogs.get(sessionId)
+    abortWatchdogExtensions.delete(sessionId)
     if (timer === undefined) return
     clearTimeout(timer)
     abortWatchdogs.delete(sessionId)
   }
 
+  function armAbortWatchdog(sessionId: string) {
+    abortWatchdogs.set(
+      sessionId,
+      setTimeout(() => {
+        abortWatchdogs.delete(sessionId)
+        if (!abortStates.value.get(sessionId)?.aborting) return
+        const extended = abortWatchdogExtensions.get(sessionId) || 0
+        if (sessionWaitsOnPrompt(sessionId) && extended < ABORT_WATCHDOG_MAX_EXTENSIONS) {
+          abortWatchdogExtensions.set(sessionId, extended + 1)
+          armAbortWatchdog(sessionId)
+          return
+        }
+        setAbortState(sessionId, {
+          aborting: false,
+          synced: false,
+          error: STOP_UNCONFIRMED_MESSAGE,
+        })
+      }, ABORT_WATCHDOG_MS),
+    )
+  }
+
   function setAbortState(sessionId: string | null | undefined, state: AbortState | null) {
     if (!sessionId) return
     clearAbortWatchdog(sessionId)
-    if (state?.aborting) {
-      abortWatchdogs.set(
-        sessionId,
-        setTimeout(() => {
-          abortWatchdogs.delete(sessionId)
-          if (!abortStates.value.get(sessionId)?.aborting) return
-          setAbortState(sessionId, {
-            aborting: false,
-            synced: false,
-            error: STOP_UNCONFIRMED_MESSAGE,
-          })
-        }, ABORT_WATCHDOG_MS),
-      )
-    }
+    if (state?.aborting) armAbortWatchdog(sessionId)
     const next = new Map(abortStates.value)
     if (state) next.set(sessionId, state)
     else next.delete(sessionId)
@@ -6478,7 +6503,11 @@ export const useChatStore = defineStore('chat', () => {
   function stopStreaming() {
     const sid = activeSessionId.value
     if (!sid) return
-    if (isAborting.value) return
+    // A press already in flight blocks a second one, but a watchdog that gave up
+    // does not: that state is the client saying "I no longer know whether this
+    // landed", and its own message tells the user to press again.
+    const retryingUnconfirmed = abortState.value?.error === STOP_UNCONFIRMED_MESSAGE
+    if (isAborting.value && !retryingUnconfirmed) return
     clearPendingInteractions(sid)
     // The ring is driven by `isSessionWorking`, which also counts a live
     // delegation. Gating on the two foreground flags alone meant a session that

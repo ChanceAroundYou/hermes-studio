@@ -18,7 +18,7 @@ import type {
   PrimaryAgentBridgeOutput as AgentBridgeOutput,
 } from '../../public/chat-agent-runtime'
 import { contentBlocksToString, convertContentBlocksForAgent, extractTextForPreview, isContentBlockArray } from './content-blocks'
-import { buildCompressedHistory, buildDbSnapshotAwareHistory, forceCompressBridgeHistory, pushState, replaceState, setCompressionProgress } from './compression'
+import { buildCompressedHistory, buildDbSnapshotAwareHistory, forceCompressBridgeHistory, getOrCreateSession, pushState, replaceState, setCompressionProgress } from './compression'
 import { persistCompressionRecord } from './compression-record'
 import {
   calcAndUpdateUsage,

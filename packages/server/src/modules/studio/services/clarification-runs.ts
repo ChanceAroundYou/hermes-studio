@@ -1,14 +1,36 @@
 import { randomUUID } from 'node:crypto'
+import { logger } from '../public/logging'
 
 type RunState = { isWorking: boolean; isAborting?: boolean; activeRunMarker?: string; responseRun?: { runMarker?: string } }
 type Binding = { sessionId: string; profile: string; resolve: () => RunState | undefined; runId?: string }
-type Reason = 'response' | 'dismissed' | 'timeout' | 'cancelled'
+type Reason = 'response' | 'dismissed' | 'timeout' | 'cancelled' | 'aborted'
 type Result = { clarify_id: string; response: string; reason: Reason }
 type Pending = { contextId: string; sessionId: string; finish: (reason: Reason, response?: string) => void }
 export const CLARIFICATION_TIMEOUT_MS = 300_000
 
+/**
+ * Why a prompt was refused.
+ *
+ * Every refusal used to be a bare 409 carrying only a human sentence, so a
+ * caller could not tell "the turn is gone" from "this profile is not the one
+ * that asked" from "the request was cancelled" -- and nothing was written down
+ * either, so a prompt that never appeared left no trace at all.
+ */
+export type ClarificationErrorCode =
+  | 'invalid_request'
+  | 'context_unknown'
+  | 'context_wrong_profile'
+  | 'context_no_active_turn'
+  | 'request_aborted'
+
 export class ClarificationError extends Error {
-  constructor(message: string, public readonly status = 400) { super(message) }
+  constructor(
+    message: string,
+    public readonly status = 400,
+    public readonly code: ClarificationErrorCode = 'invalid_request',
+  ) {
+    super(message)
+  }
 }
 
 function parseQuestion(input: Record<string, unknown>) {
@@ -29,18 +51,47 @@ export class ClarificationRuns {
 
   constructor(private readonly publish: (sessionId: string, event: string, payload: Record<string, unknown>) => void) {}
 
+  /**
+   * Bind a turn's interaction context.
+   *
+   * This deliberately does not settle the session's outstanding prompts: a
+   * prompt belongs to the turn that raised it, and that turn's terminal event
+   * (`finishSession` with its own contextId) is what ends it. Sweeping here is
+   * what cancelled a still-open question the moment the next turn started.
+   */
   begin(contextId: string, sessionId: string, profile: string, resolve: Binding['resolve']): void {
-    this.finishSession(sessionId)
     this.bindings.set(contextId, { sessionId, profile, resolve })
+  }
+
+  /** Record the refusal, then refuse. Nothing here is silent. */
+  private refuse(
+    code: ClarificationErrorCode,
+    message: string,
+    detail: { contextId: string; profile: string; sessionId?: string },
+  ): never {
+    logger.warn(
+      { code, contextId: detail.contextId, sessionId: detail.sessionId, profile: detail.profile },
+      '[clarification-runs] refused an interaction request',
+    )
+    throw new ClarificationError(message, 409, code)
   }
 
   private active(contextId: string, profile: string) {
     const binding = this.bindings.get(contextId)
-    if (!binding || binding.profile !== profile) throw new ClarificationError('Interaction context is unavailable or has expired', 409)
+    if (!binding) {
+      this.refuse('context_unknown', 'Interaction context is unavailable or has expired', { contextId, profile })
+    }
+    if (binding.profile !== profile) {
+      this.refuse('context_wrong_profile', 'Interaction context belongs to another profile', {
+        contextId, profile, sessionId: binding.sessionId,
+      })
+    }
     const state = binding.resolve()
     const runId = state?.activeRunMarker || state?.responseRun?.runMarker
     if (!state?.isWorking || state.isAborting || !runId || (binding.runId && binding.runId !== runId)) {
-      throw new ClarificationError('Interaction context has no active turn', 409)
+      this.refuse('context_no_active_turn', 'Interaction context has no active turn', {
+        contextId, profile, sessionId: binding.sessionId,
+      })
     }
     binding.runId = runId
     return { binding, runId }
@@ -49,10 +100,14 @@ export class ClarificationRuns {
   request(contextId: string, profile: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<Result> {
     const { binding, runId } = this.active(contextId, profile)
     const { question, choices } = parseQuestion(input)
-    if (signal?.aborted) throw new ClarificationError('Interaction request was cancelled', 409)
-    if ([...this.pending.values()].some(item => item.sessionId === binding.sessionId)) {
-      throw new ClarificationError('Another clarification is already pending for this session', 409)
+    if (signal?.aborted) {
+      this.refuse('request_aborted', 'Interaction request was cancelled', {
+        contextId, profile, sessionId: binding.sessionId,
+      })
     }
+    // A session may wait on several prompts at once. Rejecting the second one
+    // made the question that arrived while the user was reading the first
+    // undeliverable, and the turn that asked it stalled until its timeout.
     const clarifyId = randomUUID()
     return new Promise((resolve, reject) => {
       const finish = (reason: Reason, response = '') => {
@@ -62,6 +117,7 @@ export class ClarificationRuns {
         try {
           this.publish(binding.sessionId, 'clarify.resolved', {
             event: 'clarify.resolved', run_id: runId, clarify_id: clarifyId, resolved: true, reason,
+            profile: binding.profile,
           })
         } catch (error) { reject(error); return }
         resolve({ clarify_id: clarifyId, response, reason })
@@ -76,6 +132,10 @@ export class ClarificationRuns {
           event: 'clarify.requested', run_id: runId, clarify_id: clarifyId, question,
           choices: choices.length ? choices : null, timeout_ms: CLARIFICATION_TIMEOUT_MS,
           remaining_timeout_ms: CLARIFICATION_TIMEOUT_MS, requested_at: Date.now(),
+          // The turn knows which profile it belongs to. Without it the delivery
+          // room was inferred from `sessionMap` and then the stored session, and
+          // a session that was not in either yet fell through to `default`.
+          profile: binding.profile,
         })
       } catch (error) {
         this.pending.delete(clarifyId)
@@ -100,12 +160,20 @@ export class ClarificationRuns {
     return { handled: true, resolved: true }
   }
 
-  finishSession(sessionId: string, contextId?: string): void {
+  /**
+   * End the prompts a session is waiting on.
+   *
+   * `reason` distinguishes "the turn ended" (`cancelled`) from "the user stopped
+   * the run" (`aborted`): the card says something different in each case, and
+   * conflating them told the user their question had been cancelled by the agent
+   * when in fact they had stopped it themselves.
+   */
+  finishSession(sessionId: string, contextId?: string, reason: Reason = 'cancelled'): void {
     for (const [id, binding] of this.bindings) {
       if (binding.sessionId === sessionId && (!contextId || id === contextId)) this.bindings.delete(id)
     }
     for (const pending of this.pending.values()) {
-      if (pending.sessionId === sessionId && (!contextId || pending.contextId === contextId)) pending.finish('cancelled')
+      if (pending.sessionId === sessionId && (!contextId || pending.contextId === contextId)) pending.finish(reason)
     }
   }
 }

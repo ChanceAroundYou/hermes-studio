@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
+vi.hoisted(() => { (globalThis as unknown as Record<string, unknown>).__APP_VERSION__ = 'test' })
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import chatSource from '../../packages/client/src/stores/hermes/chat.ts?raw'
+import messageListSource from '../../packages/client/src/components/hermes/chat/MessageList.vue?raw'
+import messageItemSource from '../../packages/client/src/components/hermes/chat/MessageItem.vue?raw'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 vi.mock('@/api/studio/background-status', () => ({ observeBackgroundStatus: vi.fn(() => vi.fn()) }))
@@ -24,6 +27,7 @@ vi.mock('@/api/studio/chat', () => ({
   respondToolApproval: vi.fn(),
   respondClarify: vi.fn(),
   onPeerUserMessage: vi.fn(() => vi.fn()),
+  onUnobservedRunStarted: vi.fn(() => vi.fn()),
   onSessionCommand: vi.fn(() => vi.fn()),
   onSessionTitleUpdated: vi.fn(() => vi.fn()),
   onRunUsageUpdated: vi.fn(() => vi.fn()),
@@ -368,7 +372,7 @@ describe('clearing the tracked state keeps the record', () => {
    * exactly what this catches.
    */
   it('never deletes transcript entries when the state is cleared', () => {
-    const source = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
+    const source = chatSource
     const start = source.indexOf('function setCompressionState(')
     const body = source.slice(start, source.indexOf('\n  function ', start + 10))
     expect(body).toContain("recordCompressionEntry(sessionId, state)")
@@ -378,15 +382,12 @@ describe('clearing the tracked state keeps the record', () => {
 
 describe('the run indicator no longer owns the compression notice', () => {
   it('renders no compression banner in MessageList', () => {
-    const source = readFileSync(
-      'packages/client/src/components/hermes/chat/MessageList.vue',
-      'utf8',
-    )
+    const source = messageListSource
     expect(source).not.toContain('chatStore.compressionState')
   })
 
   it('recognises a persisted compression row on the way back from the server', () => {
-    const source = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
+    const source = chatSource
     // A row the server persisted has to come back as a transcript entry. Without
     // this the record survives in the DB but vanishes from the UI on re-fetch,
     // which is the exact failure the persistence was meant to fix.
@@ -398,7 +399,7 @@ describe('the run indicator no longer owns the compression notice', () => {
   })
 
   it('collapses the live entry into the persisted row on both resume paths', () => {
-    const source = readFileSync('packages/client/src/stores/hermes/chat.ts', 'utf8')
+    const source = chatSource
     // The event path merges on its own, but a socket resume replaces the whole
     // message list without firing an event, so those paths have to merge too.
     // Both are identified by the resume payload's `data.messages`, which the
@@ -406,41 +407,41 @@ describe('the run indicator no longer owns the compression notice', () => {
     expect(source).toContain('function mergePersistedCompressionEntries(')
     const resumeSites = source.split('target.messages = mapHermesMessages(data.messages').length - 1
     expect(resumeSites).toBe(2)
+    // The window stops at the next assignment: a site that merges puts the call
+    // immediately after the mapping, so a wider slice would match the *next*
+    // site's call and pass even when this one was missing it.
     for (const site of source.split('target.messages = mapHermesMessages(data.messages').slice(1)) {
-      expect(site.slice(0, 220)).toContain('mergePersistedCompressionEntries(')
+      const upToNextAssignment = site.split('target.messagesLoaded')[0]
+      expect(upToNextAssignment).toContain('mergePersistedCompressionEntries(')
     }
   })
 
   it('keeps the compression entry out of the retired amber system bubble', () => {
-    const source = readFileSync(
-      'packages/client/src/components/hermes/chat/MessageItem.vue',
-      'utf8',
-    )
+    const source = messageItemSource
     // role:'system' pulls in .message-bubble.system -- the amber left-striped
-    // bubble this fork already retired when it unified the error bubble.
-    expect(source).toContain('!props.message.compression')
+    // bubble this fork already retired when it unified the error bubble. Pinned
+    // as the class binding, not as a bare substring: `compression:` sits in the
+    // same object, so a loose check passed a mutation that dropped this guard.
+    expect(source).toMatch(/system: isSystem && !props\.message\.compression,/)
+    expect(source).toMatch(/compression: !!props\.message\.compression,/)
   })
 
   it('gives every compression state the one rounded command card', () => {
-    const source = readFileSync(
-      'packages/client/src/components/hermes/chat/MessageItem.vue',
-      'utf8',
-    )
+    const source = messageItemSource
     // One selector list, so compressing / settled / failed cannot drift apart.
     expect(source).toMatch(/&\.command,\s*\/\/[^]*?&\.compression \{/)
     const start = source.indexOf('&.command,')
     const block = source.slice(start, source.indexOf('}', start))
-    expect(block).toContain('border: 1px solid rgba(var(--accent-primary-rgb), 0.12)')
+    // The width is a theme token, so it is asserted by shape rather than by
+    // value: a literal here would stop the card following the selected theme.
+    expect(block).toMatch(/border: var\(--border-width, [^)]+\) solid rgba\(var\(--accent-primary-rgb\), 0\.12\)/)
     expect(block).toContain('background-color: rgba(var(--accent-primary-rgb), 0.04)')
     // And the bubble actually opts into it.
     expect(source).toContain('compression: !!props.message.compression')
   })
 
   it('renders the compression as a transcript entry in MessageItem', () => {
-    const source = readFileSync(
-      'packages/client/src/components/hermes/chat/MessageItem.vue',
-      'utf8',
-    )
+    const source = messageItemSource
     expect(source).toContain('class="compression-entry"')
     expect(source).toContain('message.compression')
   })

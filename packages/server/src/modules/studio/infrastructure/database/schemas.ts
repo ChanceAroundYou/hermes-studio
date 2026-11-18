@@ -72,6 +72,27 @@ export const USAGE_PRICING_SCHEMA = {
 // Session Store (session-store.ts)
 // ============================================================================
 
+export const PENDING_INTERACTIONS_TABLE = 'pending_interactions'
+export const PENDING_INTERACTIONS_SCHEMA: Record<string, string> = {
+  // `scope` + `owner_id` together name the carrier (a session, a room, a device).
+  // The same interaction id may exist once per carrier, so both columns are part
+  // of the identity — see idx_pending_interactions_identity.
+  scope: 'TEXT NOT NULL',
+  owner_id: 'TEXT NOT NULL',
+  interaction_id: 'TEXT NOT NULL',
+  kind: 'TEXT NOT NULL',
+  status: 'TEXT NOT NULL',
+  profile: 'TEXT NOT NULL',
+  question: 'TEXT NOT NULL',
+  choices: 'TEXT',
+  run_id: 'TEXT',
+  context_id: 'TEXT',
+  deadline: 'INTEGER',
+  created_at: 'INTEGER NOT NULL',
+  resolved_at: 'INTEGER',
+  resolved_reason: 'TEXT',
+}
+
 export const TASK_PLANS_TABLE = 'task_plans'
 export const TASK_PLANS_SCHEMA: Record<string, string> = {
   session_id: 'TEXT NOT NULL',
@@ -1764,6 +1785,14 @@ export function initAllHermesTables(): void {
       indexes: WORKSPACE_FAVORITES_INDEXES,
     })
     createIndexes(db, WORKSPACE_FAVORITES_INDEXES)
+    syncTable(PENDING_INTERACTIONS_TABLE, PENDING_INTERACTIONS_SCHEMA, {
+      indexes: {
+        // The whole identity. Dropping either column makes a room and a session
+        // sharing an interaction id collide into one row.
+        idx_pending_interactions_identity: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_interactions_identity ON pending_interactions(scope, owner_id, interaction_id)',
+        idx_pending_interactions_profile: 'CREATE INDEX IF NOT EXISTS idx_pending_interactions_profile ON pending_interactions(profile, status)',
+      },
+    })
     syncTable(TASK_PLANS_TABLE, TASK_PLANS_SCHEMA, {
       indexes: {
         idx_task_plans_identity: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_task_plans_identity ON task_plans(session_id, plan_id)',

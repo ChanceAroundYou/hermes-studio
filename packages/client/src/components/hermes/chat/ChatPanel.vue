@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import PageSidebar from "@/components/layout/PageSidebar.vue"
+import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { usePageSidebarState } from "@/composables/usePageSidebar"
 import { usePageLoadingTask } from '@/composables/usePageLoading'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import HeaderSidebarToggle from '@/components/layout/HeaderSidebarToggle.vue'
-import { resolveProfileDisplayName } from '@/utils/hermes/profile-display-name'
 import { AGENT_OPTIONS } from "@/utils/agent-options"
 import { setSessionPinned } from "@/api/studio/sessions";
 import DshSessionPresetSelect from "@/components/coding-agents/dsh/DshSessionPresetSelect.vue";

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
+vi.hoisted(() => { (globalThis as unknown as Record<string, unknown>).__APP_VERSION__ = 'test' })
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { readFileSync } from 'node:fs'
+import chatInputSource from '../../packages/client/src/components/hermes/chat/ChatInput.vue?raw'
 import { toSkillPickerItems } from '../../packages/client/src/utils/hermes/slash-command-skills'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
@@ -295,7 +296,7 @@ describe('the slash menu is reachable and the skill group is visible', () => {
       { name: 'plan only', description: 'Plan and stop', enabled: true },
     ])
     await typeSlash(wrapper, '/')
-    const css = readFileSync('packages/client/src/components/hermes/chat/ChatInput.vue', 'utf8')
+    const css = chatInputSource
     const start = css.indexOf('.slash-command-dropdown {')
     const block = css.slice(start, css.indexOf('}', start))
     // 240px showed ~6 of the 22 built-ins, putting every skill ~880px down a
@@ -465,5 +466,35 @@ describe('skills the host cannot dispatch stay out of the Ekko menu', () => {
     expect(names).toContain('/ok-skill')
     // Built-ins survive: one bad row must not take the menu down.
     expect(names).toContain('/context')
+  })
+})
+import { rewriteSkillSlashCommand } from '../../packages/client/src/utils/hermes/slash-command-skills'
+import chatStoreSource from '../../packages/client/src/stores/hermes/chat.ts?raw'
+
+/**
+ * The menu shows `/plan-only`, and that bare form is not a known bridge command.
+ * Without a rewrite at the point that decides what goes on the wire, the entry
+ * inserts text that arrives at the agent as ordinary prose and never loads the
+ * skill -- the menu would look like it worked while doing nothing.
+ */
+describe('a selected skill still reaches the agent as a skill invocation', () => {
+  it('rewrites a known skill name for a bridge session', () => {
+    expect(rewriteSkillSlashCommand('/plan-only', new Set(['plan-only']), true)).toBe('/skill plan-only')
+  })
+
+  it('leaves an Ekko session alone, because it dispatches by bare name', () => {
+    // `/skill <name>` is inert where the agent resolves names directly, so the
+    // rewrite would replace a working invocation with one it cannot read.
+    expect(rewriteSkillSlashCommand('/plan-only', new Set(['plan-only']), false)).toBe('/plan-only')
+  })
+
+  it('sends the rewritten form, not the typed one', () => {
+    // Anchored on the send path: the rewrite has to be the value the rest of
+    // sendMessage reads, and it has to be gated on a bridge session.
+    const start = chatStoreSource.indexOf('const trimmedContent = rewriteSkillSlashCommand(')
+    expect(start).toBeGreaterThan(-1)
+    const body = chatStoreSource.slice(start, start + 800)
+    expect(body).toMatch(/activeSession\.value\?\.source === 'cli'/)
+    expect(chatStoreSource).toContain('function setKnownSkillCommandNames(')
   })
 })

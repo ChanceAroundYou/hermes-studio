@@ -426,6 +426,31 @@ interface TaskPlanRunState {
   activeRunMarker: string | undefined
 }
 
+/**
+ * Profile names a connection asked to be told about, from the handshake.
+ *
+ * socket.io query values are strings, so this is a JSON array. Anything else is
+ * treated as "not asked", which is what keeps a malformed value from becoming
+ * an unbounded join loop.
+ */
+export function parsePendingProfileList(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw.trim()) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const names = parsed
+    .map(value => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean)
+  return [...new Set(names)].slice(0, PENDING_PROFILE_ROOM_LIMIT)
+}
+
+/** Mirrors the client cap; a handshake must not decide how many rooms we join. */
+const PENDING_PROFILE_ROOM_LIMIT = 50
+
 export class ChatRunSocket {
   private nsp: ReturnType<Server['of']>
   private bridge = createPrimaryAgentBridge()
@@ -441,6 +466,7 @@ export class ChatRunSocket {
   private readonly taskPlanRuns = new TaskPlanRuns(saveTaskPlan, (sessionId, snapshot) => {
     this.emitExternalEvent(sessionId, 'plan.updated', { event: 'plan.updated', ...snapshot })
   })
+  /** contextId -> locally-tracked run state for bridge runs (see beginTaskPlanRun). */
   private readonly clarificationRuns = new ClarificationRuns((sessionId, event, payload) => {
     this.emitExternalEvent(sessionId, event, payload)
     if (event === 'clarify.resolved') this.clearClarifyEventState(sessionId, String(payload.clarify_id))
@@ -632,7 +658,10 @@ export class ChatRunSocket {
   private beginTaskPlanRun(sessionId: string | undefined, profile: string) {
     if (!sessionId) return undefined
     runMcpCredentials.revoke(sessionId)
-    this.clarificationRuns.finishSession(sessionId)
+    // Deliberately no `clarificationRuns.finishSession(sessionId)` here: that
+    // swept every outstanding prompt for the session on each new turn, which is
+    // how a question raised by the previous turn disappeared. `finishTaskPlanRun`
+    // settles the prompts of the turn that is actually ending, by contextId.
     // CLI-bridge runs (`chat-run` over the agent bridge) do not populate
     // `sessionMap` — that map is only filled by browser-socket resume/load
     // paths. Binding the plan purely to `sessionMap.get(sessionId)` therefore
@@ -670,10 +699,15 @@ export class ChatRunSocket {
   private finishTaskPlanRun(sessionId: string, event: string, payload?: any, contextId?: string) {
     if (!['run.completed', 'run.failed', 'abort.completed'].includes(event)) return
     runMcpCredentials.revoke(sessionId, contextId)
-    this.clarificationRuns.finishSession(sessionId, contextId)
+    // A stop is not the same as a turn ending: the prompt is settled either way,
+    // but the reason travels to the card so it can say which one happened.
+    this.clarificationRuns.finishSession(sessionId, contextId, event === 'abort.completed' ? 'aborted' : 'cancelled')
     // Stop accepting plan writes for this run before finalizing the snapshot.
     this.releaseTaskPlanRunState(contextId)
-    const interrupted = event === 'abort.completed' || payload?.interrupted === true || payload?.result?.interrupted === true || this.sessionMap.get(sessionId)?.isAborting
+    // Upstream #3404: a queue boundary can finish after its queued input was removed,
+    // leaving a stale `interrupted` flag on the payload. Only the terminal abort event
+    // or a live aborting state on this socket means the user actually pressed Stop.
+    const interrupted = event === 'abort.completed' || this.sessionMap.get(sessionId)?.isAborting
     const executionState = interrupted ? 'interrupted' : event === 'run.failed' ? 'failed' : 'ended'
     try {
       if (contextId) this.taskPlanRuns.finish(contextId, executionState)
@@ -987,7 +1021,20 @@ export class ChatRunSocket {
     const currentProfile = () => socketProfile || getActiveProfileName() || 'default'
     const mobileTarget = socket.data.mobileDeviceTarget as MobileDeviceTarget | undefined
     if (mobileTarget) socket.join(mobileDeviceRoom(mobileTarget))
-    if (!shared) { socket.join('studio-account'); socket.join(`pending-interactions:${currentProfile()}`) }
+    if (!shared) {
+      socket.join('studio-account')
+      socket.join(`pending-interactions:${currentProfile()}`)
+      // A prompt is published to the room of the profile that asked for it, and
+      // this connection only sat in the active profile's room -- so a question
+      // raised on any other profile the user owns could not be delivered until
+      // the session was opened by hand. Each requested profile is checked
+      // against the same access rule as everything else on this socket.
+      for (const profile of parsePendingProfileList(socket.handshake.query?.pending_profiles)) {
+        if (!socketUser || profile === currentProfile()) continue
+        if (!this.canAccessProfile(socketUser, profile)) continue
+        socket.join(`pending-interactions:${profile}`)
+      }
+    }
     socket.emit('session.activity.snapshot', {
       event: 'session.activity.snapshot',
       profile: currentProfile(),

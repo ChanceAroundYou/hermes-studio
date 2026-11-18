@@ -363,6 +363,36 @@ export async function fetchWorkingSessions(): Promise<WorkingSessionSnapshot[]> 
   )
 }
 
+/**
+ * Every question or approval the server still considers open for this user.
+ *
+ * This is the authority the socket events are not: it survives a missed
+ * delivery, a reconnect and a refresh, and it is the only thing that can
+ * withdraw a card the server has already given up on.
+ */
+export interface PendingInteractionRow {
+  scope: 'session' | 'room' | 'device'
+  owner_id: string
+  interaction_id: string
+  kind: 'clarify' | 'approval'
+  status: string
+  profile: string
+  question: string
+  choices: string[] | null
+  run_id: string | null
+  context_id: string | null
+  remaining_timeout_ms: number | null
+  created_at: number
+  resolved_at: number | null
+  resolved_reason: string | null
+}
+
+export async function fetchPendingInteractions(): Promise<PendingInteractionRow[]> {
+  const response = await request<{ interactions: PendingInteractionRow[] }>('/api/studio/chat-run/pending-interactions')
+  return (response && Array.isArray(response.interactions) ? response.interactions : [])
+    .filter(row => Boolean(row && row.interaction_id && row.owner_id))
+}
+
 export async function listSessionWorkspaceFiles(
   sessionId: string,
   path: string = '',

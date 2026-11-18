@@ -3,9 +3,17 @@ import type { Context } from 'koa'
 import { randomUUID } from 'crypto'
 import { io, type Socket } from 'socket.io-client'
 import { config } from '../public/config'
-import { socketIoClientPath } from '../public/socket-io-path'
 import { getChatRunServer } from '../public/chat-run'
 import { resolveModelExecutionIdentity } from '../contracts/runs/model-execution-identity'
+import { listPendingInteractions } from '../repositories/pending-interaction-store'
+import { getGroupChatRuntimeServer } from '../services/group-chat/runtime'
+import { canReadGroupChatRoom } from '../services/group-chat/access'
+import { listUserProfiles } from '../public/users'
+import {
+  PENDING_INTERACTION_SCOPES,
+  type PendingInteractionScope,
+  type PendingInteractionSnapshot,
+} from '../contracts/pending-interaction'
 
 type ChatRunPayload = Record<string, unknown> & {
   input?: unknown
@@ -66,6 +74,13 @@ const CHAT_RUN_EVENTS = [
   'peer.user.message',
 ]
 
+/** `null` means every profile, matching the other Studio controllers. */
+function allowedProfileNames(ctx: Context): string[] | null {
+  const user = ctx.state?.user as { id: number; role: string } | undefined
+  if (!user || user.role === 'super_admin') return null
+  return listUserProfiles(user.id).map(profile => profile.profile_name)
+}
+
 const DEFAULT_TIMEOUT_MS = 300_000
 const MAX_TIMEOUT_MS = 1_800_000
 const MAX_RECORDED_EVENTS = 1000
@@ -100,6 +115,50 @@ export async function workingSessions(ctx: Context) {
     // guessing with a timer, which either stalled the ring or cleared it early.
     background_pending: Number(session.backgroundPending) || 0,
   })) }
+}
+
+/**
+ * The one authoritative answer to "what is waiting for this user right now".
+ *
+ * It reads storage rather than the in-process callbacks, because the callbacks
+ * belong to a turn and cannot survive a restart, while the question the user
+ * still has to answer should.
+ */
+export async function pendingInteractions(ctx: Context) {
+  const requested = typeof ctx.query?.scope === 'string' ? ctx.query.scope : ''
+  if (requested && !(PENDING_INTERACTION_SCOPES as readonly string[]).includes(requested)) {
+    ctx.status = 400
+    ctx.body = { ok: false, error: `scope must be one of ${PENDING_INTERACTION_SCOPES.join(', ')}` }
+    return
+  }
+  const profiles = allowedProfileNames(ctx)
+  const now = Date.now()
+  // A profile is a shared carrier, so filtering rows by profile is enough for
+  // `session` and `device`. A room is not shared that way: two users can both
+  // be allowed on `research` and still not be allowed to read a given room, so
+  // room rows go through the same membership check every other room route uses.
+  const groupChat = getGroupChatRuntimeServer()
+  const groupChatStorage = groupChat && typeof groupChat.getStorage === 'function' ? groupChat.getStorage() : null
+  const canSee = (row: PendingInteractionSnapshot) => {
+    if (row.scope !== 'room') return true
+    if (!groupChatStorage) return false
+    return canReadGroupChatRoom(groupChatStorage, row.owner_id, ctx.state?.user)
+  }
+  ctx.body = {
+    // The countdown on the client is a monotonic one, so send the remaining
+    // duration rather than a server instant: two clocks that disagree would
+    // otherwise show a prompt that is already over, or one that never ends.
+    interactions: listPendingInteractions({
+      scope: (requested || undefined) as PendingInteractionScope | undefined,
+      // `undefined` means "no filter" (a super admin); an array — including an
+      // empty one — is the caller's real allow-list, so it must never be dropped.
+      profiles: profiles ?? undefined,
+    }).filter(canSee).map(row => ({
+      ...row,
+      deadline: undefined,
+      remaining_timeout_ms: row.deadline === null ? null : Math.max(0, row.deadline - now),
+    })),
+  }
 }
 
 export async function requestMobileLocation(ctx: Context) {
@@ -254,7 +313,7 @@ export async function runOnce(ctx: Context) {
   const token = bearerToken(ctx)
   const profile = profileFrom(ctx, body)
   const payload: Record<string, unknown> = { ...userBody(body), profile }
-  const isCodingAgentRun = body.source === 'coding_agent' || body.coding_agent_id != null || body.agent_id != null
+  const isCodingAgentRun = body.source === 'builtin_agent' || body.source === 'coding_agent' || body.coding_agent_id != null || body.agent_id != null
   if (isCodingAgentRun) {
     try {
       const identity = await resolveModelExecutionIdentity({
@@ -291,7 +350,6 @@ export async function runOnce(ctx: Context) {
         ? { token: ctx.state.sessionShare.token, appAccessToken: ctx.state.sessionShare.appAccessToken }
         : token ? { token } : {},
       query: { profile },
-      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: false,
       timeout: 30_000,

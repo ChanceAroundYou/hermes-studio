@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test'
 import { authenticate, mockChatSocket, mockHermesApi, TEST_ACCESS_KEY } from './fixtures'
 
+// Each test boots the whole app against a dev server. Sharing the host with the
+// other worker pushes that boot past the default 30s budget, which then reads as
+// a missing control rather than a slow one.
+test.describe.configure({ timeout: 90_000 })
+
 const inputPlaceholder = 'Type a message... (Enter to send, Shift+Enter for new line)'
 
 async function open(page: Page) {
@@ -132,4 +137,95 @@ test('the dismiss button is padded like the choices beside it', async ({ page })
     expect(entry.top).toBeGreaterThanOrEqual(6)
     expect(entry.bottom).toBeGreaterThanOrEqual(6)
   }
+})
+
+test('a background prompt in the notification window can actually be answered', async ({ page }) => {
+  await open(page)
+  await page.setViewportSize({ width: 412, height: 900 })
+
+  // Open a conversation first: the chat socket only exists once a run has been
+  // started, and the notification path needs a live connection to arrive on.
+  await send(page, 'start a conversation')
+  await waitForRun(page)
+
+  // Now a prompt for a session the user is *not* looking at. The global
+  // notification window is the only surface this prompt has, which is why a
+  // style rule that swallowed the click -- or pushed the card past the clipped
+  // edge -- left it unanswerable with no other way in.
+  await page.evaluate(() => {
+    const payload = {
+      event: 'clarify.requested',
+      session_id: 'session-background',
+      run_id: 'run-background',
+      clarify_id: 'clarify-background',
+      question: 'Background question?',
+      choices: ['Yes', 'No'],
+      response_mode: 'choice',
+      timeout_ms: 300000,
+      remaining_timeout_ms: 300000,
+      profile: 'research',
+    }
+    const state = (window as any).__PW_CHAT_SOCKET__
+    for (const socket of state.sockets) socket.__trigger('clarify.requested', payload)
+  })
+
+  const card = page.locator('.pending-interaction-card--notification')
+  await expect(card).toBeVisible({ timeout: 20_000 })
+
+  const button = card.getByRole('button', { name: 'Yes' })
+  await expect(button).toBeVisible({ timeout: 10_000 })
+
+  // Nothing may sit on top of the card. The notification's own chrome used to
+  // overlay it, so the prompt rendered but no click ever reached it.
+  //
+  // Measured after the entrance transition settles. The toaster slides the card
+  // in from outside the viewport, so sampling during the animation reports an
+  // off-screen rect and `elementFromPoint` returns null -- which is a timing
+  // artefact, not an unreachable button, and made this assertion fail on its own
+  // animation.
+  await expect
+    .poll(async () => button.evaluate(el => {
+      const rect = el.getBoundingClientRect()
+      const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      return Boolean(top && (el === top || el.contains(top)))
+    }), { timeout: 10_000, intervals: [100, 200, 400] })
+    .toBe(true)
+
+  const hit = await button.evaluate(el => {
+    const rect = el.getBoundingClientRect()
+    return { width: rect.width, height: rect.height }
+  })
+  // And it is a real, sized target rather than a collapsed box.
+  expect(hit.width).toBeGreaterThan(0)
+  expect(hit.height).toBeGreaterThan(0)
+
+  // And it stays inside the window it was given. The card used to be pulled out
+  // of the toaster with a negative margin, and `.n-notification` clips its
+  // content, so the cross-session prompt for a session you are not looking at
+  // rendered past the visible edge.
+  const geometry = await card.evaluate(el => {
+    const rect = el.getBoundingClientRect()
+    const host = el.closest('.n-notification')?.getBoundingClientRect()
+    return {
+      insideHost: Boolean(host)
+        && rect.left >= (host!.left - 1)
+        && rect.right <= (host!.right + 1),
+      width: rect.width,
+      hostWidth: host?.width ?? 0,
+    }
+  })
+  expect(geometry.insideHost).toBe(true)
+  expect(geometry.width).toBeGreaterThan(0)
+  expect(geometry.width).toBeLessThanOrEqual(geometry.hostWidth)
+
+  await button.click()
+
+  await expect
+    .poll(async () => page.evaluate(() => {
+      const state = (window as any).__PW_CHAT_SOCKET__
+      return (state?.emitted || [])
+        .filter((item: any) => item.event === 'clarify.respond')
+        .map((item: any) => item.payload?.clarify_id)
+    }), { timeout: 20_000 })
+    .toContain('clarify-background')
 })

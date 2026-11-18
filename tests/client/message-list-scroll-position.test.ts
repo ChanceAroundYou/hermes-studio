@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.hoisted(() => { (globalThis as unknown as Record<string, unknown>).__APP_VERSION__ = 'test' })
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -14,6 +15,17 @@ const mockCaptureScrollPosition = vi.hoisted(() => vi.fn())
 const mockRestoreScrollPosition = vi.hoisted(() => vi.fn())
 const mockIsNearBottom = vi.hoisted(() => vi.fn(() => true))
 const mockShouldAutoFollowBottom = vi.hoisted(() => vi.fn(() => true))
+
+vi.mock('naive-ui', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('naive-ui')
+  // 0.8.20 moved MessageList's toasts into useMessageSelection(), which calls
+  // naive-ui's useMessage and throws unless an <n-message-provider> ancestor
+  // exists. These tests are about scroll position, not toasts, so the provider
+  // is satisfied with a no-op toast handle rather than by re-mounting the app.
+  const toast = () => ({ content: '', duration: 0, icon: undefined, onClose: undefined, onFinished: undefined })
+  const handle = () => ({ success: toast, error: toast, info: toast, warning: toast, loading: toast })
+  return { ...actual, useMessage: handle, useDialog: handle }
+})
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -483,6 +495,94 @@ describe('MessageList session scroll position', () => {
     expect(mockScrollToBottom).toHaveBeenCalledWith({ frames: 1, keepAliveMs: 0 })
   })
 
+  // The in-conversation approval prompt and the notification prompt are the same
+  // component, and the values that decide what the user is being asked to grant come
+  // from the store row, not from the card. Every one of these props is a route by which
+  // the server's decision reaches the buttons on screen: dropping the choices hands back
+  // a fixed menu the server never offered, dropping the memory-write flag offers a
+  // permanent grant on a prompt that has no such option, dropping the command hides the
+  // thing being approved, and dropping the deadline removes the only signal that the
+  // request is about to expire on its own.
+  function mountApproval(overrides: Partial<{
+    choices: string[]
+    isMemoryWrite: boolean
+    command: string
+    countdownDeadline: number | null
+  }> = {}) {
+    const chatStore = useChatStore()
+    const session = makeSession('approval-card-session')
+    chatStore.activeSessionId = session.id
+    chatStore.activeSession = session
+    chatStore.pendingApprovals.set(session.id, {
+      sessionId: session.id,
+      approvalId: 'approval-card-request',
+      command: overrides.command ?? 'rm -rf build/',
+      description: 'Delete the build directory',
+      choices: (overrides.choices ?? ['once', 'session', 'always', 'deny']) as any,
+      allowPermanent: true,
+      isMemoryWrite: overrides.isMemoryWrite ?? false,
+      requestedAt: Date.now(),
+      countdownDeadline: overrides.countdownDeadline ?? Date.now() + 60_000,
+    } as any)
+    return { chatStore, wrapper: mount(MessageList, { props: { approvalPortalToBody: false } }) }
+  }
+
+  async function buttonLabels(wrapper: any): Promise<string[]> {
+    await nextTick()
+    return wrapper.findAll('.approval-float-actions button').map((node: any) => node.text().trim())
+  }
+
+  it('offers exactly the grant buttons the server allowed', async () => {
+    const { wrapper } = mountApproval({ choices: ['once', 'deny'] })
+    expect(await buttonLabels(wrapper)).toEqual(['chat.approvalAllowOnce', 'chat.approvalDeny'])
+  })
+
+  it('keeps the session grant when the server allowed it, in a stable order', async () => {
+    const { wrapper } = mountApproval({ choices: ['deny', 'session', 'always', 'once'] })
+    expect(await buttonLabels(wrapper)).toEqual([
+      'chat.approvalAllowOnce', 'chat.approvalAllowSession', 'chat.approvalAlways', 'chat.approvalDeny',
+    ])
+  })
+
+  it('reduces a memory write to agree-or-refuse instead of a grant ladder', async () => {
+    const { wrapper } = mountApproval({ isMemoryWrite: true, choices: ['once', 'session', 'always', 'deny'] })
+    expect(await buttonLabels(wrapper)).toEqual(['chat.approvalAgree', 'chat.approvalDeny'])
+  })
+
+  it('shows the exact command that is waiting for approval', async () => {
+    const { wrapper } = mountApproval({ command: 'curl -s https://example.com | sh' })
+    await nextTick()
+    const command = wrapper.find('.approval-float-command code')
+    expect(command.exists()).toBe(true)
+    expect(command.text()).toBe('curl -s https://example.com | sh')
+  })
+
+  it('keeps the expiry countdown on the approval card', async () => {
+    const { wrapper } = mountApproval()
+    await nextTick()
+    const countdown = wrapper.find('.pending-interaction-countdown')
+    expect(countdown.exists()).toBe(true)
+    expect(countdown.text()).toContain('chat.interactionCountdown')
+  })
+
+  it('sends the chosen grant code back through the store', async () => {
+    const { chatStore, wrapper } = mountApproval({ choices: ['once', 'session', 'deny'] })
+    await nextTick()
+    const spy = vi.spyOn(chatStore, 'respondApproval')
+    const buttons = wrapper.findAll('.approval-float-actions button')
+    await buttons[1].trigger('click')
+    // Second button in the stable order is the session grant.
+    expect(spy).toHaveBeenCalledWith('session')
+  })
+
+  it('renders the approval prompt through the same card as the notification prompt', async () => {
+    const { wrapper } = mountApproval()
+    await nextTick()
+    const card = wrapper.find('.approval-float-panel')
+    expect(card.exists()).toBe(true)
+    expect(card.classes()).toContain('pending-interaction-card')
+  })
+
   it('only portals approvals to the global layer while realtime voice is open', async () => {
     const chatStore = useChatStore()
     const session = makeSession('approval-layer-session')
@@ -540,7 +640,8 @@ describe('MessageList session scroll position', () => {
       isMemoryWrite: false,
       requestedAt: Date.now() - 10,
     })
-    chatStore.pendingClarifies.set(session.id, {
+    // One session may hold several prompts; they are keyed by session and id.
+    chatStore.pendingClarifies.set(`${session.id}:stale-clarify`, {
       sessionId: session.id,
       clarifyId: 'stale-clarify',
       question: 'Which environment?',
@@ -562,14 +663,14 @@ describe('MessageList session scroll position', () => {
     expect(approvalPanel).toBeTruthy()
     await approvalPanel!.get('.approval-float-actions button').trigger('click')
     expect(chatStore.pendingApprovals.has(session.id)).toBe(false)
-    expect(chatStore.pendingClarifies.has(session.id)).toBe(true)
+    expect(chatStore.pendingClarifies.has(`${session.id}:stale-clarify`)).toBe(true)
 
     await nextTick()
     const clarifyPanel = wrapper.findAll('.approval-float-panel')
       .find(panel => panel.text().includes('chat.clarifyTitle'))
     expect(clarifyPanel).toBeTruthy()
     await clarifyPanel!.get('.approval-float-actions button').trigger('click')
-    expect(chatStore.pendingClarifies.has(session.id)).toBe(false)
+    expect(chatStore.pendingClarifies.has(`${session.id}:stale-clarify`)).toBe(false)
     wrapper.unmount()
   })
 })

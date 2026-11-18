@@ -21,7 +21,7 @@ export async function requestClarification(ctx: Context) {
   } catch (err) {
     if (!(err instanceof ClarificationError)) throw err
     ctx.status = err.status
-    ctx.body = { ok: false, error: err.message }
+    ctx.body = { ok: false, error: err.message, code: err.code }
   } finally {
     ctx.res.removeListener('close', onClose)
   }

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+vi.hoisted(() => { (globalThis as Record<string, unknown>).__APP_VERSION__ = 'test' })
 import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('@/api/studio/background-status', () => ({ observeBackgroundStatus: vi.fn(() => vi.fn()) }))
@@ -8,6 +9,7 @@ const api = vi.hoisted(() => ({
   startRunViaSocket: vi.fn(), resumeSession: vi.fn(), registerSessionHandlers: vi.fn(), connectChatRun: vi.fn(),
 }))
 vi.mock('@/api/studio/chat', () => ({
+  onUnobservedRunStarted: vi.fn(() => vi.fn()),
   ...api,
   unregisterSessionHandlers: vi.fn(),
   getChatRunSocket: vi.fn(() => ({ emit: vi.fn() })),
@@ -92,7 +94,9 @@ describe('sidebar working flags from the working-sessions snapshot', () => {
   it('keeps a run lit when the snapshot raced its start and does not list it', async () => {
     // The snapshot is a plain HTTP read: it can be taken before the run it
     // would report. Clearing the flag there would make the sidebar blink out
-    // for a whole poll interval.
+    // for a whole poll interval. Fourteen seconds is inside the snapshot-veto
+    // window on purpose: the boundary is fifteen, and the next case proves the
+    // other side of it.
     listSessions('me', 'painting')
     const store = useChatStore()
     workingSnapshot([['me', Date.now() - 14_000]])

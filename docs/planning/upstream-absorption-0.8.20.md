@@ -102,3 +102,91 @@
 3. **保持现状**（不升级）：0.7.23 基线 + 219 提交 + 本次 41 文件改动继续维护，将来再随版本移动。
 
 需要先决定 §二 中具体吸收哪几条，之后我按 TDD 逐条移植。
+
+---
+
+## 六、吸收执行状态（2026-11-09 基线快照）
+
+> 本节记录**实际执行结果**，与上面的“计划态”分类并存。基线 = worktree `absorb-worker`，detached HEAD
+> `cedaceaef`（Studio 0.8.20），**未提交**。
+>
+> 门禁：`npx vite build` **通过**；`npx vue-tsc -b --force` **0 错误**；
+> `npx tsc --noEmit -p packages/server/tsconfig.json` **0 错误**。
+> 治理测试集 **181/182 → 修断言后 8/8**（`pending-card-enter`）。
+> 客户端全量 **389 / 427**，38 失败全部归因到下列「待处理」单元。
+
+### A. 已吸收（有测试守卫）
+
+| 单元 | 内容 | 状态 |
+| --- | --- | --- |
+| 待办交互治理 | `pending_interactions` 表、快照接口、D1–D5、房间越权 `canReadGroupChatRoom` 失败闭合 | 已吸收 · 曾通过 · 本轮复跑 181/182 |
+| `sessionTasksEnabled` 透传 | **上游 0.8.20 能力**，我们的重写接住了参数却没往下传，导致每次会话目标请求 409 | 已吸收 · 3/3 变异杀死 |
+| `listWorkingSessions` | 整个方法缺失，`/working-sessions` 接口恒返回 `[]` | 已吸收 · 7/7 测试 · 6/6 变异 |
+| 压缩功能（服务端） | `compression-record.ts` 106 行、进度快照、`/compress`、bridge 自动压缩、resume 载荷 | 已吸收 · 4/4 测试 |
+| 压缩功能（客户端） | `readCompressionRecord`、record/settle/merge/reconcile、3 处 resume、16 个事件点带 `source`/`startedAt`、去掉 5 秒自动隐藏、`run.started` 不再清记录 | 已吸收 · 9/9 行为测试 |
+| 卡片主题令牌 | `PendingInteractionCard.vue` 从硬编码调色板改为 `--radius-component` / `--spacing-scale` / `--border-width` / `--theme-content-bg` | 已吸收 · 4/4 变异 |
+| 审批提示上卡片 | 授权码、记忆写入单 Agree、命令预览、倒计时、select 路由 | 已吸收 · 6/6 变异 |
+| 工具调用分组 | option A：连续块规则，**含正在执行中的调用**，无 live tool strip | 已吸收 · 6/6 变异 |
+| profile 显示名 | 服务端 service + route + client API + Modal + 11 处调用点 | 已吸收 · 26 测试 · 12/12 变异 |
+| `interrupted` 语义 | 采用上游 #3404 收窄后的表达式 | 已吸收 · 6/6 变异 |
+| 未观测 run 重连 | `onUnobservedRunStarted` 订阅（上游 `af2d7ac6a`） | 已吸收 · 12/12 |
+| 房间提示只达房间成员 | `canSee` 判定，storage 缺失时失败闭合 | 已吸收 · 11/11 · 5/5 变异 |
+| 客户端压缩变更/停止 | `requestRunAbort` / `emitAbortOnSessionSocket` / `isSessionWorking` 闸门 | 已吸收 · 5/5 |
+| 错误行不合并 | 保留 fork 的“就地覆盖 100 字符”移除，改追加独立错误行 | 已吸收 · 10/10 |
+
+### B. 保留分歧（有意不跟随上游）
+
+| 项 | 决策 |
+| --- | --- |
+| 工具调用分组规则 | 采用 fork 的连续块规则（已部署 0.7.27 行为），**不**采用上游 `b510c7795` 的 run 作用域规则 |
+| `beginTaskPlanRun` 不调 `clarificationRuns.finishSession` | 保留 D2：按 contextId 精确结算，不在开新轮时清扫 |
+| 卡片配色 | 用 fork 硬编码视觉的**令牌化版本**，不直接搬上游配色 |
+| `CompressionProgress` 无 `source` 字段 | 服务端快照不带，客户端从事件载荷推导 |
+| `NInput` 位置 | 已迁入 `PendingInteractionCard.vue`，不视为丢失 |
+| 本地不跟随上游 `0ee02be8b` / `2f1686c03` | 已被治理重写替代（`beginTaskPlanRun` 局部 `runState`、多行 profile-room 加入循环） |
+| `HistoryView` 只处理 `display_role === 'compression'` | 上游不再写 `role: 'error'` 行；那是**另一个**未吸收的 fork 服务端改动，不顺手带入 |
+
+### C. 待处理（38 个客户端失败的唯一来源）
+
+| 单元 | 规模 | 解锁 | 阻碍测试 |
+| --- | --- | --- | --- |
+| ~~`sessionRuns` 单写者重构 + 3 秒快照轮询~~ | **已吸收**：32 个旧写入点全部改由 `patchSessionRun` 单写，`serverWorking`/`streamStates`/`backgroundPendingBySession`/`runStartedAt` 变成派生视图 | 已解锁 | `working-poll` 15/15、`sidebar-live-settle` 21/21、`session-list-activity-regression`、`compression-reconcile` 6/6 |
+| slash 自定义技能菜单 | `slash-command-skills.ts` 已恢复（168 行）但 `ChatInput.vue` **0 引用** | 10 个 | `chat-input-slash-menu` |
+| `chat.ts` 去重 / 历史 profile 过滤 / 直连拉取 / 系统错误行 | 5 组标识符 | 2 个 | `chat-store-compression-state` 2 |
+| 其余 63 个 fork 独有源文件 | `DevicesView`、`workspace-preferences`、`OAuthLoginShell`、`transcript-order`、`reasoning-effort-resolve` 等 | — | 当前 **0 处引用**，无实时断链 |
+| 9 种语言 locale | 各缺 270–343 行 | — | — |
+| E2E 4 个 spec | `pending-interaction-cross-session`、`clarify-option-touch-target`、`group-chat-room-deeplink`、`navigation-rail` | — | 本轮未复跑 |
+
+### G. `sessionRuns` 单写者重构：实测结论（2026-11-09）
+
+**做法**：没有搬 fork 的 94 冲突区补丁，而是在 0.8.20 基座上重建同一个不变量——每个会话一条
+记录、一个写入者、一个读取者。32 个旧写入点（`serverWorking.add/delete`、`streamStates.set/delete`、
+`backgroundPendingBySession.set/delete`、`runStartedAt.set/delete`）全部改走 `patchSessionRun`，
+四个旧 Map 变成 computed 视图。脚本对每处锚点断言出现次数，不匹配就整份文件不落盘。
+
+**过程中暴露的五个真实缺陷**（都不是吸收引入的，是被这次重构照出来的）：
+
+1. **`runStartedAt` 与 `sessionRuns` 双真相。** 记录建起来后旧 ref 还在，快照否决条件读的那份时钟恒为 0，
+   于是「快照竞态」被判成「泄漏标志」。改写为派生视图后 36/36 通过。这是单写者重构唯一真正的价值点。
+2. **快照先于会话列表执行。** `applyWorkingSessionsSnapshot` 必须在列表抓取之前跑（否则手机上永远看不到
+   别的会话在工作），因此委派计数循环不能遍历 `sessions.value`——那时它是空数组，计数被整段跳过。
+   改为遍历「双方已知 id 的并集」，并让 `setBackgroundPending` 先落值后查 profile。
+3. **`markSessionIdle` 清掉了 `delegations`。** 委派不属于一次运行、可以比运行活得更久，只能由快照结算。
+4. **`dropped` 在写入者跑完之后才读键集**，读到空集，本轮该结算的会话一个都没结算。改为轮询开始前快照。
+5. **停止按钮在看门狗放弃后永久失灵。** 看门狗放弃 ≠ 运行结束；`abortState.error` 是「试过但没确认」的凭据，
+   下一按必须放行。同时给 abort 句柄加 `kind`：运行级句柄拒绝 → 回退会话 socket；会话级句柄拒绝 → 如实报死。
+
+**门禁**：`vite build` ✓、`vue-tsc -b --force` 0 错误、服务端 `tsc` 0 错误、治理集 **182/182**、
+客户端 **426/445**（余 19 = 7 个既有 `readFileSync` 缺陷 + 10 个 slash 菜单 + 2 个其余 `chat.ts` 分组）。
+
+### D. 既有缺陷（非本次吸收造成，不计入回归）
+
+`tests/client/compression-transcript-entry.test.ts` 有 7 个源码守卫测试报 `readFileSync is not a function`。
+在 **fork 原树**（`/home/xiaokubao/.local/share/hermes-web-ui`）同样 7 失败 / 9 通过，隔离探针证明 `node:fs`
+本身可用——缺陷在该测试文件内部。未定位，未修，**不属于吸收责任**。
+
+### E. 已修正的失效门禁认知
+
+`npx vue-tsc -b --force` 对**缺失的 `.vue` 文件是盲的**，因为 `packages/client/src/env.d.ts:5` 有
+`declare module '*.vue'`。基座迁移时 70 个 fork 独有文件被静默丢弃，`vue-tsc` 报 0 错误，是
+`npx vite build` 的 `UNLOADABLE_DEPENDENCY` 才暴露出来。**`vite build` 是必跑门禁**。

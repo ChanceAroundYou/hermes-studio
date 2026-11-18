@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.hoisted(() => { (globalThis as unknown as Record<string, unknown>).__APP_VERSION__ = 'test' })
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
@@ -26,6 +27,7 @@ vi.mock('@/api/studio/chat', () => ({
   respondToolApproval: vi.fn(),
   respondClarify: vi.fn(),
   onPeerUserMessage: vi.fn(() => vi.fn()),
+  onUnobservedRunStarted: vi.fn(() => vi.fn()),
   onSessionCommand: vi.fn(() => vi.fn()),
   onSessionTitleUpdated: vi.fn(() => vi.fn()),
   onSessionWorkspaceUpdated: vi.fn(() => vi.fn()),
@@ -202,9 +204,9 @@ describe('compression banner reconciliation', () => {
     expect(store.compressionState?.compressing).toBe(true)
 
     // The poll itself already converged the client's own working flags here, so
-    // release them before asking it for the compression snapshot.
-    store.serverWorking.delete(SID)
-    store.streamStates.delete(SID)
+    // release them before asking it for the compression snapshot. Run state has
+    // one writer now: the derived maps are read-only views of that record.
+    store.markSessionIdle(SID)
     // The server reports the same session with the compression finished.
     sessionsApi.fetchWorkingSessions.mockResolvedValue([{
       session_id: SID,
@@ -245,8 +247,7 @@ describe('compression banner reconciliation', () => {
 
     // The poll only relaxes a session the client is not streaming, the same lag
     // tolerance the working flags use; release the ctrl as a closed socket would.
-    store.serverWorking.delete(SID)
-    store.streamStates.delete(SID)
+    store.markSessionIdle(SID)
     sessionsApi.fetchWorkingSessions.mockResolvedValue([])
     await store.refreshSessionListOnly()
 

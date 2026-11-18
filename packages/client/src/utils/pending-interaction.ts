@@ -51,6 +51,18 @@ export function isPendingInteractionExpiredError(error: unknown): boolean {
     || message.includes('clarification is not pending'))
 }
 
+/**
+ * The ways the server names the end of a prompt. A refused submission carries an
+ * `error` instead, and means the prompt is *still open* -- the two must not be
+ * read the same way.
+ */
+export const PENDING_INTERACTION_SETTLED_REASONS = ['response', 'dismissed', 'timeout', 'cancelled', 'aborted', 'expired'] as const
+
+export function isPendingInteractionSettledReason(reason: unknown): boolean {
+  return typeof reason === 'string'
+    && (PENDING_INTERACTION_SETTLED_REASONS as readonly string[]).includes(reason)
+}
+
 export function notifyPendingInteractionExpired(): void {
   if (typeof window === 'undefined') return
   window.dispatchEvent(new CustomEvent(PENDING_INTERACTION_EXPIRED_EVENT))

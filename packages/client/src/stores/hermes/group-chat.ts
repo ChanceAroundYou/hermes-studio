@@ -11,6 +11,7 @@ import {
     type PendingInteractionSubmitResult,
 } from '@/utils/pending-interaction'
 import { getActiveProfileName, getStoredUsername } from '@/api/client'
+import { fetchPendingInteractions, type PendingInteractionRow } from '@/api/studio/sessions'
 import { fetchCurrentUser } from '@/api/studio/auth'
 import { formatMessageWithReference, type Attachment, type ContentBlock, type MessageReference } from './chat'
 import {
@@ -547,6 +548,71 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         for (const pending of approvals) upsertPendingApproval(pending as any)
         pendingApprovals.value = new Map(pendingApprovals.value)
     }
+
+    /**
+     * Replace the room prompts with the server's own answer to "which ones are
+     * still open".
+     *
+     * That answer is already gated by room management rights, and unlike the live
+     * events it covers every room the user manages -- not only the one this tab
+     * happens to have open. It is what lets a prompt raised in a room reach
+     * someone who is looking at a single chat.
+     */
+    function applyRoomClarifySnapshot(clarifies: unknown) {
+        if (!Array.isArray(clarifies)) return
+        pendingClarifies.value.clear()
+        for (const pending of clarifies) upsertPendingClarify(pending as any)
+        pendingClarifies.value = new Map(pendingClarifies.value)
+    }
+
+    /**
+     * Converge the room prompts to what the server still holds.
+     *
+     * The socket's own snapshot is process memory: it is empty after a restart,
+     * and it only covers the room this tab happened to open. The stored rows are
+     * the authority that survives both, so a reload repairs the cards instead of
+     * showing nothing while the agent waits on an answer nobody can see.
+     */
+    function applyPendingInteractionsSnapshot(rows: PendingInteractionRow[]) {
+        const seen = new Set<string>()
+        let changed = false
+        for (const row of rows) {
+            // Carriers this store does not own are left to their own store rather
+            // than half-rendered here.
+            if (row.scope !== 'room' || row.kind !== 'clarify') continue
+            const key = pendingClarifyKey(row.owner_id, row.interaction_id)
+            seen.add(key)
+            // Same interaction: keep the entry, and with it the running countdown.
+            if (pendingClarifies.value.has(key)) continue
+            upsertPendingClarify({
+                roomId: row.owner_id,
+                clarify_id: row.interaction_id,
+                question: row.question,
+                choices: row.choices,
+                remaining_timeout_ms: Number(row.remaining_timeout_ms) || undefined,
+            })
+            changed = true
+        }
+        for (const key of [...pendingClarifies.value.keys()]) {
+            if (seen.has(key)) continue
+            pendingClarifies.value.delete(key)
+            changed = true
+        }
+        if (changed) pendingClarifies.value = new Map(pendingClarifies.value)
+    }
+
+    /** Ask the server which room cards are still open. Deliberately allowed to throw. */
+    async function reconcilePendingInteractions(): Promise<void> {
+        applyPendingInteractionsSnapshot(await fetchPendingInteractions())
+    }
+
+    async function reconcilePendingInteractionsQuietly(): Promise<void> {
+        try {
+            await reconcilePendingInteractions()
+        } catch {
+            // Keep the local cards.
+        }
+    }
     const userId = ref(getStoredUserId())
     const userName = ref(getStoredGroupUserName() || getStoredUsername() || '')
 
@@ -976,8 +1042,12 @@ export const useGroupChatStore = defineStore('groupChat', () => {
             realtimeJoinedRoomId.value = null
             realtimeJoinedSocketId.value = null
             error.value = null
-            socket.emit('load_pending_approvals', {}, (res: { pendingApprovals?: unknown } | undefined) => {
+            // Shares this moment with the other snapshot reads above: a tab that
+            // just came up should not show a room prompt it can no longer answer.
+            void reconcilePendingInteractionsQuietly()
+            socket.emit('load_pending_approvals', {}, (res: { pendingApprovals?: unknown; pendingClarifies?: unknown } | undefined) => {
                 replacePendingApprovalSnapshots(res?.pendingApprovals)
+                applyRoomClarifySnapshot(res?.pendingClarifies)
             })
             socket.emit('load_room_agent_activities', {}, (res: { activities?: unknown } | undefined) => {
                 replaceActiveAgentRuns(res?.activities)
@@ -2028,6 +2098,10 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         pendingClarifies,
         activePendingApproval,
         activePendingClarify,
+        applyPendingInteractionsSnapshot,
+        applyRoomClarifySnapshot,
+        reconcilePendingInteractions,
+        reconcilePendingInteractionsQuietly,
         autoPlaySpeechEnabled,
         activeMessageReference,
         totalMessages,

@@ -137,9 +137,12 @@ describe('compression progress snapshot', () => {
     // The started snapshot is written before the summarizer is awaited, but the
     // dynamic import inside runCompression has to settle first — wait for the
     // fact rather than guessing a tick count.
-    for (let i = 0; i < 50 && !state.compression; i++) {
-      await new Promise(resolve => setTimeout(resolve, 5))
+    // Budget is generous because the first dynamic import also pays for the
+    // module transform on a loaded host; the loop still exits on the fact.
+    for (let i = 0; i < 200 && !state.compression; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
     }
+    expect(state.compression, 'the started snapshot was never written').toBeTruthy()
 
     expect(state.compression).toMatchObject({
       stage: 'started',

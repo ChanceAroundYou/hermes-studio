@@ -182,6 +182,62 @@ describe('GlobalPendingActions', () => {
     wrapper.unmount()
   })
 
+  it('announces a prompt whose parked announcement was dropped by a failed settings load', async () => {
+    settingsState.display.notify_on_approval = true
+    // The first settings load stays in flight for the whole first half of the test.
+    let resolveSettings: (value: boolean) => void = () => undefined
+    settingsState.fetchSettings.mockImplementation(
+      () => new Promise<boolean>(resolve => { resolveSettings = resolve }),
+    )
+    const wrapper = mount(GlobalPendingActions)
+    await nextTick()
+
+    // The prompt arrives while the settings are still loading, so there is
+    // nowhere to announce it yet.
+    chatState.pendingApprovals = new Map([['late', {
+      sessionId: 'late', approvalId: 'approval-late', description: 'Late', command: 'late', choices: ['once'],
+    }]])
+    await nextTick()
+    expect(systemNotificationMock.showSystemNotification).not.toHaveBeenCalled()
+
+    // That load fails, which is exactly the queue the announcement was parked in.
+    resolveSettings(false)
+    await nextTick()
+    await nextTick()
+
+    // A later load succeeds. The prompt is still waiting and the user has never
+    // been told about it, so it has to be announced now. Marking a key before it
+    // was actually announced burned it and left this card silent for good.
+    settingsState.fetchSettings.mockImplementation(async () => true)
+    profileState.activeProfileName = 'other'
+    await nextTick()
+    await nextTick()
+    await Promise.resolve()
+
+    expect(systemNotificationMock.showSystemNotification).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('does not re-announce a prompt it already told the user about', async () => {
+    settingsState.display.notify_on_approval = true
+    const wrapper = mount(GlobalPendingActions)
+    await nextTick()
+
+    chatState.pendingApprovals = new Map([['once', {
+      sessionId: 'once', approvalId: 'approval-once', description: 'Once', command: 'once', choices: ['once'],
+    }]])
+    await nextTick()
+    expect(systemNotificationMock.showSystemNotification).toHaveBeenCalledTimes(1)
+
+    // A settings reload re-arms the surface; it must not re-notify.
+    profileState.activeProfileName = 'other'
+    await nextTick()
+    await nextTick()
+
+    expect(systemNotificationMock.showSystemNotification).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
   it('loads persisted display settings when mounted globally', async () => {
     const wrapper = mount(GlobalPendingActions)
     await nextTick()

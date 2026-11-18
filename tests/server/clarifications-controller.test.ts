@@ -40,6 +40,19 @@ describe('clarification HTTP controller', () => {
     expect(ctx.body).toMatchObject({ ok: true, response: '', reason: 'cancelled' })
   })
 
+  it('reports why a refusal happened, not just that it happened', async () => {
+    const publish = vi.fn()
+    const runs = new ClarificationRuns(publish)
+    runs.begin('ctx', 'owned-session', 'research', () => ({ isWorking: true, activeRunMarker: 'turn' }))
+    setChatRunServer({ requestClarification: runs.request.bind(runs) })
+    const ctx = context()
+    ctx.state.profile.name = 'other'
+    await requestClarification(ctx as any)
+    expect(ctx.status).toBe(409)
+    // The sentence alone cannot be acted on; the code is what a caller branches on.
+    expect(ctx.body).toMatchObject({ ok: false, code: 'context_wrong_profile' })
+  })
+
   it('reports missing context and unavailable service', async () => {
     const ctx = context()
     await requestClarification(ctx as any)

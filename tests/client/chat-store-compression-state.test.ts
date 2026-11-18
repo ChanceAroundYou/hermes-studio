@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.hoisted(() => { (globalThis as unknown as Record<string, unknown>).__APP_VERSION__ = 'test' })
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 vi.mock('@/api/studio/background-status', () => ({ observeBackgroundStatus: vi.fn(() => vi.fn()) }))
@@ -23,6 +24,7 @@ vi.mock('@/api/studio/chat', () => ({
   respondToolApproval: vi.fn(),
   respondClarify: vi.fn(),
   onPeerUserMessage: vi.fn(() => vi.fn()),
+  onUnobservedRunStarted: vi.fn(() => vi.fn()),
   onSessionCommand: vi.fn(() => vi.fn()),
   onSessionTitleUpdated: vi.fn(() => vi.fn()),
   onRunUsageUpdated: vi.fn(() => vi.fn()),

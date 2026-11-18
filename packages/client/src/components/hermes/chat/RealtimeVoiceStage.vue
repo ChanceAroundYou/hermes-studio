@@ -1002,7 +1002,11 @@ function flushSpeechSegmenter(assistantId = lastResponseAssistantId || 'assistan
 function processResponseMessages() {
   const responseMessages = chatStore.messages.slice(responseStartMessageIndex)
   for (const message of responseMessages) {
-    if (message.role === 'assistant') {
+    // A failure is recorded as its own assistant row (systemType 'error') so the
+    // transcript keeps whatever the run managed to say. That row is a status line,
+    // not reply text: feeding it to the segmenter made the stage read the error out
+    // loud. finishResponseIfReady already classifies it as a failure.
+    if (message.role === 'assistant' && message.systemType !== 'error') {
       const content = message.content || ''
       const previous = processedAssistantText.get(message.id) || ''
       processedAssistantText.set(message.id, content)
@@ -1033,7 +1037,7 @@ function finishResponseIfReady() {
   if (chatStore.isStreaming || responseFinalizing) return
   const responseMessages = chatStore.messages.slice(responseStartMessageIndex)
   const response = [...responseMessages].reverse().find(message =>
-    message.role === 'assistant' && Boolean(message.content.trim()),
+    message.role === 'assistant' && message.systemType !== 'error' && Boolean(message.content.trim()),
   )
   if (!response) {
     const failure = [...responseMessages].reverse().find(message =>
