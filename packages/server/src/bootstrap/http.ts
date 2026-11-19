@@ -507,6 +507,12 @@ export async function bootstrap() {
   // restart nothing can answer it, so it must not come back as an answerable card.
   const { expireOrphanedPendingInteractions } = await import('../modules/studio/repositories/pending-interaction-store')
   expireOrphanedPendingInteractions()
+  // The WebUI keeps an import-time mirror of any session that also lives in the
+  // Hermes state.db. Opening a session reconciles it on demand, but a session
+  // nobody opens -- a CLI turn, a Feishu reply, a cron run -- would stay stale
+  // forever. This is the periodic sweep that covers them.
+  const { startSessionMessageSync } = await import('../modules/studio/services/session-message-sync')
+  startSessionMessageSync('default')
   startChatWebhookDispatcher()
   console.log('[bootstrap] all stores initialized')
 
