@@ -96,6 +96,7 @@ describe('GroupChatPanel workspace save handling', () => {
     )
     expect(singleCard).toContain('<PendingInteractionCard')
     expect(singleCard).toContain(':choices="clarify.choices"')
+<<<<<<< Updated upstream
     // Prettier in 0.8.20 typed the inline arrow parameters, so the handler reads
     // `(response: string) => handleClarifyFor(...)`. What matters is that submit,
     // select and dismiss all route through the per-prompt handler with the prompt bound
@@ -105,6 +106,9 @@ describe('GroupChatPanel workspace save handling', () => {
     expect(singleCard).toContain('@dismiss="handleClarifyFor(clarify, \'\')"')
     // A prompt with no choices must still render the card, otherwise a free-text-only
     // question has no answer control at all.
+=======
+    expect(singleCard).toContain('@submit="response => handleClarifyFor(clarify, response)"')
+>>>>>>> Stashed changes
     expect(singleCard).not.toContain('v-if="clarify.choices')
 
     const group = readFileSync('packages/client/src/components/hermes/group-chat/GroupChatPanel.vue', 'utf8')

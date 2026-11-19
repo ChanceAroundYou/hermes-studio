@@ -177,6 +177,7 @@ test('a background prompt in the notification window can actually be answered', 
 
   // Nothing may sit on top of the card. The notification's own chrome used to
   // overlay it, so the prompt rendered but no click ever reached it.
+<<<<<<< Updated upstream
   //
   // Measured after the entrance transition settles. The toaster slides the card
   // in from outside the viewport, so sampling during the animation reports an
@@ -195,6 +196,18 @@ test('a background prompt in the notification window can actually be answered', 
     const rect = el.getBoundingClientRect()
     return { width: rect.width, height: rect.height }
   })
+=======
+  const hit = await button.evaluate(el => {
+    const rect = el.getBoundingClientRect()
+    const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    return {
+      reachable: Boolean(top && (el === top || el.contains(top))),
+      width: rect.width,
+      height: rect.height,
+    }
+  })
+  expect(hit.reachable).toBe(true)
+>>>>>>> Stashed changes
   // And it is a real, sized target rather than a collapsed box.
   expect(hit.width).toBeGreaterThan(0)
   expect(hit.height).toBeGreaterThan(0)

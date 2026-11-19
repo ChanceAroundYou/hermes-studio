@@ -22,7 +22,7 @@ import LiveReasoningStatus from "./LiveReasoningStatus.vue";
 import ToolRunCard from "./ToolRunCard.vue";
 import MessageQueueFloatPanel from "./MessageQueueFloatPanel.vue";
 import PendingInteractionCard from "@/components/hermes/chat/PendingInteractionCard.vue";
-import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message } from "@/stores/hermes/chat";
+import { LIVE_CHAT_MAX_LOADED_MESSAGES, parseMessageReference, useChatStore, type Message, type PendingClarify } from "@/stores/hermes/chat";
 import { useProfilesStore } from "@/stores/hermes/profiles";
 import { resolveProfileDisplayName } from "@/utils/hermes/profile-display-name";
 import { useToolTraceVisibility } from "@/composables/useToolTraceVisibility";
@@ -288,11 +288,19 @@ const canInsertQueuedMessages = computed(() => {
   return !session.source || session.source === "cli" || session.source === "global_agent";
 });
 const visibleApproval = computed(() => chatStore.activePendingApproval);
-const visibleClarify = computed(() => chatStore.activePendingClarify);
-const clarifyResponse = ref("");
+const visibleClarifies = computed(() => chatStore.activePendingClarifies);
+// One draft per prompt, keyed by its id: a session may have several questions
+// open at once, and a single shared buffer would type one answer into all of
+// them. Re-seeded whenever the set of prompts on screen changes.
+const clarifyResponses = ref<Record<string, string>>({});
 watch(
-  () => visibleClarify.value?.clarifyId,
-  () => { clarifyResponse.value = visibleClarify.value?.initialResponse || ""; },
+  () => visibleClarifies.value.map(clarify => clarify.clarifyId).join(","),
+  () => {
+    const next: Record<string, string> = {};
+    for (const clarify of visibleClarifies.value) next[clarify.clarifyId] = clarify.initialResponse || "";
+    clarifyResponses.value = next;
+  },
+  { immediate: true },
 );
 // The floating queue bar and the pending-interaction card are both
 // `position: absolute`, so they never take part in layout and the list must not
@@ -355,14 +363,19 @@ function handleApproval(choice: string) {
   chatStore.respondApproval(choice as "once" | "session" | "always" | "deny");
 }
 
-function handleClarify(response?: string) {
+function handleClarifyFor(clarify: PendingClarify, response?: string) {
+  const draft = clarifyResponses.value[clarify.clarifyId] ?? "";
   const finalResponse = response !== undefined
     ? response
-    : visibleClarify.value?.responseMode === "editor"
-      ? clarifyResponse.value
-      : clarifyResponse.value.trim();
-  chatStore.respondToClarify(finalResponse);
-  clarifyResponse.value = "";
+    : clarify.responseMode === "editor"
+      ? draft
+      : draft.trim();
+  // Addressed by id, so answering one prompt cannot submit another.
+  const result = chatStore.respondToClarifyFor(clarify.sessionId, clarify.clarifyId, finalResponse);
+  // Withdraw it optimistically, exactly as the single-card path did; the next
+  // snapshot tick is the backstop, not the mechanism.
+  if (result === "submitted") chatStore.dismissPendingClarifyFor(clarify.sessionId, clarify.clarifyId);
+  delete clarifyResponses.value[clarify.clarifyId];
 }
 
 function removeQueuedMessage(messageId: string) {
@@ -791,7 +804,7 @@ defineExpose({
       </svg>
     </button>
     <div
-      v-if="visibleApproval || visibleClarify || queuedMessages.length > 0"
+      v-if="visibleApproval || visibleClarifies.length > 0 || queuedMessages.length > 0"
       class="message-float-stack"
     >
       <Teleport to="body" :disabled="!props.approvalPortalToBody">
@@ -810,20 +823,22 @@ defineExpose({
       </Transition>
     </Teleport>
       <Teleport to="body" :disabled="!props.approvalPortalToBody">
-      <Transition name="queue-float">
-        <PendingInteractionCard
-          v-if="!visibleApproval && visibleClarify"
-          v-model="clarifyResponse"
-          :variant="props.approvalPortalToBody ? 'portal' : 'inline'"
-          :question="visibleClarify.question"
-          :choices="visibleClarify.choices"
-          :response-mode="visibleClarify.responseMode"
-          :countdown-deadline="visibleClarify.countdownDeadline"
-          @select="handleClarify"
-          @submit="handleClarify"
-          @dismiss="handleClarify('')"
-        />
-      </Transition>
+      <template v-for="clarify in visibleClarifies" :key="clarify.clarifyId">
+        <Transition name="queue-float">
+          <PendingInteractionCard
+            :model-value="clarifyResponses[clarify.clarifyId] ?? ''"
+            :variant="props.approvalPortalToBody ? 'portal' : 'inline'"
+            :question="clarify.question"
+            :choices="clarify.choices"
+            :response-mode="clarify.responseMode"
+            :countdown-deadline="clarify.countdownDeadline"
+            @update:model-value="value => { clarifyResponses[clarify.clarifyId] = value }"
+            @select="response => handleClarifyFor(clarify, response)"
+            @submit="response => handleClarifyFor(clarify, response)"
+            @dismiss="handleClarifyFor(clarify, '')"
+          />
+        </Transition>
+      </template>
     </Teleport>
       <Transition name="queue-float">
         <MessageQueueFloatPanel

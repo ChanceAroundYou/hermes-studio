@@ -72,6 +72,21 @@ export const USAGE_PRICING_SCHEMA = {
 // Session Store (session-store.ts)
 // ============================================================================
 
+export const TASK_PLANS_TABLE = 'task_plans'
+export const TASK_PLANS_SCHEMA: Record<string, string> = {
+  session_id: 'TEXT NOT NULL',
+  plan_id: 'TEXT NOT NULL',
+  run_id: 'TEXT NOT NULL',
+  revision: 'INTEGER NOT NULL',
+  execution_state: 'TEXT NOT NULL',
+  snapshot: 'TEXT NOT NULL',
+  created_at: 'INTEGER NOT NULL',
+}
+
+// ============================================================================
+// Pending Interaction Store (pending-interaction-store.ts)
+// ============================================================================
+
 export const PENDING_INTERACTIONS_TABLE = 'pending_interactions'
 export const PENDING_INTERACTIONS_SCHEMA: Record<string, string> = {
   // `scope` + `owner_id` together name the carrier (a session, a room, a device).
@@ -91,17 +106,6 @@ export const PENDING_INTERACTIONS_SCHEMA: Record<string, string> = {
   created_at: 'INTEGER NOT NULL',
   resolved_at: 'INTEGER',
   resolved_reason: 'TEXT',
-}
-
-export const TASK_PLANS_TABLE = 'task_plans'
-export const TASK_PLANS_SCHEMA: Record<string, string> = {
-  session_id: 'TEXT NOT NULL',
-  plan_id: 'TEXT NOT NULL',
-  run_id: 'TEXT NOT NULL',
-  revision: 'INTEGER NOT NULL',
-  execution_state: 'TEXT NOT NULL',
-  snapshot: 'TEXT NOT NULL',
-  created_at: 'INTEGER NOT NULL',
 }
 
 export const SESSIONS_TABLE = 'sessions'

@@ -3,7 +3,7 @@ import { normalizeRunUsage, type RunUsageSummary } from '@/utils/run-usage'
 import { mergeTaskPlanMessages, type TaskPlanSnapshot } from '@/utils/task-plan'
 import { chatSessionAgentAvatar } from '@/utils/chat-agent-avatar'
 import {connectChatRun, startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, onSessionSettingsUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport, onRunUsageUpdated} from '@/api/studio/chat'
-import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchWorkingSessions, fetchSessions, type RunState, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/studio/sessions'
+import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchPendingInteractions, type PendingInteractionRow, fetchSessionMessagesPage, fetchWorkingSessions, fetchSessions, type RunState, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/studio/sessions'
 import { getActiveProfileName, getBaseUrlValue } from '@/api/client'
 import { onAuthInvalidated } from '@/api/auth-invalidation'
 import { inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId } from '@/api/coding-agents'
@@ -23,6 +23,7 @@ import { responseErrorMessage } from '@/utils/http-error'
 import { errorMessage } from '@/utils/format'
 import {
   isPendingInteractionExpiredError,
+  isPendingInteractionSettledReason,
   notifyPendingInteractionExpired,
   pendingInteractionDeadline,
   type PendingInteractionSubmitResult,
@@ -1909,10 +1910,30 @@ export const useChatStore = defineStore('chat', () => {
 
   const pendingClarifies = ref<Map<string, PendingClarify>>(new Map())
   const pendingClarifyResponseIds = new Map<string, string>()
-  const activePendingClarify = computed(() => {
+  /**
+   * Keyed by session *and* prompt.
+   *
+   * A session-only key meant a second question silently replaced the first, so
+   * the turn that asked it could never be answered. Mirrors the group-chat
+   * store's `pendingClarifyKey`.
+   */
+  function pendingClarifyKey(sessionId: string, clarifyId: string): string {
+    return `${sessionId}:${clarifyId}`
+  }
+  function claritiesForSession(sessionId: string): PendingClarify[] {
+    const matches: PendingClarify[] = []
+    for (const pending of pendingClarifies.value.values()) {
+      if (pending.sessionId === sessionId) matches.push(pending)
+    }
+    return matches
+  }
+  /** Every open question for the session on screen, in arrival order. */
+  const activePendingClarifies = computed(() => {
     const sid = activeSessionId.value
-    return sid ? pendingClarifies.value.get(sid) || null : null
+    return sid ? claritiesForSession(sid) : []
   })
+  /** The first of them, for the surfaces that still show a single card. */
+  const activePendingClarify = computed(() => activePendingClarifies.value[0] || null)
 
   function setSessionProfileFilter(profile: string | null) {
     const normalized = profile?.trim()
@@ -2793,12 +2814,76 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
+   * Adopt the server's list of open questions for the carriers this store owns.
+   *
+   * The socket events can only ever *add* a card: a `clarify.resolved` for a
+   * conversation the user is not looking at, or one published while the tab was
+   * reconnecting, had no reader, so the card stayed on screen and clicking it
+   * did nothing. This is the reader that can withdraw it, which is why absence
+   * from the snapshot is as meaningful as presence.
+   */
+  function applyPendingInteractionsSnapshot(rows: PendingInteractionRow[]): void {
+    const seen = new Set<string>()
+    let changed = false
+    for (const row of rows) {
+      // Carriers this store does not own are left to their own store rather
+      // than half-rendered here.
+      if (row.scope !== 'session' || row.kind !== 'clarify') continue
+      const sessionId = row.owner_id
+      const key = pendingClarifyKey(sessionId, row.interaction_id)
+      seen.add(key)
+      // Same interaction: keep the entry, and with it the running countdown.
+      if (pendingClarifies.value.has(key)) continue
+      pendingClarifies.value.set(key, {
+        sessionId,
+        clarifyId: row.interaction_id,
+        question: row.question,
+        choices: row.choices,
+        initialResponse: '',
+        responseMode: '',
+        timeoutMs: Number(row.remaining_timeout_ms) || 300_000,
+        requestedAt: Date.now(),
+        countdownDeadline: pendingInteractionDeadline(row.remaining_timeout_ms, undefined),
+      })
+      changed = true
+    }
+    for (const key of [...pendingClarifies.value.keys()]) {
+      if (seen.has(key)) continue
+      pendingClarifies.value.delete(key)
+      changed = true
+    }
+    if (changed) pendingClarifies.value = new Map(pendingClarifies.value)
+  }
+
+  /**
+   * Ask the server which cards are still open. Deliberately allowed to throw:
+   * the caller keeps the cards it already has, because a failed read is not
+   * evidence that a question was answered.
+   */
+  async function reconcilePendingInteractions(): Promise<void> {
+    applyPendingInteractionsSnapshot(await fetchPendingInteractions())
+  }
+
+  async function reconcilePendingInteractionsQuietly(): Promise<void> {
+    try {
+      await reconcilePendingInteractions()
+    } catch {
+      // Keep the local cards.
+    }
+  }
+
+  /**
    * Converge the sidebar to the authoritative server state of "which sessions
    * are still running" without opening each conversation. Called by
    * refreshSessionListOnly so a freshly opened Studio repairs the working
    * flags of all listed sessions in one request.
    */
   async function applyWorkingSessionsSnapshot(): Promise<void> {
+    // Shares this tick with the run-state read (D3): both answer "what does the
+    // server say is open right now", so a second timer would double this tab's
+    // request rate for the same question. Awaited before the block below so a
+    // run-state failure cannot also cost the cards their refresh.
+    await reconcilePendingInteractionsQuietly()
     try {
       const snapshot = await fetchWorkingSessions()
       const now = Date.now()
@@ -4483,7 +4568,7 @@ export const useChatStore = defineStore('chat', () => {
     const clarifyId = (evt as any).clarify_id as string | undefined
     if (!sid || !clarifyId) return
     if (pendingClarifyResponseIds.get(sid) !== clarifyId) pendingClarifyResponseIds.delete(sid)
-    pendingClarifies.value.set(sid, {
+    pendingClarifies.value.set(pendingClarifyKey(sid, clarifyId), {
       sessionId: sid,
       clarifyId,
       question: String((evt as any).question || ''),
@@ -4506,22 +4591,31 @@ export const useChatStore = defineStore('chat', () => {
     const clarifyId = String((evt as any).clarify_id || '')
     const attempted = Boolean(clarifyId && pendingClarifyResponseIds.get(sid) === clarifyId)
     if (attempted) pendingClarifyResponseIds.delete(sid)
-    const current = pendingClarifies.value.get(sid)
+    const current = clarifyId ? pendingClarifies.value.get(pendingClarifyKey(sid, clarifyId)) : undefined
     if (!current) {
       if (attempted && (evt as any).resolved === false && ((evt as any).stale === true || isPendingInteractionExpiredError((evt as any).error || (evt as any).reason))) {
         notifyPendingInteractionExpired()
       }
       return
     }
-    if (clarifyId && current.clarifyId !== clarifyId) return
     if ((evt as any).resolved === false) {
-      if ((evt as any).stale === true || isPendingInteractionExpiredError((evt as any).error || (evt as any).reason)) {
-        dismissPendingClarifyFor(sid, current.clarifyId)
-        if (attempted) notifyPendingInteractionExpired()
-      }
+      // A settled prompt says *why* it ended (cancelled / aborted / dismissed /
+      // timeout). A refused submission carries an `error` instead, and the prompt
+      // is still open, so it has to stay on screen and be retryable. Honouring
+      // only the expiry-shaped reasons left every other settlement up for good:
+      // the server had already let the prompt go, so the card looked answerable
+      // and silently dropped the click.
+      const settled = (evt as any).stale === true || isPendingInteractionSettledReason((evt as any).reason)
+      if (!settled) return
+      dismissPendingClarifyFor(sid, current.clarifyId)
+      // The card goes for any settlement, but the "this prompt expired" note is
+      // only right when that is what actually happened.
+      const expiredish = (evt as any).stale === true
+        || isPendingInteractionExpiredError((evt as any).error || (evt as any).reason)
+      if (attempted && expiredish) notifyPendingInteractionExpired()
       return
     }
-    pendingClarifies.value.delete(sid)
+    pendingClarifies.value.delete(pendingClarifyKey(sid, current.clarifyId))
     pendingClarifies.value = new Map(pendingClarifies.value)
   }
 
@@ -4533,8 +4627,9 @@ export const useChatStore = defineStore('chat', () => {
       pendingApprovals.value.delete(sessionId)
       changed = true
     }
-    if (pendingClarifies.value.has(sessionId)) {
-      pendingClarifies.value.delete(sessionId)
+    for (const key of [...pendingClarifies.value.keys()]) {
+      if (!key.startsWith(`${sessionId}:`)) continue
+      pendingClarifies.value.delete(key)
       changed = true
     }
     if (changed) {
@@ -4551,15 +4646,15 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function dismissPendingClarifyFor(sessionId: string, clarifyId: string) {
-    const pending = pendingClarifies.value.get(sessionId)
-    if (!pending || pending.clarifyId !== clarifyId) return
-    pendingClarifies.value.delete(sessionId)
+    const key = pendingClarifyKey(sessionId, clarifyId)
+    if (!pendingClarifies.value.has(key)) return
+    pendingClarifies.value.delete(key)
     pendingClarifies.value = new Map(pendingClarifies.value)
   }
 
   function respondToClarifyFor(sessionId: string, clarifyId: string, response: string): PendingInteractionSubmitResult {
-    const pending = pendingClarifies.value.get(sessionId)
-    if (!pending || pending.clarifyId !== clarifyId) return 'missing'
+    const pending = pendingClarifies.value.get(pendingClarifyKey(sessionId, clarifyId))
+    if (!pending) return 'missing'
     respondClarify(sessionId, clarifyId, response, runtimeTransport())
     pendingClarifyResponseIds.set(sessionId, clarifyId)
     return 'submitted'
@@ -6898,6 +6993,7 @@ export const useChatStore = defineStore('chat', () => {
     activePendingApproval,
     pendingClarifies,
     activePendingClarify,
+    activePendingClarifies,
     subagentStreams,
     getSubagentStream,
     removeQueuedMessage,
@@ -6925,6 +7021,7 @@ export const useChatStore = defineStore('chat', () => {
     respondApprovalFor,
     respondToClarify,
     respondToClarifyFor,
+    dismissPendingClarifyFor,
     loadSessions,
     refreshSessionListOnly,
     refreshActiveSession,

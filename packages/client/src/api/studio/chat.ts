@@ -3,6 +3,7 @@ import { io, type Socket } from 'socket.io-client'
 import { disconnectBackgroundStatusObservers } from './background-status'
 import { onAuthInvalidated } from '../auth-invalidation'
 import { getBaseUrlValue, getApiKey } from '../client'
+import { pendingProfileRoomQuery } from '@/utils/hermes/pending-profile-rooms'
 import type { ChatCodingAgentId } from '../coding-agents'
 import type { ProviderApiMode } from './provider-api-mode'
 
@@ -238,10 +239,11 @@ const TRANSIENT_DISCONNECT_REASONS = new Set<string>([
 ])
 
 /**
- * Session event handlers map
- * Maps session_id to event handling functions for isolating concurrent session streams
+ * The handlers one open session registers.
+ *
+ * Keyed by session_id so concurrent session streams stay isolated.
  */
-const sessionEventHandlers = new Map<string, {
+export type SessionEventHandlers = {
   onMessageDelta: (event: RunEvent) => void
   onMessageInterim: (event: RunEvent) => void
   onReasoningDelta: (event: RunEvent) => void
@@ -272,7 +274,9 @@ const sessionEventHandlers = new Map<string, {
   onPeerUserMessage?: (event: RunEvent) => void
   onClarifyRequested?: (event: RunEvent) => void
   onClarifyResolved?: (event: RunEvent) => void
-}>()
+}
+
+const sessionEventHandlers = new Map<string, SessionEventHandlers>()
 
 const peerUserMessageHandlers = new Set<(event: RunEvent) => void>()
 const sessionCommandHandlers = new Set<(event: RunEvent) => void>()
@@ -615,62 +619,51 @@ function globalRunReattachFailedHandler(event: RunEvent): void {
   }
 }
 
-function globalApprovalRequestedHandler(event: RunEvent): void {
-  const sid = event.session_id
+/**
+ * Deliver one pending-interaction event to exactly one reader.
+ *
+ * The session-scoped handler is authoritative while someone has that session
+ * open; the peer fan-out covers every session nobody has open. Both paths end in
+ * the same store write, so firing both wrote the prompt twice: the countdown
+ * restarted, the card was re-announced, and per-arrival bookkeeping ran twice.
+ *
+ * The fan-out is a fallback, not an extra: an event type the open session did
+ * not wire up still has to reach the background reader.
+ */
+export function dispatchPendingInteractionEvent(
+  sessionId: string | undefined,
+  pickSessionHandler: (handlers: SessionEventHandlers) => ((event: RunEvent) => void) | undefined,
+  event: RunEvent,
+): void {
+  const sid = sessionId
   if (!sid) return
-
   const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onApprovalRequested) {
-    handlers.onApprovalRequested(event)
+  const deliver = handlers ? pickSessionHandler(handlers) : undefined
+  if (deliver) {
+    deliver(event)
+    return
   }
   for (const handler of peerUserMessageHandlers) handler(event)
+}
+
+function globalApprovalRequestedHandler(event: RunEvent): void {
+  dispatchPendingInteractionEvent(event.session_id, handlers => handlers.onApprovalRequested, event)
 }
 
 function globalApprovalResolvedHandler(event: RunEvent): void {
-  const sid = event.session_id
-  if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onApprovalResolved) {
-    handlers.onApprovalResolved(event)
-  }
-  for (const handler of peerUserMessageHandlers) handler(event)
+  dispatchPendingInteractionEvent(event.session_id, handlers => handlers.onApprovalResolved, event)
 }
 
 function globalPeerUserMessageHandler(event: RunEvent): void {
-  const sid = event.session_id
-  if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onPeerUserMessage) {
-    handlers.onPeerUserMessage(event)
-  }
-
-  for (const handler of peerUserMessageHandlers) {
-    handler(event)
-  }
+  dispatchPendingInteractionEvent(event.session_id, handlers => handlers.onPeerUserMessage, event)
 }
 
 function globalClarifyRequestedHandler(event: RunEvent): void {
-  const sid = event.session_id
-  if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onClarifyRequested) {
-    handlers.onClarifyRequested(event)
-  }
-  for (const handler of peerUserMessageHandlers) handler(event)
+  dispatchPendingInteractionEvent(event.session_id, handlers => handlers.onClarifyRequested, event)
 }
 
 function globalClarifyResolvedHandler(event: RunEvent): void {
-  const sid = event.session_id
-  if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onClarifyResolved) {
-    handlers.onClarifyResolved(event)
-  }
-  for (const handler of peerUserMessageHandlers) handler(event)
+  dispatchPendingInteractionEvent(event.session_id, handlers => handlers.onClarifyResolved, event)
 }
 
 /**
@@ -681,38 +674,7 @@ function globalClarifyResolvedHandler(event: RunEvent): void {
  */
 export function registerSessionHandlers(
   sessionId: string,
-  handlers: {
-    onMessageDelta: (event: RunEvent) => void
-    onMessageInterim: (event: RunEvent) => void
-    onReasoningDelta: (event: RunEvent) => void
-    onThinkingDelta: (event: RunEvent) => void
-    onReasoningAvailable: (event: RunEvent) => void
-    onToolStarted: (event: RunEvent) => void
-    onToolCompleted: (event: RunEvent) => void
-    onWorkspaceDiffCompleted?: (event: RunEvent) => void
-    onSubagentEvent?: (event: RunEvent) => void
-    onRunStarted: (event: RunEvent) => void
-    onRunCompleted: (event: RunEvent) => void
-    onRunFailed: (event: RunEvent) => void
-    onCompressionStarted: (event: RunEvent) => void
-    onCompressionCompleted: (event: RunEvent) => void
-    onAbortStarted: (event: RunEvent) => void
-    onAbortTimeout?: (event: RunEvent) => void
-    onAbortCompleted: (event: RunEvent) => void
-    onUsageUpdated: (event: RunEvent) => void
-    onAgentEvent?: (event: RunEvent) => void
-    onSessionCommand?: (event: RunEvent) => void
-    onSessionTitleUpdated?: (event: RunEvent) => void
-    onSessionWorkspaceUpdated?: (event: RunEvent) => void
-    onSessionSettingsUpdated?: (event: RunEvent) => void
-    onRunQueued?: (event: RunEvent) => void
-    onQueueInsertionUpdated?: (event: RunEvent) => void
-    onApprovalRequested?: (event: RunEvent) => void
-    onApprovalResolved?: (event: RunEvent) => void
-    onPeerUserMessage?: (event: RunEvent) => void
-    onClarifyRequested?: (event: RunEvent) => void
-    onClarifyResolved?: (event: RunEvent) => void
-  }
+  handlers: SessionEventHandlers
 ): () => void {
   sessionEventHandlers.set(sessionId, handlers)
 
@@ -798,6 +760,20 @@ export function getChatRunSocket(transport?: ChatRunTransport): Socket | null {
   return chatRunSocket
 }
 
+/** Profile names the user owns, as far as this client knows. */
+function accessibleProfileNames(): string[] {
+  try {
+    const { useProfilesStore } = require('@/stores/hermes/profiles')
+    return (useProfilesStore().profiles || [])
+      .map((profile: { name?: string } | null) => profile?.name)
+      .filter((name: unknown): name is string => typeof name === 'string' && !!name.trim())
+  } catch {
+    // Early initialization, or the store is unavailable: the active profile is
+    // still joined, which is exactly the old behaviour and never worse.
+    return []
+  }
+}
+
 export function connectChatRun(requestedProfile?: string | null, transport: ChatRunTransport = 'chat-run'): Socket {
   const normalizedRequestedProfile = requestedProfile?.trim() || null
   if (
@@ -858,7 +834,10 @@ export function connectChatRun(requestedProfile?: string | null, transport: Chat
   chatRunSocket = io(namespace, {
     path: `${baseUrl}/socket.io`,
     auth: { token },
-    query: { profile },
+    // A prompt is published to the room of the profile that asked, so the socket
+    // asks for every profile this user owns -- otherwise a question raised on
+    // another profile cannot reach this tab until the session is opened.
+    query: { profile, pending_profiles: pendingProfileRoomQuery(accessibleProfileNames(), profile) },
     transports: ['websocket', 'polling'],
     reconnection: true,
     reconnectionAttempts: Infinity,
