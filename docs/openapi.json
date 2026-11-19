@@ -13127,6 +13127,46 @@
         "x-session-share-permission": "upload"
       }
     },
+    "/api/studio/chat-run/pending-interactions": {
+      "get": {
+        "tags": [
+          "Chat Run"
+        ],
+        "summary": "Get pending-interactions",
+        "description": "GET /api/studio/chat-run/pending-interactions",
+        "operationId": "pendingInteractions",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "string",
+                "room"
+              ]
+            }
+          }
+        ]
+      }
+    },
     "/api/studio/chat-run/runs": {
       "post": {
         "tags": [
