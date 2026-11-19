@@ -63,8 +63,12 @@ export class SessionMessageSync {
   /** Start the 15-minute periodic sweep. */
   start(profile: string): void {
     this.activeProfile = profile
-    this.stopped = false
+    // Clear first, then restart the clock. The order used to be `stopped = false`
+    // followed by `this.stop()`, and stop() sets the same flag back to true -- so
+    // the sweep logged "started" and then bailed on its first iteration, doing
+    // nothing at all while looking healthy.
     this.stop()
+    this.stopped = false
     logger.info('[SessionMessageSync] started, profile=%s, interval=%dms', profile, DEFAULT_INTERVAL_MS)
     // Sweep immediately on start, then on interval.
     this.sweepActive(true).catch(() => {})
