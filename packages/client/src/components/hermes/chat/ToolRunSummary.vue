@@ -22,10 +22,12 @@ const toolNames = computed(() => {
 const hasError = computed(() => props.tools.some(tool => tool.toolStatus === 'error'))
 const hasInterrupted = computed(() => props.tools.some(tool => tool.toolStatus === 'interrupted'))
 const isRunning = computed(() => props.tools.some(tool => tool.toolStatus === 'running'))
+/** Busy while any call is live, or while the run itself is still active. */
+const busy = computed(() => isRunning.value || props.active)
 </script>
 
 <template>
-  <section class="tool-run-card" :data-run-id="runId">
+  <section class="tool-run-card" :data-run-id="runId" :aria-busy="busy ? 'true' : undefined">
     <button
       type="button"
       class="tool-run-header"

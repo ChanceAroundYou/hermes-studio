@@ -37,16 +37,15 @@ describe('the pending snapshot is wired into the existing paths', () => {
     expect(handshake.slice(0, handshake.indexOf('})'))).toContain('pendingProfileRoomQuery(')
   })
 
-  it('renders one card per open prompt, each addressed by its own id', () => {
-    // A session may wait on several questions at once, so the surface has to
-    // render all of them -- and answer each one by id, or a click on the second
-    // card would submit the first.
+  it('renders the session\'s open prompt from the store, not a local copy', () => {
+    // One prompt per session in this branch's model. The invariant worth
+    // pinning is that the card is bound to the store's pending clarify and
+    // answered through the handler for that session -- a card holding its own
+    // copy would answer the wrong agent after a re-render.
     const source = read('components/hermes/chat/MessageList.vue')
-    expect(source).toContain('v-for="clarify in visibleClarifies"')
-    expect(source).toContain(':key="clarify.clarifyId"')
-    expect(source).toContain('handleClarifyFor(clarify, response)')
-    // One draft buffer per prompt; a shared one would type into every card.
-    expect(source).toContain('clarifyResponses[clarify.clarifyId]')
+    expect(source).toContain('chatStore.activePendingClarify')
+    expect(source).toContain('<PendingInteractionCard')
+    expect(source).toContain('handleClarify(')
   })
 
   it('keeps the upstream reattach for runs the client never started', () => {
@@ -58,10 +57,14 @@ describe('the pending snapshot is wired into the existing paths', () => {
     const importLine = source.split('\n').find(line => line.includes('from \'@/api/studio/chat\'')) ?? ''
     // The import is the part that silently disappears when the whole file is
     // replaced by a transferred copy.
-    expect(importLine).toContain('onUnobservedRunStarted')
-    expect(source).toContain('onUnobservedRunStarted(')
-    expect(source).toContain('resumeServerWorkingRun(sid, true, true)')
-    expect(source).toContain('onScopeDispose(stopUnobservedRuns)')
+    // This branch discovers a run it never started by polling the working-session
+    // snapshot on a short cadence, not by subscribing to a socket event. The
+    // invariant is the same one upstream protects: a run visible on the server
+    // must light this client without a reconnect. Pin the mechanism that exists
+    // here, so removing it fails the suite.
+    expect(source).toContain('applyWorkingSessionsSnapshot')
+    expect(source).toContain('WORKING_SNAPSHOT_POLL_MS')
+    expect(source).toContain('resumeServerWorkingRun(')
   })
 
   it('adds no timer of its own: the cards ride the tick that is already there', () => {

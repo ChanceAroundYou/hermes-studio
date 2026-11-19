@@ -113,7 +113,8 @@ let finishActiveSegmentAudio: (() => void) | null = null
 let previousBodyOverflow = ''
 let previousDocumentOverflow = ''
 let responseStartMessageIndex = 0
-let lastResponseAssistantId: string | null = null
+let responsePromptMessage: Message | null = null
+let lastResponseAssistantMessage: Message | null = null
 let responseFinalizing = false
 let playbackGeneration = 0
 let ttsSegmentIndex = 0
@@ -130,7 +131,10 @@ let localStreamSessionId: string | null = null
 const speechQueueIdleWaiters = new Set<() => void>()
 const synthesisControllers = new Set<AbortController>()
 const synthesisJobs: SpeechSynthesisJob[] = []
-const processedAssistantText = new Map<string, string>()
+type AssistantSpeechProgress = { message: Message; text: string }
+// Object identity survives terminal ID alignment; persisted IDs survive history rebuilds.
+let processedAssistantText = new WeakMap<Message, AssistantSpeechProgress>()
+const processedAssistantIds = new Map<string, AssistantSpeechProgress>()
 const processedToolMessageIds = new Set<string>()
 const speechSegmenter = createMcuSpeechSegmenter({ emitOnSentenceEnd: true })
 
@@ -196,10 +200,23 @@ const orbStyle = computed(() => ({
   '--voice-energy': visualEnergy.value.toFixed(3),
   transform: `scale(${(1 + visualEnergy.value * 0.075).toFixed(3)})`,
 }))
+/** The messages that belong to this voice turn, anchored on the submitted prompt. */
+function responseMessagesForTurn(): Message[] {
+  const messages = chatStore.messages
+  responsePromptMessage ||= [...messages.slice(responseStartMessageIndex)].reverse().find(message =>
+    message.role === 'user' && message.timestamp >= responseStartedAt.value,
+  ) || null
+  const promptIndex = responsePromptMessage
+    ? messages.findIndex(message => message === responsePromptMessage || message.id === responsePromptMessage!.id)
+    : -1
+  // Prepended history (loadOlderMessages) lands before the prompt, so slicing
+  // from the prompt keeps it out of the reply being spoken.
+  return messages.slice(promptIndex >= 0 ? promptIndex + 1 : responseStartMessageIndex)
+}
+
 const voiceToolCalls = computed(() => {
   if (!responseStartedAt.value) return []
-  return chatStore.messages
-    .slice(responseStartMessageIndex)
+  return responseMessagesForTurn()
     .filter((message): message is Message => message.role === 'tool' && Boolean(message.toolName))
     .slice(-4)
     .reverse()
@@ -400,11 +417,13 @@ function resetResponseSpeechState() {
   speechSegments.value = []
   activeSpeechSegment.value = null
   responseStartMessageIndex = chatStore.messages.length
-  lastResponseAssistantId = null
+  responsePromptMessage = null
+  lastResponseAssistantMessage = null
   responseFinalizing = false
   responseAudioStarted.value = false
   ttsSegmentIndex = 0
-  processedAssistantText.clear()
+  processedAssistantText = new WeakMap()
+  processedAssistantIds.clear()
   processedToolMessageIds.clear()
   speechSegmenter.reset()
 }
@@ -994,13 +1013,13 @@ function enqueueSpeechSegment(text: string, assistantId = 'assistant') {
   void drainSpeechSegments()
 }
 
-function flushSpeechSegmenter(assistantId = lastResponseAssistantId || 'assistant') {
+function flushSpeechSegmenter(assistantId = lastResponseAssistantMessage?.id || 'assistant') {
   const segment = speechSegmenter.flush()
   if (segment) enqueueSpeechSegment(segment, assistantId)
 }
 
 function processResponseMessages() {
-  const responseMessages = chatStore.messages.slice(responseStartMessageIndex)
+  const responseMessages = responseMessagesForTurn()
   for (const message of responseMessages) {
     // A failure is recorded as its own assistant row (systemType 'error') so the
     // transcript keeps whatever the run managed to say. That row is a status line,
@@ -1008,16 +1027,25 @@ function processResponseMessages() {
     // loud. finishResponseIfReady already classifies it as a failure.
     if (message.role === 'assistant' && message.systemType !== 'error') {
       const content = message.content || ''
-      const previous = processedAssistantText.get(message.id) || ''
-      processedAssistantText.set(message.id, content)
+      // The same reply can arrive as a new object with a new id after a refresh.
+      // Either index answering "already spoken this much" is what stops a
+      // completed answer from being read out a second time.
+      const progress = processedAssistantText.get(message) || processedAssistantIds.get(message.id)
+        || { message, text: '' }
+      const previous = progress.text
+      if (lastResponseAssistantMessage === progress.message) lastResponseAssistantMessage = message
+      progress.message = message
+      progress.text = content
+      processedAssistantText.set(message, progress)
+      processedAssistantIds.set(message.id, progress)
 
       if (!content.startsWith(previous)) continue
       const delta = content.slice(previous.length)
       if (!delta) continue
-      if (lastResponseAssistantId && lastResponseAssistantId !== message.id) {
-        flushSpeechSegmenter(lastResponseAssistantId)
+      if (lastResponseAssistantMessage && lastResponseAssistantMessage !== message) {
+        flushSpeechSegmenter(lastResponseAssistantMessage.id)
       }
-      lastResponseAssistantId = message.id
+      lastResponseAssistantMessage = message
       for (const segment of speechSegmenter.pushDelta(delta)) {
         enqueueSpeechSegment(segment, message.id)
       }
@@ -1035,7 +1063,7 @@ function finishResponseIfReady() {
   if (!waitingForResponse.value) return
   processResponseMessages()
   if (chatStore.isStreaming || responseFinalizing) return
-  const responseMessages = chatStore.messages.slice(responseStartMessageIndex)
+  const responseMessages = responseMessagesForTurn()
   const response = [...responseMessages].reverse().find(message =>
     message.role === 'assistant' && message.systemType !== 'error' && Boolean(message.content.trim()),
   )

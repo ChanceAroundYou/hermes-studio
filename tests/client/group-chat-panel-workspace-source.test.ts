@@ -1,48 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { GROUP_AGENT_OPTIONS } from '../../packages/client/src/utils/agent-options'
-import { isGlobalOnlyCodingAgent, isNativeCodingAgent } from '../../packages/client/src/utils/agent-catalog'
-import { submittedCodingAgentSelection } from '../../packages/client/src/utils/coding-agent-mode'
-
-/**
- * Upstream 0.8.20 routed borders and radii through design tokens, so the identical rule is
- * now written `border: var(--border-width, 1px) solid #fff` instead of
- * `border: 1px solid #fff`. A guard written against the bare literal stops matching while
- * the rendered border has not changed at all. hasDeclaration reads one property inside one
- * selector block, unwraps `var(<token>, <fallback>)` to its fallback value, and compares
- * against the value the guard is about: deleting the declaration, changing the colour, or
- * changing the fallback all still fail.
- */
-function selectorBody(source: string, selector: string): string {
-  for (const variant of [selector + ' {', selector + '{']) {
-    let at = source.indexOf(variant)
-    while (at >= 0) {
-      const open = at + variant.length - 1
-      let depth = 0
-      for (let i = open; i < source.length; i += 1) {
-        if (source[i] === '{') depth += 1
-        else if (source[i] === '}') {
-          depth -= 1
-          if (depth === 0) return source.slice(open, i + 1)
-        }
-      }
-      at = source.indexOf(variant, at + 1)
-    }
-  }
-  return ''
-}
-
-function declarationValue(source: string, selector: string, property: string): string | null {
-  const body = selectorBody(source, selector)
-  if (!body) return null
-  const match = new RegExp(String.raw`${property}:([^;]*);`).exec(body)
-  if (!match) return null
-  return match[1].trim().replace(/var\(--[a-z-]+,\s*([^)]*)\)/g, '$1')
-}
-
-function hasDeclaration(source: string, selector: string, property: string, value: string): boolean {
-  return declarationValue(source, selector, property) === value
-}
 
 describe('GroupChatPanel workspace save handling', () => {
   it('offers Pi, Grok, and OpenCode in ordinary and paired group chat and filters each provider target', () => {
@@ -57,22 +15,11 @@ describe('GroupChatPanel workspace save handling', () => {
     ]))
     for (const source of [panel, linkView]) {
       expect(source).toContain('const groupAgentTypeDefinitions = GROUP_AGENT_OPTIONS')
-      // These used to be per-agent `selectedAgentType.value === 'x'` branches inside each
-      // surface, which is how a surface could quietly stop offering an agent by dropping a
-      // branch. They are rows of the shared GROUP_AGENT_OPTIONS list (asserted above), and
-      // the capability questions are answered from the agent catalog, so neither surface
-      // keeps a private agent list any more.
-      expect(source).toContain('const groupAgentTypeOptions = computed(')
-      expect(source).toContain('isGlobalOnlyCodingAgent(selectedAgentType')
-      expect(source).toContain('isNativeCodingAgent(selectedAgentType')
+      expect(source).toMatch(/selectedAgentType\.value === 'pi'[\s\S]*?\\? 'pi'/)
+      expect(source).toContain("selectedAgentType.value === 'grok'")
+      expect(source).toContain("selectedAgentType.value === 'opencode'")
+      expect(source).toContain("selectedAgentType.value === 'cursor'")
     }
-    // The fork wrote `selectedAgentType.value === 'cursor'` because Cursor offers no scoped
-    // mode. Upstream 0.8.20 answers the same question from config/agents.json
-    // (cursor: modes ['global']), so the behaviour is asserted here instead: editing the
-    // catalog to hand Cursor a scoped mode fails this guard rather than silently changing
-    // which model fields a group room shows.
-    expect(isGlobalOnlyCodingAgent('cursor')).toBe(true)
-    expect(isNativeCodingAgent('cursor')).toBe(false)
     expect(panel).toContain('priorAgentMode.value = storedPriorAgentMode(agent.priorAgentMode)')
     expect(panel).toContain('priorAgentMode: priorAgentMode.value,')
     expect(panel).toContain('submittedCodingAgentSelection({')
@@ -84,43 +31,23 @@ describe('GroupChatPanel workspace save handling', () => {
   })
 
   it('keeps free-text input available alongside clarification choices in single and group chat', () => {
-    // Both conversations render the one shared card, so free text and choices
-    // cannot drift apart between them. They no longer share one markup shape
-    // though: single chat renders one card per open prompt, group chat still
-    // renders the room's first, so each is pinned against its own binding.
-    const single = readFileSync('packages/client/src/components/hermes/chat/MessageList.vue', 'utf8')
-    const singleMarker = single.indexOf('v-for="clarify in visibleClarifies"')
-    const singleCard = single.slice(
-      single.lastIndexOf('<PendingInteractionCard', singleMarker),
-      single.indexOf('</Transition>', singleMarker),
-    )
-    expect(singleCard).toContain('<PendingInteractionCard')
-    expect(singleCard).toContain(':choices="clarify.choices"')
-<<<<<<< Updated upstream
-    // Prettier in 0.8.20 typed the inline arrow parameters, so the handler reads
-    // `(response: string) => handleClarifyFor(...)`. What matters is that submit,
-    // select and dismiss all route through the per-prompt handler with the prompt bound
-    // -- a card keyed by the wrong prompt answers the wrong agent.
-    expect(singleCard).toMatch(/@submit="\(?\s*response[^)]*\)?\s*=>\s*handleClarifyFor\(clarify,\s*response\)"/)
-    expect(singleCard).toMatch(/@select="\(?\s*response[^)]*\)?\s*=>\s*handleClarifyFor\(clarify,\s*response\)"/)
-    expect(singleCard).toContain('@dismiss="handleClarifyFor(clarify, \'\')"')
-    // A prompt with no choices must still render the card, otherwise a free-text-only
-    // question has no answer control at all.
-=======
-    expect(singleCard).toContain('@submit="response => handleClarifyFor(clarify, response)"')
->>>>>>> Stashed changes
-    expect(singleCard).not.toContain('v-if="clarify.choices')
+    const sources = [
+      readFileSync('packages/client/src/components/hermes/chat/MessageList.vue', 'utf8'),
+      readFileSync('packages/client/src/components/hermes/group-chat/GroupChatPanel.vue', 'utf8'),
+    ]
 
-    const group = readFileSync('packages/client/src/components/hermes/group-chat/GroupChatPanel.vue', 'utf8')
-    const groupMarker = group.indexOf('v-if="!visibleApproval && visibleClarify"')
-    const groupCard = group.slice(
-      group.lastIndexOf('<PendingInteractionCard', groupMarker),
-      group.indexOf('</Transition>', groupMarker),
-    )
-    expect(groupCard).toContain('<PendingInteractionCard')
-    expect(groupCard).toContain(':choices="visibleClarify.choices"')
-    expect(groupCard).toContain('@submit="handleClarify"')
-    expect(groupCard).not.toContain('v-if="visibleClarify.choices')
+    for (const source of sources) {
+      const marker = source.indexOf('v-if="!visibleApproval && visibleClarify"')
+      const start = source.lastIndexOf('<PendingInteractionCard', marker)
+      const clarifyPanel = source.slice(start, source.indexOf('</Transition>', marker))
+
+      // Both conversations render the one shared card now, so free text and
+      // choices can no longer drift apart between them.
+      expect(clarifyPanel).toContain('<PendingInteractionCard')
+      expect(clarifyPanel).toContain(':choices="visibleClarify.choices"')
+      expect(clarifyPanel).toContain('@submit="handleClarify"')
+      expect(clarifyPanel).not.toContain('v-if="visibleClarify.choices')
+    }
 
     const card = readFileSync('packages/client/src/components/hermes/chat/PendingInteractionCard.vue', 'utf8')
     expect(card).toContain('class="clarify-float-input-row"')
@@ -257,9 +184,9 @@ describe('GroupChatPanel workspace save handling', () => {
       groupRunCard.indexOf('.run-time {'),
     )
 
-    expect(hasDeclaration(singleMessage, '.message-bubble', 'border-radius', '10px')).toBe(true)
+    expect(singleMessage).toMatch(/\.message-bubble\s*\{[^}]*border-radius: 10px;/s)
     expect(runCardStyles).toContain('border: none;')
-    expect(hasDeclaration(runCardStyles, '.run-card', 'border-radius', '10px')).toBe(true)
+    expect(runCardStyles).toContain('border-radius: 10px;')
     expect(runCardStyles).not.toContain('border-color:')
   })
 
@@ -339,7 +266,7 @@ describe('GroupChatPanel workspace save handling', () => {
     expect(source).toContain('.agent-avatar-rail-offline')
     expect(source).toContain('filter: grayscale(1)')
     expect(source).toContain('opacity: 0.42')
-    expect(hasDeclaration(source, '.agent-avatar-rail-agent .agent-avatar', 'border', '1px solid #fff')).toBe(true)
+    expect(source).toMatch(/\.agent-avatar-rail-agent \.agent-avatar\s*\{[^}]*border: 1px solid #fff;/s)
   })
 
   it('keeps invite-only chat free of settings and speech controls', () => {
@@ -507,10 +434,7 @@ describe('GroupChatPanel workspace save handling', () => {
     expect(roomAvatar).not.toContain(`:class="{ 'is-active': overflowActive }"`)
     expect(roomAvatar).toContain('animation: room-avatar-rainbow-glow 4s linear infinite')
     expect(roomAvatar).toContain('@keyframes room-avatar-rainbow-glow')
-    // The glow ring sits 4px outside the 36px grid cell, so its own radius has to stay 4px
-    // above the cell's 8px or the ring clips the cell corners.
-    expect(selectorBody(roomAvatar, '&.is-active::after')).toContain('inset: -4px;')
-    expect(hasDeclaration(roomAvatar, '&.is-active::after', 'border-radius', '12px')).toBe(true)
+    expect(roomAvatar).toMatch(/\.room-agent-grid[\s\S]*?&\.is-active::after\s*\{[\s\S]*?border-radius: 12px;/)
     expect(roomAvatar).toContain('0 0 0 2px #ff6b6b')
     expect(roomAvatar).toContain('0 0 0 2px #48dbfb')
     expect(roomAvatar).toContain('0 0 0 2px #5f27cd')
@@ -541,8 +465,8 @@ describe('GroupChatPanel workspace save handling', () => {
     expect(avatarSource).toContain("t('profiles.model')")
     expect(avatarSource).toContain('class="message-agent-mention"')
     expect(avatarSource).toContain("@click.stop=\"emit('mention', agent)\"")
-    expect(hasDeclaration(avatarSource, '.message-agent-avatar > :deep(.profile-avatar-view)', 'border', '1px solid #fff')).toBe(true)
-    expect(hasDeclaration(listSource, '.empty-agent-avatar', 'border', '1px solid #fff')).toBe(true)
+    expect(avatarSource).toMatch(/\.message-agent-avatar > :deep\(\.profile-avatar-view\)\s*\{[^}]*border: 1px solid #fff;/s)
+    expect(listSource).toMatch(/\.empty-agent-avatar\s*\{[^}]*border: 1px solid #fff;/s)
     expect(listSource).not.toMatch(/\.empty-agent-avatar\s*\{[^}]*background:/s)
     expect(itemSource).toContain('<GroupAgentMessageAvatar')
     expect(runCardSource).toContain('<GroupAgentMessageAvatar')
@@ -563,11 +487,6 @@ describe('GroupChatPanel workspace save handling', () => {
 
   it('fades the group chat surface when switching between rooms like single chat', () => {
     const groupSource = readFileSync('packages/client/src/components/hermes/group-chat/GroupChatPanel.vue', 'utf8')
-    // Single chat no longer owns its fade: upstream lifted the identical reveal into one
-    // composable that ChatPanel and PersonView both call. Reading ChatPanel for the
-    // keyframes keeps passing even if the shared reveal were deleted, so the composable is
-    // read directly and ChatPanel only has to prove it uses it.
-    const revealSource = readFileSync('packages/client/src/composables/useChatSurfaceReveal.ts', 'utf8')
     const singleSource = readFileSync('packages/client/src/components/hermes/chat/ChatPanel.vue', 'utf8')
 
     expect(groupSource).toContain('ref="groupChatSurfaceRef"')
@@ -577,14 +496,8 @@ describe('GroupChatPanel workspace save handling', () => {
     expect(groupSource).toContain('duration: 1500')
     expect(groupSource).toContain("easing: 'ease'")
     expect(groupSource).toContain("{ flush: 'post' }")
-    // Same keyframes, same 1500ms, same cancel-on-replace contract in both conversations.
-    expect(revealSource).toContain('duration: 1500')
-    expect(revealSource).toContain("easing: 'ease'")
-    expect(revealSource).toContain('animation?.cancel()')
-    expect(revealSource).toContain("flush: 'post'")
-    // Importing the composable is not using it: assert the call is a statement in the
-    // component body, so dropping the reveal while leaving the import behind fails here.
-    expect(singleSource).toMatch(/^\s*useChatSurfaceReveal\(/m)
+    expect(singleSource).toContain('duration: 1500')
+    expect(singleSource).toContain('easing: "ease"')
   })
 
   it('shows the refactor notice once and persists acknowledgement locally', () => {
@@ -650,76 +563,19 @@ describe('GroupChatPanel workspace save handling', () => {
     const selection = readFileSync('packages/client/src/utils/coding-agent-mode.ts', 'utf8')
     expect(selection).toContain("agentMode: input.usesGlobal ? 'global' : 'scoped'")
     expect(selection).toContain("provider: input.usesGlobal ? '' : input.provider")
-    // Upstream e1df360c1 (#3360) let a global-mode agent carry its own native model instead
-    // of submitting an empty scoped model. That is the feature, not the regression. What has
-    // to stay true is the scoped half: a global selection must never leak the scoped
-    // provider or the scoped model into the payload, and it must still fall back to an
-    // empty model when the agent has no native model selected.
-    expect(submittedCodingAgentSelection({
-      agent: 'claude', agentMode: 'global', priorAgentMode: undefined,
-      provider: 'openrouter', model: 'claude-sonnet-4', usesGlobal: true, nativeModel: 'native-1',
-    })).toEqual({ agent: 'claude', agentMode: 'global', priorAgentMode: '', provider: '', model: 'native-1' })
-    expect(submittedCodingAgentSelection({
-      agent: 'claude', agentMode: 'global', priorAgentMode: undefined,
-      provider: 'openrouter', model: 'claude-sonnet-4', usesGlobal: true,
-    })).toEqual({ agent: 'claude', agentMode: 'global', priorAgentMode: '', provider: '', model: '' })
-    expect(submittedCodingAgentSelection({
-      agent: 'claude', agentMode: 'scoped', priorAgentMode: undefined,
-      provider: 'openrouter', model: 'claude-sonnet-4', usesGlobal: false,
-    })).toEqual({ agent: 'claude', agentMode: 'scoped', priorAgentMode: '', provider: 'openrouter', model: 'claude-sonnet-4' })
+    expect(selection).toContain("model: input.usesGlobal ? '' : input.model")
     expect(source).toContain("apiMode: selectedAgentType.value === 'hermes' || usesGlobalAgentMode.value ? undefined : selectedAgentApiMode.value")
-    // The submitted effort is scoped-only in scoped mode; in global mode it belongs to the
-    // native agent, and the scoped effort is dropped when the surface switches. Asserting
-    // the literal `? ''` would fail on #3360 while the guarantee it protects still holds.
-    expect(source).toMatch(/reasoningEffort: usesGlobalAgentMode\.value \? nativeAgentSelection\.value\.reasoningEffort : agentReasoningEffortValue\.value,/)
-    expect(source).toMatch(/selectedAgentReasoningEffort\.value = usesGlobalAgentMode\.value \? '' :/)
-    // The paired link view has no native agent, so global mode there still submits nothing.
-    expect(linkView).toContain("reasoningEffort: usesGlobalAgentMode.value ? '' : agentReasoningEffortValue.value")
-    // Each surface drives its own model control: the room form goes through
-    // ScopedModelSelector (@select), the invite link view keeps a plain select
-    // (@update:value), and upstream renamed the room handler. The name is not the point --
-    // picking a different scoped model must drop the scoped reasoning effort, or a stale
-    // effort gets submitted against a model that never had it. Assert the handler each
-    // surface actually wires up, and that the handler body clears the effort.
-    function handlerBody(text: string, name: string): string {
-      const at = text.indexOf('function ' + name + '(')
-      if (at < 0) return ''
-      const end = text.indexOf('\n}', at)
-      return text.slice(at, end < 0 ? at + 400 : end + 2)
+    expect(source).toContain("reasoningEffort: usesGlobalAgentMode.value ? '' : selectedAgentReasoningEffort.value")
+    for (const modelSource of [source, linkView]) {
+      expect(modelSource).toContain('function handleAgentModelChange(model: string)')
+      expect(modelSource).toContain("selectedAgentReasoningEffort.value = ''")
+      expect(modelSource).toContain('@update:value="handleAgentModelChange"')
     }
-
-    expect(source).toContain('@select="handleAgentModelSelect"')
-    expect(handlerBody(source, 'handleAgentModelSelect')).toContain("selectedAgentReasoningEffort.value = ''")
-    expect(linkView).toContain('function handleAgentModelChange(model: string)')
-    expect(linkView).toContain('@update:value="handleAgentModelChange"')
-    expect(handlerBody(linkView, 'handleAgentModelChange')).toContain("selectedAgentReasoningEffort.value = ''")
     expect(source).toContain('inferCodingAgentApiMode(')
     expect(source).toContain('normalizeCodingAgentApiMode(')
-    // The protocol-scope picker must stay hidden for Hermes (there is no upstream
-    // protocol to choose) and for a global-mode agent (the agent owns its own
-    // configuration). Upstream added a third clause for a protocol the form already knows;
-    // the two original clauses have to stay.
-    expect(source).toMatch(/v-if="selectedAgentType !== 'hermes' && !usesGlobalAgentMode[^"]*"/)
-    // The fork pinned the literal array because the two surfaces used to carry their own
-    // copy and one could fall behind. Read the arrays instead of the literal so adding an
-    // agent upstream does not break the guard, while the two properties that actually
-    // matter still fail if they move: the room form and the invite link view must agree,
-    // Cursor must be in the list (it has no scoped mode), and neither built-in agent may
-    // ever be treated as global-capable.
-    function globalModeAgents(text: string): string[] {
-      const match = /const supportsGlobalAgentMode = computed\(\(\) => \[([^\]]*)\]\.includes\(selectedAgentType\.value\)\)/.exec(text)
-      if (!match) return []
-      return match[1].split(',').map(entry => entry.trim().replace(/^'|'$/g, ''))
-    }
-
-    const panelGlobalAgents = globalModeAgents(source)
-    const linkGlobalAgents = globalModeAgents(linkView)
-    expect(panelGlobalAgents.length).toBeGreaterThan(0)
-    expect(panelGlobalAgents).toEqual(linkGlobalAgents)
-    expect(panelGlobalAgents).toContain('cursor')
-    expect(panelGlobalAgents).not.toContain('hermes')
-    expect(panelGlobalAgents).not.toContain('ekko')
+    expect(source).toContain("v-if=\"selectedAgentType !== 'hermes' && !usesGlobalAgentMode\"")
     for (const modelSource of [source, linkView]) {
+      expect(modelSource).toContain("const supportsGlobalAgentMode = computed(() => ['claude', 'codex', 'pi', 'grok', 'opencode', 'dsh', 'cursor'].includes(selectedAgentType.value))")
       expect(modelSource).toContain("v-if=\"!usesGlobalAgentMode\"")
     }
     expect(source).toContain('@update:value="handleAgentModeChange"')

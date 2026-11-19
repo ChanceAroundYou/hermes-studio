@@ -16,12 +16,23 @@ vi.mock('@/api/studio/sessions', () => ({ fetchSessionMessagesPage: history.page
 vi.mock('@/api/studio/chat', () => ({
   startRunViaSocket: transport.start, resumeSession: transport.resume, registerSessionHandlers: transport.register,
   unregisterSessionHandlers: vi.fn(), getChatRunSocket: vi.fn(() => ({ emit: vi.fn() })),
+  // The store opens the session socket at module setup; without this the
+  // whole store throws and every case in this file fails at import.
+  connectChatRun: vi.fn(() => ({ emit: vi.fn() })),
   onUnobservedRunStarted: vi.fn(() => vi.fn()), onPeerUserMessage: vi.fn(() => vi.fn()), onSessionCommand: vi.fn(() => vi.fn()),
   onSessionTitleUpdated: vi.fn(() => vi.fn()), onSessionWorkspaceUpdated: vi.fn(() => vi.fn()),
   onSessionSettingsUpdated: vi.fn(() => vi.fn()), onRunUsageUpdated: vi.fn(() => vi.fn()),
   respondToolApproval: vi.fn(), respondClarify: vi.fn(),
 }))
-vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default' }))
+vi.mock('@/api/client', () => ({
+  getActiveProfileName: () => 'default',
+  // The avatar map is built at module load, so any importer of the chat store
+  // needs these to exist.
+  getBaseUrlValue: () => '',
+  hasApiKey: () => false,
+  getApiKey: () => '',
+  wsOrigin: () => ({ host: '', prefix: '' }),
+}))
 vi.mock('@/api/studio/background-status', () => ({ observeBackgroundStatus: () => vi.fn() }))
 vi.mock('@/stores/hermes/profiles', () => ({ useProfilesStore: () => ({ activeProfileName: 'default' }) }))
 vi.mock('@/stores/hermes/settings', () => ({ useSettingsStore: () => ({ display: {} }) }))

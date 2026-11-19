@@ -564,7 +564,7 @@ interface AbortState {
 // ordinary one: the server has to settle that question before the run can reach
 // its terminal event. Reporting such a stop as lost tells the user to press a
 // button that is already doing the right thing.
-const ABORT_WATCHDOG_MS = 20_000
+export const ABORT_WATCHDOG_MS = 20_000
 // ...but never indefinitely, or a genuinely lost stop would leave the button
 // dead for the rest of the run. Extra windows are granted only while the
 // session is still waiting on a prompt.
@@ -1338,6 +1338,14 @@ function mapHermesMessages(msgs: HermesMessage[], taskPlans: unknown[] = [], pre
 
 function normalizeForDedup(s: string): string {
   return (s ?? '').replace(/\s+/g, ' ').trim()
+}
+
+/** Messages of the turn in progress: everything after the last user prompt. */
+function messagesInCurrentTurn(msgs: Message[]): Message[] {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'user') return msgs.slice(i + 1)
+  }
+  return msgs
 }
 
 function isDuplicateAssistantContent(
@@ -2278,9 +2286,11 @@ export const useChatStore = defineStore('chat', () => {
 
   /** Is the stop still waiting on an answer the server has to settle first? */
   function sessionWaitsOnPrompt(sessionId: string): boolean {
-    // One prompt per session in this branch's model, so presence is the whole
-    // question. `pendingApprovals` is keyed by session; clarifications are not.
-    return pendingClarifies.value.has(sessionId) || pendingApprovals.value.has(sessionId)
+    // Prompts are keyed `${sessionId}:${clarifyId}`, so a bare session id is
+    // never a key here. Counting by session is the only correct test, and a
+    // lookup by bare id silently answers "no prompt" -- which made the watchdog
+    // give up on a stop the server was still legitimately settling.
+    return claritiesForSession(sessionId).length > 0 || pendingApprovals.value.has(sessionId)
   }
 
   function clearAbortWatchdog(sessionId: string) {
@@ -2298,6 +2308,7 @@ export const useChatStore = defineStore('chat', () => {
         abortWatchdogs.delete(sessionId)
         if (!abortStates.value.get(sessionId)?.aborting) return
         const extended = abortWatchdogExtensions.get(sessionId) || 0
+        // eslint-disable-next-line no-console
         if (sessionWaitsOnPrompt(sessionId) && extended < ABORT_WATCHDOG_MAX_EXTENSIONS) {
           abortWatchdogExtensions.set(sessionId, extended + 1)
           armAbortWatchdog(sessionId)
@@ -2500,14 +2511,23 @@ export const useChatStore = defineStore('chat', () => {
       pendingRunUsage.get(sessionId)?.delete(summary.runId)
       if (!pendingRunUsage.get(sessionId)?.size) pendingRunUsage.delete(sessionId)
     }
-    if (target && summary) {
-      let message = target.messages.find(m => m.role === 'assistant' && m.id === summary.assistantMessageId)
+    // A task return carries the same terminal identity as run usage, and arrives
+    // on its own: a person run finishes by returning a task, often with no usage
+    // summary at all. Reading only `run_usage` left the live row on its temporary
+    // id, so the next fetch saw two different messages for one answer.
+    const taskReturn = (evt as any)?.person_task_return as { assistantMessageId?: string } | undefined
+    const persistedId = taskReturn?.assistantMessageId || summary?.assistantMessageId
+    if (target && (summary || taskReturn)) {
+      let message = target.messages.find(m => m.role === 'assistant' && m.id === persistedId)
         || target.messages.find(m => m.role === 'assistant' && m.id === assistantMessageId)
-      if (!message && summary.assistantMessageId) {
-        message = { id: summary.assistantMessageId, role: 'assistant', content: '', timestamp: Date.now() }
+      if (!message && persistedId) {
+        message = { id: persistedId, role: 'assistant', content: '', timestamp: Date.now() }
         target.messages.push(message)
       }
       if (message) {
+        if (persistedId && !target.messages.some(m => m !== message && m.id === persistedId)) message.id = persistedId
+        if (taskReturn) (message as any).personTaskReturn = taskReturn
+        if (!summary) return
         if (summary.assistantMessageId && !target.messages.some(m => m !== message && m.id === summary.assistantMessageId)) message.id = summary.assistantMessageId
         message.runUsage = summary
       }
@@ -3007,7 +3027,12 @@ export const useChatStore = defineStore('chat', () => {
         )
       const detail = await fetchSessionMessagesPage(sid, 0, limit, activeSession.value?.profile)
       if (!detail) return false
-      const mapped = mapHermesMessages(detail.messages || [], detail.taskPlans, sid ? [] : [])
+      // Merge against what is already on screen. Passing an empty list here threw
+      // away every live row and rebuilt the transcript from scratch, so a
+      // foreground refresh gave the same reply a new object and a new id --
+      // which made the voice stage read a finished answer out loud a second time
+      // and made tool rows look like they had never been settled.
+      const mapped = mapHermesMessages(detail.messages || [], detail.taskPlans, target.messages)
       target.messages = mapped
       restorePersistedSubagentStreams(sid)
       setWorkspaceRunChanges(sid, detail.workspaceRunChanges || [])
@@ -3688,7 +3713,11 @@ export const useChatStore = defineStore('chat', () => {
     if (!s) return
     const idx = s.messages.findIndex(m => m.id === id)
     if (idx !== -1) {
-      s.messages[idx] = { ...s.messages[idx], ...update }
+      // Mutate in place. Replacing the object broke two things that hold a
+      // reference to the live row: the voice stage tracks speech progress by
+      // message identity, and any caller that captured the message before a
+      // status update saw its own copy freeze at the old content.
+      Object.assign(s.messages[idx]!, update)
     }
   }
 
@@ -4880,7 +4909,7 @@ export const useChatStore = defineStore('chat', () => {
       ctx.reasoningAssistantMessageId = last.id
       noteReasoningStart(last.id)
     } else {
-      if (isDuplicateAssistantContent(msgs, 'assistant', text, Date.now())) return
+      if (isDuplicateAssistantContent(messagesInCurrentTurn(msgs), 'assistant', text, Date.now())) return
       const newId = uid()
       addMessage(ctx.sid, { id: newId, role: 'assistant', content: '', timestamp: Date.now(), isStreaming: true, reasoning: text } as Message)
       ctx.activeAssistantMessageId = newId
@@ -4904,7 +4933,7 @@ export const useChatStore = defineStore('chat', () => {
       last.content = next
     } else {
       const nextContent = (evt as any).delta || ''
-      if (isDuplicateAssistantContent(msgs, 'assistant', nextContent, Date.now())) return
+      if (isDuplicateAssistantContent(messagesInCurrentTurn(msgs), 'assistant', nextContent, Date.now())) return
       const newId = uid()
       noteThinkingDelta(newId, '', nextContent)
       addMessage(ctx.sid, { id: newId, role: 'assistant', content: nextContent, timestamp: Date.now(), isStreaming: true } as Message)
@@ -4924,7 +4953,7 @@ export const useChatStore = defineStore('chat', () => {
       active.isStreaming = false
       if (active.reasoning) noteReasoningEnd(active.id)
     } else {
-      if (isDuplicateAssistantContent(msgs, 'assistant', text, Date.now())) return
+      if (isDuplicateAssistantContent(messagesInCurrentTurn(msgs), 'assistant', text, Date.now())) return
       addMessage(ctx.sid, { id: uid(), role: 'assistant', content: text, timestamp: Date.now(), isStreaming: false } as Message)
     }
     ctx.activeAssistantMessageId = null
@@ -5666,7 +5695,7 @@ export const useChatStore = defineStore('chat', () => {
                     })
                   }
                 } else if (parsedContentTrimmed) {
-                  if (isDuplicateAssistantContent(getSessionMsgs(sid), 'assistant', parsedContent, Date.now())) {
+                  if (isDuplicateAssistantContent(messagesInCurrentTurn(getSessionMsgs(sid)), 'assistant', parsedContent, Date.now())) {
                     finalOutputTrimmed = parsedContentTrimmed
                   } else {
                     addMessage(sid, {
@@ -5694,7 +5723,7 @@ export const useChatStore = defineStore('chat', () => {
                   if (activeAssistant) {
                     updateMessage(sid, activeAssistant.id, { content: finalOutput })
                   } else {
-                    if (isDuplicateAssistantContent(getSessionMsgs(sid), 'assistant', finalOutput, Date.now())) {
+                    if (isDuplicateAssistantContent(messagesInCurrentTurn(getSessionMsgs(sid)), 'assistant', finalOutput, Date.now())) {
                       runProducedAssistantText = true
                     } else {
                       addMessage(sid, {
@@ -6283,7 +6312,7 @@ export const useChatStore = defineStore('chat', () => {
                 })
               }
             } else if (parsedContentTrimmed) {
-              if (isDuplicateAssistantContent(getSessionMsgs(sid), 'assistant', parsedContent, Date.now())) {
+              if (isDuplicateAssistantContent(messagesInCurrentTurn(getSessionMsgs(sid)), 'assistant', parsedContent, Date.now())) {
                 finalOutputTrimmed = parsedContentTrimmed
               } else {
                 addMessage(sid, {
@@ -6310,7 +6339,7 @@ export const useChatStore = defineStore('chat', () => {
               if (activeAssistant) {
                 updateMessage(sid, activeAssistant.id, { content: finalOutput })
               } else {
-                if (isDuplicateAssistantContent(getSessionMsgs(sid), 'assistant', finalOutput, Date.now())) {
+                if (isDuplicateAssistantContent(messagesInCurrentTurn(getSessionMsgs(sid)), 'assistant', finalOutput, Date.now())) {
                   runProducedAssistantText = true
                 } else {
                   addMessage(sid, {
@@ -6591,7 +6620,14 @@ export const useChatStore = defineStore('chat', () => {
    */
   function requestRunAbort(sid: string): boolean {
     const ctrl = streamStates.value.get(sid)
-    if (ctrl) return ctrl.abort() !== false
+    if (ctrl) {
+      // A run handle lives on the run's socket. When that socket is gone the
+      // handle refuses, and returning false here reported the stop as lost while
+      // the session socket could still carry it -- so the user saw "Stop was not
+      // confirmed" for a stop that was never attempted. Fall back instead.
+      if (ctrl.abort() !== false) return true
+      return emitAbortOnSessionSocket(sid)
+    }
     return emitAbortOnSessionSocket(sid)
   }
 
@@ -6610,7 +6646,9 @@ export const useChatStore = defineStore('chat', () => {
     // button returned without emitting anything at all -- the fourth reader of
     // the same three sources, after the ring itself and the send-vs-queue check.
     // Same predicate, so the indicator and the button cannot disagree.
-    if (!isSessionWorking(sid)) return
+    // ...but the same warning also proves this client no longer believes the
+    // run is busy, which is exactly when the retry has to be allowed through.
+    if (!isSessionWorking(sid) && !retryingUnconfirmed) return
     // Set the flag only once the request can actually leave this tab. Painting
     // "Pausing..." for a stop that was dropped on the floor is what made a dead
     // socket indistinguishable from a slow agent.
