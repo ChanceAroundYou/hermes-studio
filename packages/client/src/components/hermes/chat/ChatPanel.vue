@@ -64,6 +64,7 @@ import { chatSessionAgentAvatar } from "@/utils/chat-agent-avatar";
 import { buildVisibleSessionCategoryGroups, partitionRecentSessions } from "./session-category-groups";
 import { buildSessionCategoryMenuChildren, resolveRecentSessionCategoryLabel } from "./session-category-menu";
 import { buildActiveSessionMenuOptions, buildSessionContextMenuOptions } from "./session-menu-options";
+import PageSidebar from "@/components/layout/PageSidebar.vue";
 import PageSidebarNav from "@/components/layout/PageSidebarNav.vue";
 import PageSidebarFooter from "@/components/layout/PageSidebarFooter.vue";
 import { isStoredSuperAdmin } from "@/api/client";
