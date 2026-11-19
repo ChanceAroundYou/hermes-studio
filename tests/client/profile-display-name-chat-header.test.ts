@@ -31,8 +31,10 @@ describe('chat message header profile name', () => {
     // surface is not showing a Hermes profile at all. What must not come back is the
     // pre-a440c83ac `alias?.trim() || activeSessionProfileName` chain, which silently
     // returned the raw profile id whenever a profile had a display name but no alias.
+    // This branch's MessageList has no overridable `userLabel`: the header
+    // always goes through the shared resolver.
     expect(source).toMatch(
-      /const userProfileName = computed\(\(\) => \(\s*\n?\s*(?:\/\/[^\n]*\n\s*)*props\.userLabel \|\| resolveProfileDisplayName\(\s*profilesStore\.profiles,\s*activeSessionProfileName\.value,?\s*\)/,
+      /const userProfileName = computed\(\(\) => \(\s*\n?\s*(?:\/\/[^\n]*\n\s*)*resolveProfileDisplayName\(\s*profilesStore\.profiles,\s*activeSessionProfileName\.value,?\s*\)/,
     )
     expect(source).not.toMatch(/activeSessionProfile\.value\?\.alias\?\.trim\(\) \|\|/)
   })

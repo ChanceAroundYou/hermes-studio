@@ -23,7 +23,9 @@ describe('the transcript keeps the message a search navigated to', () => {
   const filterStart = source.indexOf('const renderedMessages = messages')
   const filterBody = source.slice(filterStart, source.indexOf('const displayMessagesWithForkDivider', filterStart))
 
-  const focusRule = 'if (m.id === chatStore.focusMessageId && !props.hideReasoning) return true;'
+  // This branch's MessageList has no `hideReasoning` prop, so the hatch is
+  // unconditional: the focused row is always let through.
+  const focusRule = 'if (m.id === chatStore.focusMessageId) return true;'
   // The filter callback alone. The grouping call at the end of the same computed also
   // names focusMessageId, and counting the whole computed would let a second hatch
   // appear in the filter unnoticed.
@@ -49,19 +51,16 @@ describe('the transcript keeps the message a search navigated to', () => {
     }
   })
 
-  // Upstream 226ebc31a (#3571) narrowed the hatch to `&& !props.hideReasoning` so a
-  // Person surface that renders no reasoning does not grow an empty bubble for a row
-  // it cannot display, and put `props.hideToolCalls` ahead of the hatch in the same
-  // breath. That pairing only holds if every surface that hides tool calls also
-  // disables the hatch; otherwise the first rule drops the search hit outright.
-  it('keeps the hideToolCalls rule paired with the hatch narrowing at every call site', () => {
-    expect(filterCallback).toContain('if (props.hideToolCalls && m.role === "tool") return false;')
-    const surfaces = readFileSync('packages/client/src/views/hermes/PersonView.vue', 'utf8')
-    const mountLines = surfaces.split('\n').filter(line => line.includes('<MessageList'))
-    expect(mountLines.length).toBeGreaterThan(0)
-    for (const line of mountLines) {
-      expect(line).toContain('hide-tool-calls')
-      expect(line).toContain('hide-reasoning')
+  // The hatch is per-row and comes first, so no later rule can swallow the search
+  // hit: this branch narrows the assistant rows by "has renderable content"
+  // rather than by a per-surface reasoning flag.
+  it('keeps the focus check ahead of every rule that hides a row', () => {
+    const focusIndex = filterCallback.indexOf(focusRule)
+    expect(focusIndex).toBeGreaterThan(-1)
+    for (const rule of ['m.role === "tool"', 'hasRenderableAssistantContent(m)']) {
+      const at = filterCallback.indexOf(rule)
+      expect(at).toBeGreaterThan(-1)
+      expect(focusIndex).toBeLessThan(at)
     }
   })
 

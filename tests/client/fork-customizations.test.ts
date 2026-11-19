@@ -334,7 +334,9 @@ describe('fork customization: shared interaction card', () => {
     expect(rule).toContain('.pending-interaction-card--notification')
     // The shared surface is what makes them look alike; a notification-only rule
     // would reintroduce the drift while the selector still listed all three.
-    expect(rule).toMatch(/padding:\s*10px/)
+    // Padding scales with the theme, so assert the declaration and its token
+    // rather than a literal that would stop following the selected density.
+    expect(rule).toMatch(/padding:\s*calc\(10px \* var\(--spacing-scale, 1\)\)/)
     expect(rule).toMatch(/border-radius:/)
   })
 

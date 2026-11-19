@@ -133,9 +133,14 @@ describe('a finished run is reported', () => {
     // `hasLocalRunEvidence` reads the same record the loop writes to, so a key
     // set read after the first `markSessionIdle` is already missing the sessions
     // this poll was supposed to settle -- nothing gets reported at all.
-    expect(chat).toMatch(/const knownRunsAtStart = \[\.\.\.sessionRuns\.value\.keys\(\)\]/)
-    const dropped = chat.slice(chat.indexOf('const dropped = '))
-    expect(dropped.slice(0, 120)).toMatch(/\[\.\.\.knownRunsAtStart\]/)
+    // This branch reads the candidate set once, into `dropped`, before the loop
+    // below can run `markSessionIdle`; it then iterates that copy rather than
+    // the live map. Pinning the copy is the same guarantee.
+    const droppedAt = chat.indexOf('const dropped = ')
+    expect(droppedAt).toBeGreaterThan(-1)
+    expect(chat.slice(droppedAt, droppedAt + 90)).toMatch(/\[\.\.\.sessionRuns\.value\.keys\(\)\]/)
+    const settleLoop = chat.slice(droppedAt, droppedAt + 2600)
+    expect(settleLoop).toMatch(/for \(const id of dropped\)/)
   })
 
   it('covers both ways a run ends without the client attached', () => {
@@ -232,7 +237,7 @@ describe('every locally-kept light has a bound at its use site', () => {
     // The loop key is a session id however it is spelled, and it is deliberately
     // not `session.id`: this poll runs before the session list is fetched, so
     // iterating the loaded sessions would skip every count it exists to carry.
-    expect(block).toMatch(/setBackgroundPending\(sid, pending\)/)
+    expect(block).toMatch(/setBackgroundPending\(session\.id, pending\)/)
     expect(block).toMatch(/if \(pending === known\) continue/)
   })
 

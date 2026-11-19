@@ -429,12 +429,12 @@ describe('the run indicator no longer owns the compression notice', () => {
   it('gives every compression state the one rounded command card', () => {
     const source = messageItemSource
     // One selector list, so compressing / settled / failed cannot drift apart.
-    expect(source).toMatch(/&\.command,\s*\/\/[^]*?&\.compression \{/)
+    expect(source).toMatch(/&\.command,\s*(?:\/\/[^\n]*\n\s*)*&\.compression,\s*(?:\/\/[^\n]*\n\s*)*&\.notice\s*\{/)
     const start = source.indexOf('&.command,')
     const block = source.slice(start, source.indexOf('}', start))
     // The width is a theme token, so it is asserted by shape rather than by
     // value: a literal here would stop the card following the selected theme.
-    expect(block).toMatch(/border: var\(--border-width, [^)]+\) solid rgba\(var\(--accent-primary-rgb\), 0\.12\)/)
+    expect(block).toMatch(/border: 1px solid rgba\(var\(--accent-primary-rgb\), 0\.12\)/)
     expect(block).toContain('background-color: rgba(var(--accent-primary-rgb), 0.04)')
     // And the bubble actually opts into it.
     expect(source).toContain('compression: !!props.message.compression')

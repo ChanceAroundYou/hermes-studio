@@ -500,7 +500,13 @@ function spawnCodingAgentChild(command: string, args: string[], options: {
       pid: child.pid,
       agentId: options.agentId || '',
     })
-    child.once('exit', () => unregisterLiveRun(options.sessionId!, options.runId))
+    // Deregister on exit so the registry never keeps a pid it has already lost.
+    // Guarded because a stubbed child in tests implements only what it needs, and
+    // an unguarded call turned every spawning suite into a `once is not a function`
+    // failure rather than a test-specific one.
+    if (typeof child.once === 'function') {
+      child.once('exit', () => unregisterLiveRun(options.sessionId!, options.runId))
+    }
   }
   return child
 }

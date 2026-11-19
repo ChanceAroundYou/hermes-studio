@@ -270,7 +270,10 @@ describe('the stop button and the ring agree on what busy means', () => {
 
   it('gates on the same predicate the ring renders from', () => {
     const body = stopGate()
-    expect(body).toMatch(/if \(!isSessionWorking\(sid\)\) return/)
+    // Same predicate the ring renders from. This branch additionally lets a
+    // retry through after the watchdog gave up, so the condition carries a
+    // second clause instead of being a bare early return.
+    expect(body).toMatch(/if \(!isSessionWorking\(sid\)/)
     // The narrower form is the defect: a delegation-only session has neither
     // foreground flag set, so it would return here and never emit.
     expect(body).not.toMatch(/!streamStates\.value\.has\(sid\) && !serverWorking\.value\.has\(sid\)/)

@@ -702,12 +702,6 @@ defineExpose({
       <template #after>
         <Transition name="fade">
         <div v-if="isRunIndicatorActive" class="streaming-indicator">
-          <LiveReasoningStatus
-            :agent="assistantAgent"
-            :reasoning="liveReasoningDetail?.reasoning"
-            :reasoning-id="liveReasoningDetail?.messageId"
-            :elapsed="formattedThinkingElapsed"
-          />
           <div v-if="chatStore.abortState" class="tool-calls-panel">
             <!-- Abort indicator -->
             <div v-if="chatStore.abortState" class="tool-call-item compression-item">
@@ -760,8 +754,7 @@ defineExpose({
             :reasoning="liveReasoningDetail?.reasoning"
             :reasoning-id="liveReasoningDetail?.messageId"
             :elapsed="formattedThinkingElapsed"
-          />
-        </div>
+          />        </div>
         </Transition>
       </template>
     </VirtualMessageList>

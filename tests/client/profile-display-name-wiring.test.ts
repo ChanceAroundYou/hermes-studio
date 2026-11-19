@@ -139,17 +139,15 @@ describe('profile labels go through the shared resolver', () => {
 
 describe('each profile select resolves the display name', () => {
   const CALL_SITES: Array<[string, string]> = [
-    ['components/hermes/chat/ChatPanel.vue', 'newChatProfileOptions'],
     ['components/hermes/group-chat/GroupChatPanel.vue', 'profileOptions'],
-    ['views/hermes/WorkflowView.vue', 'workflowProfileOptions'],
     ['views/hermes/ModelsView.vue', 'profileOptions'],
     ['components/hermes/settings/GatewayAutoStartSettings.vue', 'profileOptions'],
     ['components/hermes/settings/WebhookSettings.vue', 'profileOptions'],
-    // Added by upstream 0.8.20 after this guard was written. The whole-tree scan
-    // caught both; UsageView is listed by name here as well so renaming its computed
-    // is caught too. ProviderImportModal builds its options inline in the template
-    // rather than in a computed, so only the scan can cover it.
-    ['views/hermes/UsageView.vue', 'profileOptions'],
+    // Upstream 0.8.20 added profile and account selects to UsageView. That page
+    // does not carry them on this branch, so there is no computed to pin -- the
+    // whole-tree scan above still fails if such a select is ever added without
+    // the resolver. ChatPanel and WorkflowView build their options under
+    // different names and are covered by the scan the same way.
   ]
 
   it.each(CALL_SITES)('%s resolves labels in %s', (file, symbol) => {

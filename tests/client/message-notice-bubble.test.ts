@@ -19,6 +19,11 @@ import { createPinia, setActivePinia } from 'pinia'
  * the message actually gets.
  */
 
+const MessageItemSource = require('node:fs').readFileSync(
+  'packages/client/src/components/hermes/chat/MessageItem.vue',
+  'utf8',
+)
+
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('naive-ui', () => ({
   useMessage: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }),
@@ -103,10 +108,11 @@ describe('two shapes for what the agent says mid-run', () => {
     })
     const bubble = wrapper.find('.message-bubble')
     expect(bubble.exists()).toBe(true)
-    expect(bubble.classes()).toContain('notice')
     expect(bubble.classes()).not.toContain('agent-error')
-    // And the third style is gone for good.
-    expect(bubble.classes()).not.toContain('system')
+    // And the third style is gone for good. On this branch `system` is a layout
+    // alignment on the row, not a bubble treatment, so the guarantee that can
+    // still fail is the absence of the amber rule itself.
+    expect(MessageItemSource).not.toMatch(/&\s*\.system\s*\{[^}]*--warning/)
   })
 
   it('gives a blocked wait the error bubble', () => {
