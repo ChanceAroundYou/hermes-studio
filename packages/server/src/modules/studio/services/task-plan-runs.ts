@@ -9,7 +9,7 @@ type RunState = { isWorking: boolean; isAborting?: boolean; runId?: string; acti
 function activeTurnId(state: RunState | undefined): string {
   return state?.activeRunMarker || state?.responseRun?.runMarker || state?.runId || ''
 }
-type Binding = { contextId: string; sessionId: string; profile: string; sequence: number; resolve: () => RunState | undefined; snapshot?: TaskPlanSnapshot; publish?: (snapshot: TaskPlanSnapshot) => void }
+type Binding = { contextId: string; sessionId: string; profile: string; sequence: number; stampRunId?: string; resolve: () => RunState | undefined; snapshot?: TaskPlanSnapshot; publish?: (snapshot: TaskPlanSnapshot) => void }
 
 
 export class TaskPlanError extends Error {
@@ -70,7 +70,22 @@ export class TaskPlanRuns {
   private writable(binding: Binding): boolean {
     const state = binding.resolve()
     const runId = state?.activeRunMarker || state?.responseRun?.runMarker
-    return !!state?.isWorking && !state.isAborting && !!runId
+    return !!state?.isWorking && !state.isAborting && !!runId && this.runMatches(binding, state, runId)
+  }
+
+  /**
+   * A card belongs to a RUN, not to a socket's turn marker. A client resume
+   * (`reattachBridgeRun` -> `resumeBridgeRun`) re-keys `state.activeRunMarker`
+   * with a fresh `cli_resume_*` marker while the same Hermes bridge run keeps
+   * streaming under the same run id. Judging the card by the marker alone made
+   * every later write in that live run fail with "no active turn" (409). The
+   * run id is the stable identity: a re-key of the same run is accepted, a
+   * different run id — or a card that never recorded one — stays a hard
+   * boundary.
+   */
+  private runMatches(binding: Binding, state: RunState | undefined, runId: string): boolean {
+    if (!binding.snapshot || binding.snapshot.run_id === runId) return true
+    return !!binding.stampRunId && state?.runId === binding.stampRunId
   }
 
   /**
@@ -151,13 +166,20 @@ export class TaskPlanRuns {
     if (!binding) throw new TaskPlanError('Task plan context is unavailable or has expired', 409)
     const state = binding.resolve()
     const runId = activeTurnId(state)
-    if (!state?.isWorking || state.isAborting || !runId || (binding.snapshot && binding.snapshot.run_id !== runId)) {
+    // Record which bridge run this card belongs to. The socket's turn marker is
+    // volatile (a client resume mints a new one mid-run); the run id is not.
+    if (!binding.stampRunId && state?.runId) binding.stampRunId = state.runId
+    if (!state?.isWorking || state.isAborting || !runId || !this.runMatches(binding, state, runId)) {
       throw new TaskPlanError('Task plan context has no active turn', 409)
     }
     const update = parseTaskPlanUpdate(input)
     const now = Date.now()
     const snapshot: TaskPlanSnapshot = {
-      ...update, session_id: binding.sessionId, run_id: runId, plan_id: `mcp:${binding.contextId}`,
+      ...update, session_id: binding.sessionId,
+      // A re-keyed marker keeps the card's own run identity stable so the
+      // client sees one continuous card instead of a new one per reconnect.
+      run_id: binding.snapshot && binding.snapshot.run_id !== runId ? binding.snapshot.run_id : runId,
+      plan_id: `mcp:${binding.contextId}`,
       revision: (binding.snapshot?.revision || 0) + 1, execution_state: 'running',
       created_at: binding.snapshot?.created_at ?? now, updated_at: now,
     }
@@ -172,8 +194,7 @@ export class TaskPlanRuns {
     if (!binding || binding.profile !== profile) return false
     const state = binding.resolve()
     const runId = activeTurnId(state)
-    return Boolean(state?.isWorking && !state.isAborting && runId
-      && (!binding.snapshot || binding.snapshot.run_id === runId))
+    return Boolean(state?.isWorking && !state.isAborting && runId && this.runMatches(binding, state, runId))
   }
 
   activeSnapshots(): Array<{ profile: string; snapshot: TaskPlanSnapshot }> {
@@ -181,7 +202,7 @@ export class TaskPlanRuns {
     for (const binding of this.bindings.values()) {
       const state = binding.resolve(), snapshot = binding.snapshot
       if (binding.publish || !snapshot || snapshot.execution_state !== 'running' || !state?.isWorking || state.isAborting) continue
-      if (activeTurnId(state) !== snapshot.run_id) continue
+      if (!this.runMatches(binding, state, activeTurnId(state))) continue
       result.push({ profile: binding.profile, snapshot: structuredClone(snapshot) })
     }
     return result.sort((a, b) => b.snapshot.updated_at - a.snapshot.updated_at)
@@ -209,6 +230,19 @@ export class TaskPlanRuns {
     this.sessions.delete(sessionId)
   }
 
+  /**
+   * Settle the cards of a session whose runs are no longer live, leaving a card
+   * owned by a still-running turn alone. A card can end up unsettled when its
+   * terminal chunk was dropped by a resume; sweeping here stops it lingering as
+   * a second live card for the session.
+   */
+  settleIdle(sessionId: string, state: TerminalState): void {
+    for (const contextId of [...(this.sessions.get(sessionId) || new Set<string>())]) {
+      const binding = this.bindings.get(contextId)
+      if (!binding || this.writable(binding)) continue
+      this.finish(contextId, state)
+    }
+  }
 }
 
 export function taskPlanRunInstruction(): string {

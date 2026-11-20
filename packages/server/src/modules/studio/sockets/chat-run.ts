@@ -658,6 +658,9 @@ export class ChatRunSocket {
   private beginTaskPlanRun(sessionId: string | undefined, profile: string) {
     if (!sessionId) return undefined
     runMcpCredentials.revoke(sessionId)
+    // A card whose run ended without a settle here (its terminal chunk was
+    // dropped by a resume) must not linger as a second live card.
+    this.taskPlanRuns.settleIdle(sessionId, 'ended')
     // Deliberately no `clarificationRuns.finishSession(sessionId)` here: that
     // swept every outstanding prompt for the session on each new turn, which is
     // how a question raised by the previous turn disappeared. `finishTaskPlanRun`
@@ -696,7 +699,7 @@ export class ChatRunSocket {
     if (contextId) this.taskPlanRunStates.delete(contextId)
   }
 
-  private finishTaskPlanRun(sessionId: string, event: string, payload?: any, contextId?: string) {
+  private finishTaskPlanRun(sessionId: string, event: string, payload?: any, contextId?: string, settlePlans = true) {
     if (!['run.completed', 'run.failed', 'abort.completed'].includes(event)) return
     runMcpCredentials.revoke(sessionId, contextId)
     // A stop is not the same as a turn ending: the prompt is settled either way,
@@ -709,7 +712,13 @@ export class ChatRunSocket {
     // or a live aborting state on this socket means the user actually pressed Stop.
     const interrupted = event === 'abort.completed' || this.sessionMap.get(sessionId)?.isAborting
     const executionState = interrupted ? 'interrupted' : event === 'run.failed' ? 'failed' : 'ended'
+    // A resume reattachment (`reattachBridgeRun` -> `resumeBridgeRun`) is a
+    // transport hand-off of a run this socket did not open: it may observe that
+    // run's terminal chunk while the run's own handler still has the card.
+    // Settling plans from here froze live cards mid-task, so every later plan
+    // write from the live run failed. It still settles prompts and credentials.
     try {
+      if (!settlePlans) return
       if (contextId) this.taskPlanRuns.finish(contextId, executionState)
       else this.taskPlanRuns.finishSession(sessionId, executionState)
     } catch (err) {
@@ -2535,7 +2544,9 @@ export class ChatRunSocket {
           source,
           onEvent: (event, payload) => {
             this.observeQueueInsertionRunEvent(sid, event, payload)
-            this.finishTaskPlanRun(sid, event, payload)
+            // The resumed run's own handler settles its plan card; a resume must
+            // not end a card it does not own.
+            this.finishTaskPlanRun(sid, event, payload, undefined, false)
             observeChatRunWebhookEvent({
               event,
               sessionId: sid,

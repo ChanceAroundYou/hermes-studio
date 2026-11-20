@@ -189,3 +189,38 @@ describe('TaskPlanRuns coding-agent turn id', () => {
     expect(plans.update(contextId, 'research', plan).run_id).toBe('turn-2')
   })
 })
+
+describe('TaskPlanRuns bridge run identity', () => {
+  // A Studio client reconnecting mid-run makes `reattachBridgeRun` hand the
+  // session to a resume loop, which re-keys `activeRunMarker` to a fresh
+  // `cli_resume_*` while the SAME Hermes bridge run keeps streaming under an
+  // unchanged run id. Judging a card by the marker alone 409'd every plan write
+  // for the rest of that live run.
+  function bridgeHarness() {
+    const state = { isWorking: true, activeRunMarker: 'cli_run_a', runId: 'bridge-run-1' }
+    const commit = vi.fn()
+    const publish = vi.fn()
+    const runs = new TaskPlanRuns(commit, publish)
+    const contextId = runs.begin('session-1', 'research', () => state)
+    return { runs, contextId, state, publish }
+  }
+
+  it('keeps the card writable when a resume re-keys the marker of the same run', () => {
+    const { runs, contextId, state } = bridgeHarness()
+    const first = runs.update(contextId, 'research', plan)
+    state.activeRunMarker = 'cli_resume_b'
+    const second = runs.update(contextId, 'research', plan)
+    expect(second).toMatchObject({ plan_id: first.plan_id, run_id: 'cli_run_a', revision: 2, execution_state: 'running' })
+    expect(runs.isActive(contextId, 'research')).toBe(true)
+    expect(runs.activeSnapshots().map(entry => entry.snapshot.plan_id)).toContain(first.plan_id)
+  })
+
+  it('still rejects the card when the underlying run is a different run', () => {
+    const { runs, contextId, state } = bridgeHarness()
+    runs.update(contextId, 'research', plan)
+    state.activeRunMarker = 'cli_run_c'
+    state.runId = 'bridge-run-2'
+    expect(() => runs.update(contextId, 'research', plan)).toThrow('active turn')
+    expect(runs.isActive(contextId, 'research')).toBe(false)
+  })
+})
