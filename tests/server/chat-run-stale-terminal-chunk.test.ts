@@ -155,4 +155,56 @@ describe('stale CLI bridge chunk handling', () => {
     expect(state.isWorking).toBe(false)
     expect(state.runId).toBeUndefined()
   })
+
+  it('logs a superseded loop once and counts the chunks it drops', async () => {
+    const { resumeBridgeRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-bridge-run')
+    const { bridgeLogger } = await import('../../packages/server/src/modules/studio/public/logging')
+    const { nsp } = createNamespace()
+    const socket = { id: 'socket-throttle', connected: true, emit: vi.fn() }
+
+    const sessionMap = new Map<string, any>()
+    sessionMap.set('session-throttle', {
+      messages: [], isWorking: true, events: [], queue: [],
+      runId: 'run-throttle', activeRunMarker: 'marker-owner',
+    })
+
+    // A second socket resumes the SAME run mid-stream, which re-keys the
+    // session's marker. Everything this loop then streams is stale — that used
+    // to mean one log line per chunk for the rest of the run.
+    let polls = 0
+    const bridge = {
+      getResult: vi.fn(async () => ({
+        ok: true, run_id: 'run-throttle', session_id: 'session-throttle',
+        status: 'running', output: '', deltas: [], events: [],
+      })),
+      getOutput: vi.fn(async () => {
+        polls += 1
+        if (polls === 1) sessionMap.get('session-throttle').activeRunMarker = 'marker-new-owner'
+        const done = polls >= 4
+        return {
+          ok: true, run_id: 'run-throttle', session_id: 'session-throttle',
+          status: done ? 'complete' : 'running', delta: 'x', cursor: polls,
+          output: 'x'.repeat(polls), done, events: [], event_cursor: polls, error: null,
+        }
+      }),
+      streamOutput: vi.fn(),
+    }
+
+    await resumeBridgeRun(
+      nsp as any, socket as any,
+      { sessionId: 'session-throttle', runId: 'run-throttle', profile: 'default', instructions: '', source: 'cli' },
+      sessionMap, bridge as any, vi.fn(),
+    )
+
+    const dropped = bridgeLogger.info.mock.calls.filter(call =>
+      typeof call[1] === 'string' && call[1].includes('superseded CLI bridge loop'))
+    expect(dropped).toHaveLength(1)
+    expect(dropped[0][0]).toMatchObject({ staleChunksDropped: 1, runMarker: 'marker-owner', activeRunMarker: 'marker-new-owner' })
+    expect(bridgeLogger.debug.mock.calls.filter(call =>
+      typeof call[1] === 'string' && call[1].includes('ignoring stale CLI bridge chunk'))).toHaveLength(2)
+
+    const deferred = bridgeLogger.info.mock.calls.find(call =>
+      typeof call[1] === 'string' && call[1].includes('deferring to current owner'))
+    expect(deferred?.[0]).toMatchObject({ staleChunksDropped: 4 })
+  })
 })

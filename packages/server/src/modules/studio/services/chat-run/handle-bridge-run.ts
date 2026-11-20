@@ -1325,21 +1325,35 @@ async function applyBridgeChunkAsync(
     // could race it and drop the final assistant message from the DB.
     // The current owner (or, failing that, the reconcile watchdog) clears the
     // run state; this stale loop only observes and logs.
+    // Throttle: a resume displaces this loop, and the resumed run keeps
+    // streaming through it, so this branch used to log one line per remaining
+    // chunk — thousands per turn, burying the diagnostic it exists to provide.
+    const dropped = state.bridgeStaleChunks?.runMarker === runMarker
+      ? state.bridgeStaleChunks
+      : (state.bridgeStaleChunks = { runMarker, count: 0 })
+    dropped.count += 1
     if (chunk.done && chunk.run_id && state.runId != null && chunk.run_id === state.runId && state.isWorking) {
       bridgeLogger.info({
         sessionId,
         runId: chunk.run_id,
         runMarker,
         activeRunMarker: state.activeRunMarker,
+        staleChunksDropped: dropped.count,
       }, '[chat-run-socket] stale loop observed terminal chunk for tracked run; deferring to current owner')
       return
     }
-    bridgeLogger.info({
+    const meta = {
       sessionId,
       runId: chunk.run_id,
       runMarker,
       activeRunMarker: state.activeRunMarker,
-    }, '[chat-run-socket] ignoring stale CLI bridge chunk')
+      staleChunksDropped: dropped.count,
+    }
+    if (dropped.count === 1) {
+      bridgeLogger.info(meta, '[chat-run-socket] superseded CLI bridge loop is dropping chunks (further ones logged at debug)')
+    } else {
+      bridgeLogger.debug(meta, '[chat-run-socket] ignoring stale CLI bridge chunk')
+    }
     return
   }
 

@@ -185,6 +185,12 @@ export interface SessionState {
    * an empty array and would report every tool-only run as a failure.
    */
   hadToolActivity?: boolean
+  /**
+   * Log-throttle bookkeeping for a run loop that a resume displaced. A resumed
+   * run streams every remaining chunk through the superseded loop, so the
+   * superseded loop logs once and counts the rest instead of one line per chunk.
+   */
+  bridgeStaleChunks?: { runMarker: string; count: number }
   profile?: string
   inputTokens?: number
   outputTokens?: number

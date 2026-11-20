@@ -707,10 +707,23 @@ export class ChatRunSocket {
     this.clarificationRuns.finishSession(sessionId, contextId, event === 'abort.completed' ? 'aborted' : 'cancelled')
     // Stop accepting plan writes for this run before finalizing the snapshot.
     this.releaseTaskPlanRunState(contextId)
-    // Upstream #3404: a queue boundary can finish after its queued input was removed,
-    // leaving a stale `interrupted` flag on the payload. Only the terminal abort event
-    // or a live aborting state on this socket means the user actually pressed Stop.
-    const interrupted = event === 'abort.completed' || this.sessionMap.get(sessionId)?.isAborting
+    // Upstream #3404: a queue boundary can finish after its queued input was
+    // removed, leaving a stale `interrupted` flag on the payload. The payload
+    // flag stays untrusted, and a live aborting state on this socket is still
+    // the primary proof the user pressed Stop.
+    //
+    // The run's OWN result object is a separate signal. Hermes marks a turn it
+    // stopped mid-run with `interrupted` and maps it to a cancellation, never a
+    // failure (gateway/platforms/api_server_runs.py: `terminal_run_status` ->
+    // "An interrupted turn is `cancelled`"; `_finish("cancelled", ...,
+    // interrupted=True)`). A card that reports such a turn as a normal `ended`
+    // claims work finished that the agent said it did not.
+    const runResult = payload?.result && typeof payload.result === 'object'
+      ? payload.result as Record<string, unknown>
+      : null
+    const interrupted = event === 'abort.completed'
+      || this.sessionMap.get(sessionId)?.isAborting
+      || runResult?.interrupted === true
     const executionState = interrupted ? 'interrupted' : event === 'run.failed' ? 'failed' : 'ended'
     // A resume reattachment (`reattachBridgeRun` -> `resumeBridgeRun`) is a
     // transport hand-off of a run this socket did not open: it may observe that
