@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import { io, type Socket } from 'socket.io-client'
 import { config } from '../public/config'
 import { getChatRunServer } from '../public/chat-run'
+import { socketIoClientPath } from '../public/socket-io-path'
 import { resolveModelExecutionIdentity } from '../contracts/runs/model-execution-identity'
 import { listPendingInteractions } from '../repositories/pending-interaction-store'
 import { getGroupChatRuntimeServer } from '../services/group-chat/runtime'
@@ -350,6 +351,10 @@ export async function runOnce(ctx: Context) {
         ? { token: ctx.state.sessionShare.token, appAccessToken: ctx.state.sessionShare.appAccessToken }
         : token ? { token } : {},
       query: { profile },
+      // Sub-path deploys (BASE_URL=/hermes) attach Socket.IO at /hermes/socket.io.
+      // Without this the dial goes to the unprefixed /socket.io, the SPA fallback
+      // answers with index.html, and every HTTP run ends as 503 "websocket error".
+      path: socketIoClientPath(),
       transports: ['websocket', 'polling'],
       reconnection: false,
       timeout: 30_000,

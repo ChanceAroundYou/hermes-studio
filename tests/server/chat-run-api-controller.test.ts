@@ -279,4 +279,45 @@ describe('chat-run HTTP API controller', () => {
       session_id: emittedPayload.session_id,
     })
   })
+
+  // A sub-path deploy (BASE_URL=/hermes) attaches Socket.IO at /hermes/socket.io.
+  // The client used to dial the unprefixed /socket.io, which the SPA fallback
+  // answers with index.html — no handshake, so every HTTP run ended as
+  // 503 "websocket error" on this deployment.
+  it('dials the deployment-prefixed Socket.IO path', async () => {
+    const socket = makeSocket()
+    ioMock.mockReturnValue(socket)
+    const previous = process.env.BASE_URL
+    process.env.BASE_URL = '/hermes/'
+    try {
+      const { runOnce } = await import('../../packages/server/src/modules/studio/controllers/chat-run')
+      const ctx = {
+        get: vi.fn(() => ''),
+        state: { profile: { name: 'default' } },
+        request: { body: { session_id: 'session-prefixed', input: 'hello' } },
+        status: 200,
+        body: undefined as any,
+      }
+
+      const pending = runOnce(ctx as any)
+      socket.emitNative('connect')
+      await pending
+
+      expect(ioMock).toHaveBeenCalledWith(expect.stringContaining('/chat-run'), expect.objectContaining({
+        path: '/hermes/socket.io',
+      }))
+      expect(ctx.status).toBe(200)
+    } finally {
+      if (previous === undefined) delete process.env.BASE_URL
+      else process.env.BASE_URL = previous
+    }
+  })
+
+  it('keeps the bare Socket.IO path when the UI is not deployed under a prefix', async () => {
+    const { socketIoClientPath } = await import('../../packages/server/src/modules/studio/public/socket-io-path')
+
+    expect(socketIoClientPath({})).toBe('/socket.io')
+    expect(socketIoClientPath({ BASE_URL: '/hermes/' })).toBe('/hermes/socket.io')
+    expect(socketIoClientPath({ HERMES_BASE_PATH: '/hermes' })).toBe('/hermes/socket.io')
+  })
 })
